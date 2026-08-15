@@ -1,0 +1,35 @@
+name: Tibo Watch
+
+on:
+  schedule:
+    # ~every 15 minutes. GitHub may delay scheduled runs by a few minutes.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check @thsottiaux for reset announcements
+        run: node tools/tibo-watch/check.mjs
+
+      - name: Commit updated feed
+        run: |
+          git config user.name "tibo-watch[bot]"
+          git config user.email "tibo-watch[bot]@users.noreply.github.com"
+          git add data/resets.json
+          if git diff --cached --quiet; then
+            echo "No new resets recorded."
+          else
+            git commit -m "tibo-watch: record new reset event"
+            git push
+          fi
