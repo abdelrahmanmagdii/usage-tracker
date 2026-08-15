@@ -12,7 +12,9 @@ const DEFAULT_FEED_URL =
 const FEED_URL =
   (import.meta.env.VITE_TIBO_FEED_URL as string | undefined) || DEFAULT_FEED_URL;
 const FEED_CACHE_KEY = "codex-meter.feed-cache.v1";
-const FEED_TTL_MS = 30 * 60 * 1000;
+// Short TTL: the whole point of the feed is catching "reset landing in the
+// next hour" announcements while the old quota is still worth burning.
+const FEED_TTL_MS = 4 * 60 * 1000;
 
 const sampleEvents: ResetEvent[] = [
   {
@@ -80,7 +82,10 @@ export class FeedResetEventProvider implements ResetEventProvider {
       return this.memoryCache;
     }
     try {
-      const response = await fetch(FEED_URL, { cache: "no-store" });
+      // The cache-busting query skips raw.githubusercontent's ~5-minute CDN
+      // cache, so a freshly committed event is visible on the next poll.
+      const separator = FEED_URL.includes("?") ? "&" : "?";
+      const response = await fetch(`${FEED_URL}${separator}t=${Date.now()}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`Feed returned HTTP ${response.status}`);
       const payload: unknown = await response.json();
       const raw = isRecord(payload) && Array.isArray(payload.events) ? payload.events : [];

@@ -3,7 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import type { ResetEvent } from "../../types/codex";
 import { CombinedResetEventProvider } from "./provider";
 
-const REFRESH_MS = 30 * 60 * 1000;
+const REFRESH_MS = 5 * 60 * 1000;
 const SHARED_EVENTS_KEY = "codex-meter.shared-reset-events.v1";
 
 function readSharedEvents(): ResetEvent[] {

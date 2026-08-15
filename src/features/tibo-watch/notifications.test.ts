@@ -49,9 +49,11 @@ describe("notification copy", () => {
     expect(resetNotificationTitle(event({ id: "public" }))).toBe("Codex quota reset announced");
   });
 
-  it("shows the lead time for an upcoming announced reset", () => {
-    expect(
-      resetNotificationBody(event({ id: "upcoming", occursAt: "2026-08-13T13:00:00Z" }), now),
-    ).toContain("1h");
+  it("frames an upcoming reset as a burn window with lead time", () => {
+    const upcoming = event({ id: "upcoming", occursAt: "2026-08-13T13:00:00Z" });
+    expect(resetNotificationTitle(upcoming, now)).toBe("⚡ Codex reset incoming");
+    const body = resetNotificationBody(upcoming, now);
+    expect(body).toContain("1h");
+    expect(body).toContain("spend what's left");
   });
 });

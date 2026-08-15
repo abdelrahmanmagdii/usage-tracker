@@ -15,6 +15,7 @@ import { ClaudeSection } from "./components/ClaudeSection";
 import { useCodexMeter } from "./hooks/useCodexMeter";
 import { useClaudeMeter } from "./hooks/useClaudeMeter";
 import { useResetEvents } from "./features/tibo-watch/useResetEvents";
+import { upcomingReset } from "./features/tibo-watch/provider";
 import { notifyFreshResets } from "./features/tibo-watch/notifications";
 import { formatCountdown, windowDurationLabel } from "./lib/rateLimits";
 import type { RateLimitBucket } from "./types/codex";
@@ -42,6 +43,14 @@ export default function App() {
   }, []);
   useEffect(() => {
     void notifyFreshResets(resetEvents);
+  }, [resetEvents]);
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const upcoming = upcomingReset(resetEvents);
+    const until = upcoming?.occursAt
+      ? Math.floor(Date.parse(upcoming.occursAt) / 1000)
+      : null;
+    void invoke("set_reset_incoming", { until });
   }, [resetEvents]);
   const connected = state.connection === "connected";
   const mostCooked = buckets.reduce<(typeof buckets)[number] | undefined>(

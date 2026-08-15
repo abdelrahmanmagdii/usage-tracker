@@ -43,10 +43,13 @@ export function selectFreshResetNotifications(
   });
 }
 
-export function resetNotificationTitle(event: ResetEvent): string {
-  return event.source === "detected"
-    ? "Possible Codex quota reset detected"
-    : "Codex quota reset announced";
+export function resetNotificationTitle(event: ResetEvent, nowMs = Date.now()): string {
+  if (event.source === "detected") return "Possible Codex quota reset detected";
+  const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
+  // The advance warning is the headline: knowing a reset is incoming means
+  // remaining quota can be spent freely before it refreshes anyway.
+  if (Number.isFinite(occursAt) && occursAt > nowMs) return "⚡ Codex reset incoming";
+  return "Codex quota reset announced";
 }
 
 export function resetNotificationBody(event: ResetEvent, nowMs = Date.now()): string {
@@ -55,7 +58,7 @@ export function resetNotificationBody(event: ResetEvent, nowMs = Date.now()): st
   }
   const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
   if (Number.isFinite(occursAt) && occursAt > nowMs) {
-    return `Takes effect in ~${formatLeadTime(occursAt - nowMs)}.`;
+    return `Lands in ~${formatLeadTime(occursAt - nowMs)} — spend what's left of your current quota, it refreshes anyway.`;
   }
   if (Number.isFinite(occursAt)) return "Quota has been reset.";
   return event.text
@@ -85,7 +88,7 @@ export async function notifyFreshResets(events: ResetEvent[], nowMs = Date.now()
     }
     for (const event of fresh.slice(0, MAX_PER_BATCH)) {
       sendNotification({
-        title: resetNotificationTitle(event),
+        title: resetNotificationTitle(event, nowMs),
         body: resetNotificationBody(event, nowMs),
       });
       notified.add(event.id);

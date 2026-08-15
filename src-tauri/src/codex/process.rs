@@ -370,12 +370,18 @@ impl CodexManager {
             .try_state::<crate::prefs::PrefsStore>()
             .map(|prefs| prefs.get().compact_tray)
             .unwrap_or(false);
+        let now = now_unix_seconds();
         let title = tray_title(
             used,
             cooked.and_then(|window| window.resets_at),
-            now_unix_seconds(),
+            now,
             compact,
         );
+        let incoming = self
+            .app
+            .try_state::<crate::tray::ResetRadar>()
+            .is_some_and(|radar| radar.incoming_at(now));
+        let title = crate::tray::with_incoming_prefix(title, incoming);
         let _ = tray.set_title(Some(title.as_str()));
     }
 

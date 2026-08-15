@@ -26,6 +26,23 @@ pub async fn refresh_claude(manager: State<'_, ClaudeManager>) -> Result<ClaudeS
     manager.refresh().await
 }
 
+/// The renderer reports when an announced reset is pending (`until` = unix
+/// seconds it lands, `None` to clear); the Codex tray shows ⚡ while pending.
+#[tauri::command]
+pub fn set_reset_incoming(
+    app: AppHandle,
+    radar: State<'_, crate::tray::ResetRadar>,
+    until: Option<u64>,
+) {
+    radar
+        .0
+        .store(until.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+    let manager = app.state::<CodexManager>().inner().clone();
+    tauri::async_runtime::spawn(async move {
+        manager.update_tray().await;
+    });
+}
+
 #[tauri::command]
 pub fn get_notch_status(controller: State<'_, NotchController>) -> NotchStatus {
     controller.status()

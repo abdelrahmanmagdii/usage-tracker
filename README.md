@@ -81,7 +81,7 @@ Local history is stored in WebView local storage and records only observed perce
 
 Tibo Watch tracks public surprise-reset announcements without any paid infrastructure:
 
-1. A GitHub Actions workflow (`.github/workflows/tibo-watch.yml`) runs `tools/tibo-watch/check.mjs` every ~15 minutes (free on public repos).
+1. A GitHub Actions workflow (`.github/workflows/tibo-watch.yml`) runs `tools/tibo-watch/check.mjs` every ~5 minutes (free on public repos).
 2. The script reads @thsottiaux's public timeline through free Nitter RSS mirrors (curl/HTTP-2 first, plain fetch as fallback), keeps tweets that match reset-announcement phrasing, parses lead times like "in the next hour" into an `occursAt` timestamp, and commits new events to `data/resets.json`.
 3. The app fetches that JSON from `raw.githubusercontent.com`, caches it locally, merges it with locally detected resets (deduped by id), and notifies you when a freshly announced event appears. Events announced more than 2 hours ago are marked as seen without notifying, so backfilling never floods Notification Center.
 

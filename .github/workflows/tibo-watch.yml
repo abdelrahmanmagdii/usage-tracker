@@ -2,8 +2,10 @@ name: Tibo Watch
 
 on:
   schedule:
-    # ~every 15 minutes. GitHub may delay scheduled runs by a few minutes.
-    - cron: "*/15 * * * *"
+    # ~every 5 minutes (GitHub's minimum; runs may be delayed under load).
+    # Speed matters: announced resets often land within the hour, and users
+    # want the heads-up while their old quota is still worth burning.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:

@@ -14,6 +14,30 @@ use crate::prefs::PrefsStore;
 pub const CODEX_TRAY_ID: &str = "provider-codex";
 pub const CLAUDE_TRAY_ID: &str = "provider-claude";
 
+/// Unix timestamp (seconds) until which an announced-but-not-yet-landed reset
+/// is pending. While pending, the Codex tray title carries a ⚡ prefix so the
+/// burn window is visible at menu-bar level without opening the popover.
+#[derive(Default)]
+pub struct ResetRadar(pub std::sync::atomic::AtomicU64);
+
+impl ResetRadar {
+    pub fn incoming_at(&self, now_unix: u64) -> bool {
+        let until = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        until > now_unix
+    }
+}
+
+pub fn with_incoming_prefix(title: String, incoming: bool) -> String {
+    if !incoming {
+        return title;
+    }
+    if title.is_empty() {
+        "⚡".to_owned()
+    } else {
+        format!("⚡ {title}")
+    }
+}
+
 fn toggle_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
@@ -419,6 +443,18 @@ mod tests {
         assert_eq!(tray_title(Some(42.0), None, 1_000, false), "42%");
         assert_eq!(tray_title(Some(42.0), Some(900), 1_000, false), "42%");
         assert_eq!(tray_title(None, Some(4_661), 1_000, false), "");
+    }
+
+    #[test]
+    fn incoming_reset_prefixes_the_title() {
+        assert_eq!(with_incoming_prefix("42% · 9:05".into(), true), "⚡ 42% · 9:05");
+        assert_eq!(with_incoming_prefix("42%".into(), false), "42%");
+        assert_eq!(with_incoming_prefix(String::new(), true), "⚡");
+        let radar = ResetRadar::default();
+        assert!(!radar.incoming_at(1_000));
+        radar.0.store(2_000, std::sync::atomic::Ordering::Relaxed);
+        assert!(radar.incoming_at(1_000));
+        assert!(!radar.incoming_at(2_000));
     }
 
     #[test]
