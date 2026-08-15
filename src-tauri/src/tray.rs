@@ -167,8 +167,25 @@ pub fn ensure_claude_tray(app: &AppHandle) -> tauri::Result<()> {
         return Ok(());
     }
     let refresh = MenuItem::with_id(app, "claude-refresh", "Refresh", true, None::<&str>)?;
+    let include_scoped = CheckMenuItem::with_id(
+        app,
+        "claude-scope",
+        "Include Model Limits",
+        true,
+        app.state::<PrefsStore>().get().claude_include_scoped,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "claude-quit", "Quit UsageBar", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&refresh, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &refresh,
+            &PredefinedMenuItem::separator(app)?,
+            &include_scoped,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
     TrayIconBuilder::with_id(CLAUDE_TRAY_ID)
         .tooltip("Claude Code usage")
         .icon(claude_tray_icon())
@@ -180,6 +197,14 @@ pub fn ensure_claude_tray(app: &AppHandle) -> tauri::Result<()> {
                 let manager = app.state::<ClaudeManager>().inner().clone();
                 tauri::async_runtime::spawn(async move {
                     let _ = manager.refresh().await;
+                });
+            }
+            "claude-scope" => {
+                app.state::<PrefsStore>()
+                    .update(|prefs| prefs.claude_include_scoped = !prefs.claude_include_scoped);
+                let manager = app.state::<ClaudeManager>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    manager.update_tray().await;
                 });
             }
             "claude-quit" => quit_from_menu(app),
@@ -324,23 +349,27 @@ fn distance_to_segment(x: f64, y: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> f6
     ((x - (x0 + t * dx)).powi(2) + (y - (y0 + t * dy)).powi(2)).sqrt()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CookedWindow {
     pub used_percent: f64,
     pub resets_at: Option<u64>,
+    /// Scope name when this is a model-scoped window (e.g. "Fable"), used to
+    /// label the tray tooltip so the number is never ambiguous.
+    pub label: Option<String>,
 }
 
-pub fn most_cooked_window(payload: Option<&Value>) -> Option<CookedWindow> {
-    fn visit(value: &Value, best: &mut Option<CookedWindow>) {
+pub fn most_cooked_window(payload: Option<&Value>, include_scoped: bool) -> Option<CookedWindow> {
+    fn visit(value: &Value, include_scoped: bool, best: &mut Option<CookedWindow>) {
         match value {
             Value::Object(map) => {
-                // Windows can opt out of the tray (e.g. Claude's model-scoped
-                // weekly limits) while still appearing in the popover.
-                let excluded = map
+                // Model-scoped windows (e.g. Claude's Fable weekly) carry an
+                // opt-out marker; whether the tray considers them is a user
+                // preference.
+                let scoped = map
                     .get("excludeFromTray")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                if !excluded {
+                if include_scoped || !scoped {
                     if let Some(used) = map.get("usedPercent").and_then(Value::as_f64) {
                         let used_percent = used.clamp(0.0, 100.0);
                         let resets_at = map
@@ -355,24 +384,28 @@ pub fn most_cooked_window(payload: Option<&Value>) -> Option<CookedWindow> {
                             *best = Some(CookedWindow {
                                 used_percent,
                                 resets_at,
+                                label: map
+                                    .get("windowLabel")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned),
                             });
                         }
                     }
                 }
                 for child in map.values() {
-                    visit(child, best);
+                    visit(child, include_scoped, best);
                 }
             }
             Value::Array(array) => {
                 for child in array {
-                    visit(child, best);
+                    visit(child, include_scoped, best);
                 }
             }
             _ => {}
         }
     }
     let mut best = None;
-    visit(payload?, &mut best);
+    visit(payload?, include_scoped, &mut best);
     best
 }
 
@@ -416,23 +449,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_most_used_window_and_skips_tray_excluded_ones() {
+    fn finds_most_used_window_and_honors_the_scoped_toggle() {
         let payload = serde_json::json!({
             "rateLimits": { "primary": { "usedPercent": 20, "resetsAt": 1_000 }, "secondary": null },
             "rateLimitsByLimitId": {
                 "other": { "primary": { "usedPercent": 82, "resetsAt": 2_000 } },
-                "scoped": { "secondary": { "usedPercent": 95, "resetsAt": 3_000, "excludeFromTray": true } }
+                "scoped": { "secondary": { "usedPercent": 95, "resetsAt": 3_000, "excludeFromTray": true, "windowLabel": "Fable" } }
             }
         });
-        let cooked = most_cooked_window(Some(&payload));
+        let account_wide = most_cooked_window(Some(&payload), false);
         assert_eq!(
-            cooked,
+            account_wide,
             Some(CookedWindow {
                 used_percent: 82.0,
-                resets_at: Some(2_000)
+                resets_at: Some(2_000),
+                label: None
             })
         );
-        assert_eq!(most_cooked_window(None), None);
+        let with_scoped = most_cooked_window(Some(&payload), true).expect("scoped window");
+        assert_eq!(with_scoped.used_percent, 95.0);
+        assert_eq!(with_scoped.label.as_deref(), Some("Fable"));
+        assert_eq!(most_cooked_window(None, true), None);
     }
 
     #[test]

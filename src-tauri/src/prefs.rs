@@ -9,6 +9,9 @@ pub struct AppPrefs {
     pub compact_tray: bool,
     /// Local notifications at 80%/95% used and when a window resets.
     pub usage_alerts: bool,
+    /// Claude tray considers model-scoped windows (e.g. Fable weekly) too.
+    /// On by default: the scoped limit is usually the one that actually binds.
+    pub claude_include_scoped: bool,
 }
 
 impl Default for AppPrefs {
@@ -16,6 +19,7 @@ impl Default for AppPrefs {
         Self {
             compact_tray: false,
             usage_alerts: true,
+            claude_include_scoped: true,
         }
     }
 }

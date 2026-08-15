@@ -205,19 +205,24 @@ impl ClaudeManager {
         let Some(tray) = self.app.tray_by_id(tray::CLAUDE_TRAY_ID) else {
             return;
         };
-        let cooked = most_cooked_window(state.rate_limits.as_ref());
-        let compact = self
+        let prefs = self
             .app
             .try_state::<crate::prefs::PrefsStore>()
-            .map(|prefs| prefs.get().compact_tray)
-            .unwrap_or(false);
+            .map(|prefs| prefs.get())
+            .unwrap_or_default();
+        let cooked = most_cooked_window(state.rate_limits.as_ref(), prefs.claude_include_scoped);
         let title = tray_title(
-            cooked.map(|window| window.used_percent),
-            cooked.and_then(|window| window.resets_at),
+            cooked.as_ref().map(|window| window.used_percent),
+            cooked.as_ref().and_then(|window| window.resets_at),
             now_unix_millis() / 1_000,
-            compact,
+            prefs.compact_tray,
         );
         let _ = tray.set_title(Some(title.as_str()));
+        let tooltip = match cooked.as_ref().and_then(|window| window.label.as_deref()) {
+            Some(label) => format!("Claude Code · {label} weekly limit"),
+            None => "Claude Code usage".to_owned(),
+        };
+        let _ = tray.set_tooltip(Some(tooltip.as_str()));
     }
 }
 
@@ -408,12 +413,13 @@ fn normalize_limit_entry(limit: &Value) -> Option<(String, Value)> {
         );
     }
     let mut window = window_snapshot(used, duration, parse_reset_timestamp(limit.get("resets_at")));
-    if scope_name.is_some() {
-        // Model-scoped windows stay out of the menu-bar title: the tray tracks
-        // the account-wide windows so it is not permanently pinned to whatever
-        // single model the user runs most.
+    if let Some(name) = scope_name {
+        // Model-scoped windows are marked so the tray can include or skip
+        // them per the "Include Model Limits" preference, and labeled so the
+        // tooltip can say which window the menu-bar number belongs to.
         if let Value::Object(map) = &mut window {
             map.insert("excludeFromTray".into(), Value::Bool(true));
+            map.insert("windowLabel".into(), Value::from(name));
         }
     }
     snapshot.insert(window_kind.into(), window);
@@ -502,10 +508,14 @@ mod tests {
         assert_eq!(scoped.get("limitName"), Some(&json!("Weekly limit")));
         assert_eq!(scoped.pointer("/secondary/excludeFromTray"), Some(&json!(true)));
 
-        // The tray skips the model-scoped window and reports the most-used
-        // account-wide window instead (weekly at 41%).
-        let cooked = most_cooked_window(Some(&normalized)).expect("cooked window");
+        // Account-wide mode skips the scoped window (weekly at 41% wins);
+        // include-scoped mode surfaces Fable at 63% with its label.
+        let cooked = most_cooked_window(Some(&normalized), false).expect("cooked window");
         assert!((cooked.used_percent - 41.0).abs() < 1e-9);
+        assert_eq!(cooked.label, None);
+        let scoped = most_cooked_window(Some(&normalized), true).expect("scoped window");
+        assert!((scoped.used_percent - 63.0).abs() < 1e-9);
+        assert_eq!(scoped.label.as_deref(), Some("Fable"));
     }
 
     #[test]

@@ -363,8 +363,8 @@ impl CodexManager {
         let Some(tray) = self.app.tray_by_id(crate::tray::CODEX_TRAY_ID) else {
             return;
         };
-        let cooked = most_cooked_window(state.rate_limits.as_ref());
-        let used = cooked.map(|window| window.used_percent);
+        let cooked = most_cooked_window(state.rate_limits.as_ref(), false);
+        let used = cooked.as_ref().map(|window| window.used_percent);
         let compact = self
             .app
             .try_state::<crate::prefs::PrefsStore>()
@@ -373,7 +373,7 @@ impl CodexManager {
         let now = now_unix_seconds();
         let title = tray_title(
             used,
-            cooked.and_then(|window| window.resets_at),
+            cooked.as_ref().and_then(|window| window.resets_at),
             now,
             compact,
         );
