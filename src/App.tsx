@@ -1,0 +1,151 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Clock3, PanelTop, Power, RefreshCw, Share2, ShieldCheck, Ticket } from "lucide-react";
+import { MeterMark } from "./components/MeterMark";
+import { meterTone } from "./components/EdgeMeter";
+import { QuotaSection } from "./components/QuotaSection";
+import { ConnectionStateView } from "./components/ConnectionState";
+import { UsageDetails } from "./components/UsageDetails";
+import { TiboWatch } from "./components/TiboWatch";
+import { ShareModal } from "./components/ShareModal";
+import { ResetAlert } from "./components/ResetAlert";
+import { NotchSettings } from "./components/NotchSettings";
+import { ClaudeSection } from "./components/ClaudeSection";
+import { useCodexMeter } from "./hooks/useCodexMeter";
+import { useClaudeMeter } from "./hooks/useClaudeMeter";
+import { useResetEvents } from "./features/tibo-watch/useResetEvents";
+import { notifyFreshResets } from "./features/tibo-watch/notifications";
+import { formatCountdown, windowDurationLabel } from "./lib/rateLimits";
+import type { RateLimitBucket } from "./types/codex";
+
+function headerResetText(bucket: RateLimitBucket, now: number): string {
+  const countdown = bucket.resetsAt
+    ? formatCountdown(bucket.resetsAt, now)
+        .replace(/^Resets in /, "Renews in ")
+        .replace(/^Reset due$/, "Renewing now")
+        .replace(/^Reset time unavailable$/, "Renewal unavailable")
+    : "";
+  return countdown || "Renewal unavailable";
+}
+
+export default function App() {
+  const { state, buckets, resetCredits, usage, refreshing, refresh } = useCodexMeter();
+  const claude = useClaudeMeter();
+  const [now, setNow] = useState(Date.now());
+  const [sharing, setSharing] = useState(false);
+  const [notchSettings, setNotchSettings] = useState(false);
+  const resetEvents = useResetEvents();
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+  useEffect(() => {
+    void notifyFreshResets(resetEvents);
+  }, [resetEvents]);
+  const connected = state.connection === "connected";
+  const mostCooked = buckets.reduce<(typeof buckets)[number] | undefined>(
+    (lowest, bucket) => !lowest || bucket.remainingPercent < lowest.remainingPercent ? bucket : lowest,
+    undefined,
+  );
+
+  return (
+    <main className="app-shell" data-tauri-drag-region>
+      <header
+        className="app-header"
+        data-tauri-drag-region
+        onMouseDown={(event) => {
+          if (event.button === 0 && "__TAURI_INTERNALS__" in window) {
+            void getCurrentWindow().startDragging();
+          }
+        }}
+      >
+        <div className="header-toolbar" data-tauri-drag-region>
+          <div className="brand-row" data-tauri-drag-region>
+            <MeterMark />
+              <div data-tauri-drag-region>
+                <h1 data-tauri-drag-region>Codex</h1>
+                <p data-tauri-drag-region>Usage meter</p>
+            </div>
+          </div>
+          <span className="toolbar-divider" aria-hidden="true" />
+          {connected && mostCooked ? (
+            <div
+              className={`status-summary tone-${meterTone(mostCooked)}`}
+              title={`${windowDurationLabel(mostCooked.windowDurationMins)} quota window`}
+              data-tauri-drag-region
+            >
+              <div className="available-value" data-tauri-drag-region>
+                <strong data-tauri-drag-region>{Math.round(mostCooked.remainingPercent)}</strong><span data-tauri-drag-region>%</span>
+              </div>
+              <div className="status-copy" data-tauri-drag-region>
+                <span className="status-eyebrow" data-tauri-drag-region><i aria-hidden="true" />Available · {windowDurationLabel(mostCooked.windowDurationMins)}</span>
+                <strong data-tauri-drag-region><Clock3 size={12} strokeWidth={2} aria-hidden="true" />{headerResetText(mostCooked, now)}</strong>
+              </div>
+            </div>
+          ) : (
+            <div className="status-summary status-summary--connection" title="Codex App Server connection" data-tauri-drag-region>
+              <span className="connection-orb" aria-hidden="true" />
+              <div className="status-copy" data-tauri-drag-region>
+                <span className="status-eyebrow" data-tauri-drag-region>Codex status</span>
+                <strong data-tauri-drag-region>{state.connection === "starting" ? "Connecting…" : "Offline"}</strong>
+              </div>
+            </div>
+          )}
+        </div>
+      </header>
+
+      <div className="content-scroll">
+        {!connected ? (
+          <ConnectionStateView state={state} onRetry={() => void refresh()} />
+        ) : buckets.length ? (
+          <>
+            <ResetAlert now={now} events={resetEvents} />
+            <div className="quota-list">
+              {buckets.map((bucket) => <QuotaSection key={bucket.id} bucket={bucket} now={now} />)}
+            </div>
+            {resetCredits.availableCount > 0 ? (
+              <div className="reset-credit"><Ticket size={15} aria-hidden="true" /><strong>{resetCredits.availableCount}</strong> reset {resetCredits.availableCount === 1 ? "is" : "are"} available</div>
+            ) : null}
+            {usage ? <UsageDetails usage={usage} /> : null}
+            <TiboWatch now={now} events={resetEvents} />
+          </>
+        ) : (
+          <div className="state-panel glass-tile" role="status">
+            <ShieldCheck size={22} aria-hidden="true" />
+            <h2>No rate-limit buckets returned</h2>
+            <p>Codex is connected, but this account did not report a quota window.</p>
+            <button className="secondary-button" onClick={() => void refresh()}>Refresh</button>
+          </div>
+        )}
+        <ClaudeSection meter={claude} now={now} />
+      </div>
+
+      <footer className="app-footer">
+        <button className="footer-action share-action" disabled={!mostCooked} onClick={() => setSharing(true)}>
+          <Share2 size={16} aria-hidden="true" /> Share
+        </button>
+        <button
+          className="icon-button"
+          onClick={() => {
+            void refresh();
+            void claude.refresh();
+          }}
+          disabled={refreshing || claude.refreshing}
+          aria-label="Refresh usage data"
+          title="Refresh"
+        >
+          <RefreshCw size={17} className={refreshing || claude.refreshing ? "spinning" : ""} />
+        </button>
+        <button className="icon-button" onClick={() => setNotchSettings(true)} aria-label="Configure notch meter" title="Notch meter">
+          <PanelTop size={17} />
+        </button>
+        <button className="icon-button danger-hover" onClick={() => void invoke("quit_app")} aria-label="Quit UsageBar" title="Quit">
+          <Power size={17} />
+        </button>
+      </footer>
+      {sharing && mostCooked ? <ShareModal bucket={mostCooked} onClose={() => setSharing(false)} /> : null}
+      {notchSettings ? <NotchSettings onClose={() => setNotchSettings(false)} /> : null}
+    </main>
+  );
+}

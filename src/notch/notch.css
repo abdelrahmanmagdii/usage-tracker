@@ -1,0 +1,71 @@
+:root {
+  --notch-accent: #d05cff;
+  --notch-warning: #ffb45b;
+  --notch-danger: #ff6685;
+}
+
+body:has(.notch-surface) { background: transparent; }
+
+.notch-surface {
+  --notch-tone: var(--notch-accent);
+  width: 100%;
+  height: 100%;
+  padding: 0 4px 4px;
+  color: rgba(255, 255, 255, .96);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
+.notch-surface.is-low, .notch-surface.is-incoming { --notch-tone: var(--notch-warning); }
+.notch-surface.is-reached, .notch-surface.is-offline { --notch-tone: var(--notch-danger); }
+.notch-surface.is-stale { --notch-tone: #aaa3b5; }
+
+.notch-button {
+  width: 100%;
+  min-height: 44px;
+  padding: 5px 12px 8px;
+  display: block;
+  overflow: hidden;
+  color: inherit;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-top: 0;
+  border-radius: 0 0 19px 19px;
+  background: linear-gradient(180deg, rgba(5, 5, 7, .98), rgba(12, 10, 16, .94));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .28), inset 0 -1px 0 rgba(255, 255, 255, .07);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  backdrop-filter: blur(20px) saturate(1.3);
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+.notch-button:hover, .notch-button:focus-visible { border-color: rgba(255, 255, 255, .2); }
+.notch-button:focus-visible { outline: 2px solid var(--notch-tone); outline-offset: -3px; }
+
+.notch-compact { height: 34px; display: flex; align-items: center; gap: 9px; }
+.notch-surface .meter-mark { width: 27px; height: 27px; flex: none; border: 0; border-radius: 9px; background: rgba(255, 255, 255, .08); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08); }
+.notch-surface .meter-mark::after { display: none; }
+.notch-surface .meter-mark svg { width: 21px; height: 21px; }
+.notch-surface .meter-mark__terminal { stroke: #17121e; }
+.notch-copy { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.notch-copy strong { overflow: hidden; font-size: 11px; line-height: 13px; font-weight: 650; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.notch-compact > svg { flex: none; color: var(--notch-tone); }
+.notch-track { height: 2px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, .13); }
+.notch-track i { display: block; width: 100%; height: 100%; border-radius: inherit; background: var(--notch-tone); box-shadow: 0 0 7px color-mix(in srgb, var(--notch-tone) 50%, transparent); transform-origin: left; transition: transform 280ms cubic-bezier(.2,.8,.2,1); }
+
+.notch-expanded-copy {
+  height: 0;
+  padding: 0 36px;
+  display: grid;
+  gap: 2px;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 140ms ease, transform 180ms cubic-bezier(.2,.8,.2,1);
+}
+.notch-expanded-copy strong { font-size: 11px; line-height: 14px; font-weight: 640; }
+.notch-expanded-copy span { overflow: hidden; color: rgba(255, 255, 255, .6); font-size: 9.5px; line-height: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.notch-surface.is-expanded .notch-expanded-copy { height: 35px; opacity: 1; transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .notch-track i, .notch-expanded-copy { transition-duration: .01ms; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .notch-button { background: #08070a; -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
