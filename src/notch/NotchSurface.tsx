@@ -42,16 +42,16 @@ function presentationFor(
   }
   const updatedMs = updatedAt ? (updatedAt < 1_000_000_000_000 ? updatedAt * 1000 : updatedAt) : 0;
   const ageMs = updatedMs ? Math.max(0, now - updatedMs) : Number.POSITIVE_INFINITY;
-  const remaining = Math.round(bucket.remainingPercent);
+  const used = Math.round(bucket.usedPercent);
   if (connection !== "connected") {
     const age = Number.isFinite(ageMs) ? formatLeadTime(ageMs) : "unknown";
     return ageMs >= 30 * 60_000
       ? { kind: "offline", compact: "Usage unavailable", title: "Codex is offline", detail: `Last updated ${age} ago.` }
-      : { kind: "offline", compact: `${remaining}% · offline`, title: "Last known Codex usage", detail: `Updated ${age} ago.` };
+      : { kind: "offline", compact: `${used}% · offline`, title: "Last known Codex usage", detail: `Updated ${age} ago.` };
   }
   if (ageMs > 10 * 60_000) {
     const age = formatLeadTime(ageMs);
-    return { kind: "stale", compact: `${remaining}% · updated ${age} ago`, title: "Codex usage may be stale", detail: `Last updated ${age} ago.` };
+    return { kind: "stale", compact: `${used}% · updated ${age} ago`, title: "Codex usage may be stale", detail: `Last updated ${age} ago.` };
   }
   const resetMs = bucket.resetsAt ? bucket.resetsAt * 1000 : 0;
   const lead = resetMs > now ? formatLeadTime(resetMs - now) : "soon";
@@ -59,9 +59,9 @@ function presentationFor(
     return { kind: "reached", compact: `Limit reached · ${lead}`, title: "Codex limit reached", detail: `Renews in ${lead}.` };
   }
   return {
-    kind: remaining <= 20 ? "low" : "normal",
-    compact: `${remaining}% · ${lead}`,
-    title: `${windowDurationLabel(bucket.windowDurationMins)} · ${remaining}% left`,
+    kind: bucket.remainingPercent <= 20 ? "low" : "normal",
+    compact: `${used}% · ${lead}`,
+    title: `${windowDurationLabel(bucket.windowDurationMins)} · ${used}% used`,
     detail: resetMs ? `Renews in ${lead}.` : "Renewal time unavailable.",
   };
 }
@@ -91,9 +91,9 @@ export function NotchSurface() {
     [buckets],
   );
   const presentation = presentationFor(bucket, events, state.connection, state.updatedAt, now);
-  const remaining = bucket?.remainingPercent ?? 0;
+  const used = bucket?.usedPercent ?? 0;
   const label = bucket
-    ? `Codex usage, ${Math.round(remaining)} percent remaining in the ${windowDurationLabel(bucket.windowDurationMins)} window. ${presentation.detail}`
+    ? `Codex usage, ${Math.round(used)} percent of the ${windowDurationLabel(bucket.windowDurationMins)} window used. ${presentation.detail}`
     : presentation.title;
 
   const setNativeExpanded = (next: boolean) => {
@@ -124,7 +124,7 @@ export function NotchSurface() {
           <MeterMark />
           <span className="notch-copy">
             <strong>{presentation.compact}</strong>
-            <span className="notch-track" aria-hidden="true"><i style={{ transform: `scaleX(${remaining / 100})` }} /></span>
+            <span className="notch-track" aria-hidden="true"><i style={{ transform: `scaleX(${used / 100})` }} /></span>
           </span>
           {presentation.kind === "incoming" || presentation.kind === "reached" ? <AlertTriangle size={14} aria-hidden="true" /> : <Clock3 size={13} aria-hidden="true" />}
         </span>

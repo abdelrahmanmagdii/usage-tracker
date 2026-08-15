@@ -9,19 +9,19 @@ export function meterTone(bucket: RateLimitBucket): "healthy" | "warning" | "dan
 
 /** Ultra-thin luminous quota strip flush to the window's top edge. */
 export function EdgeMeter({ bucket }: { bucket: RateLimitBucket }) {
-  const remaining = Math.round(bucket.remainingPercent);
+  const used = Math.round(bucket.usedPercent);
   return (
     <div
       className={`edge-meter tone-${meterTone(bucket)}`}
       role="progressbar"
-      aria-label={`${remaining} percent of the ${windowDurationLabel(bucket.windowDurationMins)} window remaining`}
+      aria-label={`${used} percent of the ${windowDurationLabel(bucket.windowDurationMins)} window used`}
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={remaining}
+      aria-valuenow={used}
     >
       <span
         className="edge-meter-fill"
-        style={{ "--progress": bucket.remainingPercent / 100 } as CSSProperties}
+        style={{ "--progress": bucket.usedPercent / 100 } as CSSProperties}
       />
     </div>
   );

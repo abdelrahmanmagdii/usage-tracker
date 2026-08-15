@@ -302,7 +302,7 @@ fn distance_to_segment(x: f64, y: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> f6
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CookedWindow {
-    pub remaining: f64,
+    pub used_percent: f64,
     pub resets_at: Option<u64>,
 }
 
@@ -310,21 +310,29 @@ pub fn most_cooked_window(payload: Option<&Value>) -> Option<CookedWindow> {
     fn visit(value: &Value, best: &mut Option<CookedWindow>) {
         match value {
             Value::Object(map) => {
-                if let Some(used) = map.get("usedPercent").and_then(Value::as_f64) {
-                    let remaining = ((100.0 - used).clamp(0.0, 100.0)) / 100.0;
-                    let resets_at = map
-                        .get("resetsAt")
-                        .and_then(Value::as_f64)
-                        .map(|value| value.max(0.0) as u64);
-                    let replace = match best {
-                        Some(current) => remaining < current.remaining,
-                        None => true,
-                    };
-                    if replace {
-                        *best = Some(CookedWindow {
-                            remaining,
-                            resets_at,
-                        });
+                // Windows can opt out of the tray (e.g. Claude's model-scoped
+                // weekly limits) while still appearing in the popover.
+                let excluded = map
+                    .get("excludeFromTray")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if !excluded {
+                    if let Some(used) = map.get("usedPercent").and_then(Value::as_f64) {
+                        let used_percent = used.clamp(0.0, 100.0);
+                        let resets_at = map
+                            .get("resetsAt")
+                            .and_then(Value::as_f64)
+                            .map(|value| value.max(0.0) as u64);
+                        let replace = match best {
+                            Some(current) => used_percent > current.used_percent,
+                            None => true,
+                        };
+                        if replace {
+                            *best = Some(CookedWindow {
+                                used_percent,
+                                resets_at,
+                            });
+                        }
                     }
                 }
                 for child in map.values() {
@@ -344,16 +352,18 @@ pub fn most_cooked_window(payload: Option<&Value>) -> Option<CookedWindow> {
     best
 }
 
+/// Titles show percent USED, mirroring how Codex and Claude Code both report
+/// usage, so the menu bar never disagrees with the tools themselves.
 pub fn tray_title(
-    remaining: Option<f64>,
+    used_percent: Option<f64>,
     resets_at: Option<u64>,
     now_unix: u64,
     compact: bool,
 ) -> String {
-    let Some(fraction) = remaining else {
+    let Some(used) = used_percent else {
         return String::new();
     };
-    let percent = (fraction.clamp(0.0, 1.0) * 100.0).round() as u32;
+    let percent = used.clamp(0.0, 100.0).round() as u32;
     match resets_at {
         Some(target) if !compact && target > now_unix => {
             format!("{percent}% · {}", format_countdown(target - now_unix))
@@ -382,16 +392,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_lowest_remaining_window_with_reset_time() {
+    fn finds_most_used_window_and_skips_tray_excluded_ones() {
         let payload = serde_json::json!({
             "rateLimits": { "primary": { "usedPercent": 20, "resetsAt": 1_000 }, "secondary": null },
-            "rateLimitsByLimitId": { "other": { "primary": { "usedPercent": 82, "resetsAt": 2_000 } } }
+            "rateLimitsByLimitId": {
+                "other": { "primary": { "usedPercent": 82, "resetsAt": 2_000 } },
+                "scoped": { "secondary": { "usedPercent": 95, "resetsAt": 3_000, "excludeFromTray": true } }
+            }
         });
         let cooked = most_cooked_window(Some(&payload));
         assert_eq!(
             cooked,
             Some(CookedWindow {
-                remaining: 0.18,
+                used_percent: 82.0,
                 resets_at: Some(2_000)
             })
         );
@@ -399,18 +412,18 @@ mod tests {
     }
 
     #[test]
-    fn title_shows_percent_and_countdown() {
-        assert_eq!(tray_title(Some(0.42), Some(4_661), 1_000, false), "42% · 1:01:01");
-        assert_eq!(tray_title(Some(0.42), Some(1_545), 1_000, false), "42% · 9:05");
-        assert_eq!(tray_title(Some(0.42), Some(200_000), 1_000, false), "42% · 2d 7h");
-        assert_eq!(tray_title(Some(0.42), None, 1_000, false), "42%");
-        assert_eq!(tray_title(Some(0.42), Some(900), 1_000, false), "42%");
+    fn title_shows_used_percent_and_countdown() {
+        assert_eq!(tray_title(Some(42.0), Some(4_661), 1_000, false), "42% · 1:01:01");
+        assert_eq!(tray_title(Some(42.0), Some(1_545), 1_000, false), "42% · 9:05");
+        assert_eq!(tray_title(Some(42.0), Some(200_000), 1_000, false), "42% · 2d 7h");
+        assert_eq!(tray_title(Some(42.0), None, 1_000, false), "42%");
+        assert_eq!(tray_title(Some(42.0), Some(900), 1_000, false), "42%");
         assert_eq!(tray_title(None, Some(4_661), 1_000, false), "");
     }
 
     #[test]
     fn compact_title_drops_the_countdown() {
-        assert_eq!(tray_title(Some(0.42), Some(4_661), 1_000, true), "42%");
+        assert_eq!(tray_title(Some(42.0), Some(4_661), 1_000, true), "42%");
         assert_eq!(tray_title(None, Some(4_661), 1_000, true), "");
     }
 

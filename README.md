@@ -4,7 +4,7 @@
 
 UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding quota windows, how much remains, and exactly when each window resets. Codex data comes from your existing Codex login through the official Codex App Server—no OpenAI API key and no credential scraping. If Claude Code is installed, a second meter shows its 5-hour and weekly windows too.
 
-The menu bar shows one live meter per provider: a tiny provider mark plus `42% · 1:25:49`-style remaining/quota countdown for its most-cooked window. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
+The menu bar shows one live meter per provider: a tiny provider mark plus a `42% · 1:25:49`-style **used-percentage** and reset countdown for the most-used account-wide window — the same "% used" convention Codex and Claude Code report themselves, so the numbers always agree. (Claude's per-model weekly windows appear in the popover but never hijack the menu-bar number.) The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
 
 | Codex meters & reset radar | Claude Code meters |
 | :---: | :---: |

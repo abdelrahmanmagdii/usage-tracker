@@ -212,7 +212,7 @@ impl ClaudeManager {
             .map(|prefs| prefs.get().compact_tray)
             .unwrap_or(false);
         let title = tray_title(
-            cooked.map(|window| window.remaining),
+            cooked.map(|window| window.used_percent),
             cooked.and_then(|window| window.resets_at),
             now_unix_millis() / 1_000,
             compact,
@@ -407,10 +407,16 @@ fn normalize_limit_entry(limit: &Value) -> Option<(String, Value)> {
             Value::from(severity.unwrap_or("limit_reached")),
         );
     }
-    snapshot.insert(
-        window_kind.into(),
-        window_snapshot(used, duration, parse_reset_timestamp(limit.get("resets_at"))),
-    );
+    let mut window = window_snapshot(used, duration, parse_reset_timestamp(limit.get("resets_at")));
+    if scope_name.is_some() {
+        // Model-scoped windows stay out of the menu-bar title: the tray tracks
+        // the account-wide windows so it is not permanently pinned to whatever
+        // single model the user runs most.
+        if let Value::Object(map) = &mut window {
+            map.insert("excludeFromTray".into(), Value::Bool(true));
+        }
+    }
+    snapshot.insert(window_kind.into(), window);
     Some((id, Value::Object(snapshot)))
 }
 
@@ -494,10 +500,12 @@ mod tests {
         assert_eq!(scoped.pointer("/secondary/usedPercent"), Some(&json!(63.0)));
         assert_eq!(scoped.get("windowLabel"), Some(&json!("Fable")));
         assert_eq!(scoped.get("limitName"), Some(&json!("Weekly limit")));
+        assert_eq!(scoped.pointer("/secondary/excludeFromTray"), Some(&json!(true)));
 
-        // The tray picks the scoped weekly window because it is the most cooked.
+        // The tray skips the model-scoped window and reports the most-used
+        // account-wide window instead (weekly at 41%).
         let cooked = most_cooked_window(Some(&normalized)).expect("cooked window");
-        assert!((cooked.remaining - 0.37).abs() < 1e-9);
+        assert!((cooked.used_percent - 41.0).abs() < 1e-9);
     }
 
     #[test]

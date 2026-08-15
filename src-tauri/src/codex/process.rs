@@ -364,14 +364,14 @@ impl CodexManager {
             return;
         };
         let cooked = most_cooked_window(state.rate_limits.as_ref());
-        let remaining = cooked.map(|window| window.remaining);
+        let used = cooked.map(|window| window.used_percent);
         let compact = self
             .app
             .try_state::<crate::prefs::PrefsStore>()
             .map(|prefs| prefs.get().compact_tray)
             .unwrap_or(false);
         let title = tray_title(
-            remaining,
+            used,
             cooked.and_then(|window| window.resets_at),
             now_unix_seconds(),
             compact,
