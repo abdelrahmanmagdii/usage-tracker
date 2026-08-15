@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the UsageBar popover",
+  "windows": ["main", "notch"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "dialog:default",
+    "notification:default",
+    "clipboard-manager:allow-write-image"
+  ]
+}
