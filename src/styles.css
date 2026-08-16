@@ -173,6 +173,43 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); o
 .spark-bars span { flex: 1; background: var(--fill); position: relative; overflow: hidden; border-radius: 3px; }
 .spark-bars i { position: absolute; inset: 0; background: color-mix(in srgb, var(--accent) 62%, transparent); transform-origin: bottom; }
 
+/* ── Onboarding ── */
+.onboard-scrim { position: absolute; inset: 0; z-index: 40; display: flex; align-items: stretch; padding: 12px; background: linear-gradient(160deg, rgba(238,235,255,.86), rgba(228,233,252,.9)); backdrop-filter: blur(30px) saturate(1.5); animation: modal-in 200ms cubic-bezier(.2,.8,.2,1); }
+.onboard-card { display: flex; flex-direction: column; width: 100%; padding: 16px 16px 12px; }
+.onboard-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; scrollbar-width: thin; }
+/* Auto margins centre short steps without making tall ones unscrollable. */
+.onboard-content { margin-block: auto; padding: 4px 2px; }
+.onboard-body h2 { margin: 0 0 6px; font: 700 16px/21px var(--font-ui); letter-spacing: -.02em; }
+.onboard-body > p { margin: 0 0 13px; color: var(--text-secondary); font-size: 11.5px; line-height: 1.58; }
+.onboard-hero { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; padding: 12px; border: 1px solid rgba(255,255,255,.8); border-radius: 14px; background: linear-gradient(145deg, rgba(255,255,255,.7), rgba(240,236,255,.5)); box-shadow: var(--tile-highlight); }
+.onboard-hero-sample { font: 600 15px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.onboard-hero-sample strong { color: var(--accent); font-size: 19px; }
+.onboard-list { margin: 0 0 13px; padding: 0; list-style: none; display: grid; gap: 10px; }
+.onboard-list li { display: flex; align-items: flex-start; gap: 9px; color: var(--text-secondary); font-size: 11.5px; line-height: 1.55; }
+.onboard-list strong { color: var(--text); font-weight: 640; }
+.onboard-bullet { flex: none; width: 22px; height: 22px; margin-top: 1px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--accent); background: var(--accent-soft); font: 700 10px/1 var(--font-mono); }
+.onboard-providers { display: grid; gap: 8px; margin-bottom: 12px; }
+.onboard-provider { display: flex; align-items: center; gap: 10px; padding: 10px 11px; border: 1px solid var(--tile-border); border-radius: 13px; background: var(--fill-raised); box-shadow: inset 0 1px 0 rgba(255,255,255,.8); }
+.onboard-provider > div { flex: 1; min-width: 0; }
+.onboard-provider strong { display: block; font-size: 12px; font-weight: 640; }
+.onboard-provider span:not(.onboard-provider-dot) { display: block; color: var(--text-tertiary); font-size: 10.5px; }
+.onboard-provider > svg { color: var(--healthy, #2f9e5f); }
+.onboard-provider-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent); }
+.onboard-provider.is-ready .onboard-provider-dot { background: #2f9e5f; box-shadow: 0 0 0 3px rgba(47,158,95,.16); }
+.onboard-note { display: flex; align-items: flex-start; gap: 8px; padding: 10px 11px; border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent); border-radius: 12px; background: var(--accent-soft); }
+.onboard-note svg { flex: none; margin-top: 1px; color: var(--accent); }
+.onboard-note p { margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.55; }
+.onboard-note.is-ready { border-color: rgba(47,158,95,.28); background: rgba(47,158,95,.1); }
+.onboard-note.is-ready svg { color: #2f9e5f; }
+.onboard-footnote { margin: 12px 0 0; color: var(--text-tertiary); font-size: 10.5px; line-height: 1.5; }
+.onboard-footer { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--hairline); }
+.onboard-footer .primary-button, .onboard-footer .ghost-button { min-width: 0; padding: 0 15px; }
+.onboard-dots { flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; }
+.onboard-dots span { width: 5px; height: 5px; border-radius: 50%; background: rgba(88,70,150,.22); transition: background 160ms ease, transform 160ms ease; }
+.onboard-dots span.is-active { background: var(--accent); transform: scale(1.25); }
+.ghost-button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; padding: 0 12px; border-radius: 11px; color: var(--text-tertiary); font-size: 11.5px; font-weight: 600; }
+.ghost-button:hover { color: var(--text); background: var(--fill-raised); }
+
 /* ── Claude Code ── */
 .claude-block { margin-top: 13px; padding-top: 2px; border-top: 1px solid rgba(255, 255, 255, .6); }
 .claude-label { margin: 10px 15px 0; }

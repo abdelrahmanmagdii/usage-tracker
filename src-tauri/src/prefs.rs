@@ -2,16 +2,24 @@ use std::{fs, path::PathBuf, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Which window a provider's menu-bar meter follows. `auto` tracks whichever
+/// window is most used; otherwise this is a window id from `tray::TrayWindow`
+/// (e.g. `session:primary`, `weekly-scoped-fable:secondary`).
+pub const TRAY_WINDOW_AUTO: &str = "auto";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppPrefs {
     /// Tray shows only the percentage, no countdown.
     pub compact_tray: bool,
     /// Local notifications at 80%/95% used and when a window resets.
     pub usage_alerts: bool,
-    /// Claude tray considers model-scoped windows (e.g. Fable weekly) too.
-    /// On by default: the scoped limit is usually the one that actually binds.
-    pub claude_include_scoped: bool,
+    /// Window the Codex meter follows.
+    pub codex_tray_window: String,
+    /// Window the Claude meter follows.
+    pub claude_tray_window: String,
+    /// First-run walkthrough has been completed or skipped.
+    pub onboarding_complete: bool,
 }
 
 impl Default for AppPrefs {
@@ -19,7 +27,9 @@ impl Default for AppPrefs {
         Self {
             compact_tray: false,
             usage_alerts: true,
-            claude_include_scoped: true,
+            codex_tray_window: TRAY_WINDOW_AUTO.to_owned(),
+            claude_tray_window: TRAY_WINDOW_AUTO.to_owned(),
+            onboarding_complete: false,
         }
     }
 }
@@ -42,13 +52,13 @@ impl PrefsStore {
     }
 
     pub fn get(&self) -> AppPrefs {
-        *self.state.lock().expect("preferences poisoned")
+        self.state.lock().expect("preferences poisoned").clone()
     }
 
     pub fn update(&self, mutate: impl FnOnce(&mut AppPrefs)) -> AppPrefs {
         let mut state = self.state.lock().expect("preferences poisoned");
         mutate(&mut state);
-        let snapshot = *state;
+        let snapshot = state.clone();
         drop(state);
         if let Some(parent) = self.path.parent() {
             let _ = fs::create_dir_all(parent);
@@ -69,6 +79,19 @@ mod tests {
         let prefs = AppPrefs::default();
         assert!(!prefs.compact_tray);
         assert!(prefs.usage_alerts);
+        assert_eq!(prefs.codex_tray_window, TRAY_WINDOW_AUTO);
+        assert_eq!(prefs.claude_tray_window, TRAY_WINDOW_AUTO);
+        assert!(!prefs.onboarding_complete);
+    }
+
+    #[test]
+    fn unknown_and_missing_keys_fall_back_to_defaults() {
+        // Preference files written by older builds must still load.
+        let prefs: AppPrefs =
+            serde_json::from_str(r#"{"compactTray":true,"claudeIncludeScoped":false}"#).unwrap();
+        assert!(prefs.compact_tray);
+        assert!(prefs.usage_alerts);
+        assert_eq!(prefs.claude_tray_window, TRAY_WINDOW_AUTO);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use tokio::{
 };
 
 use crate::codex::process::ConnectionState;
-use crate::tray::{self, most_cooked_window, tray_title};
+use crate::tray::{self, collect_windows, select_window, tray_title};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
@@ -210,19 +210,21 @@ impl ClaudeManager {
             .try_state::<crate::prefs::PrefsStore>()
             .map(|prefs| prefs.get())
             .unwrap_or_default();
-        let cooked = most_cooked_window(state.rate_limits.as_ref(), prefs.claude_include_scoped);
+        let windows = collect_windows(state.rate_limits.as_ref());
+        let selected = select_window(&windows, &prefs.claude_tray_window);
         let title = tray_title(
-            cooked.as_ref().map(|window| window.used_percent),
-            cooked.as_ref().and_then(|window| window.resets_at),
+            selected.map(|window| window.used_percent),
+            selected.and_then(|window| window.resets_at),
             now_unix_millis() / 1_000,
             prefs.compact_tray,
         );
         let _ = tray.set_title(Some(title.as_str()));
-        let tooltip = match cooked.as_ref().and_then(|window| window.label.as_deref()) {
-            Some(label) => format!("Claude Code · {label} weekly limit"),
+        let tooltip = match selected {
+            Some(window) => format!("Claude Code · {} window", window.label),
             None => "Claude Code usage".to_owned(),
         };
         let _ = tray.set_tooltip(Some(tooltip.as_str()));
+        tray::sync_tray_menu(&self.app, tray::Provider::Claude, &windows);
     }
 }
 
@@ -327,9 +329,15 @@ fn parse_credentials(raw: &str) -> Option<Credentials> {
 /// Codex App Server emits, so the tray and the renderer reuse one pipeline.
 fn normalize_usage(raw: &Value) -> Value {
     let mut by_id = Map::new();
+    // The `limits` entries and the legacy `five_hour`/`seven_day` objects
+    // describe the same windows, and either side can report `resets_at: null`
+    // on its own. Carrying the legacy timestamp across avoids showing "reset
+    // time unavailable" when the other half of the payload knows the answer.
+    let session_fallback = parse_reset_timestamp(raw.pointer("/five_hour/resets_at"));
+    let weekly_fallback = parse_reset_timestamp(raw.pointer("/seven_day/resets_at"));
     if let Some(limits) = raw.get("limits").and_then(Value::as_array) {
         for limit in limits {
-            let Some(entry) = normalize_limit_entry(limit) else {
+            let Some(entry) = normalize_limit_entry(limit, session_fallback, weekly_fallback) else {
                 continue;
             };
             by_id.insert(entry.0, entry.1);
@@ -354,7 +362,11 @@ fn normalize_usage(raw: &Value) -> Value {
     json!({ "rateLimitsByLimitId": Value::Object(by_id) })
 }
 
-fn normalize_limit_entry(limit: &Value) -> Option<(String, Value)> {
+fn normalize_limit_entry(
+    limit: &Value,
+    session_fallback: Option<f64>,
+    weekly_fallback: Option<f64>,
+) -> Option<(String, Value)> {
     let used = limit
         .get("percent")
         .and_then(Value::as_f64)
@@ -393,10 +405,14 @@ fn normalize_limit_entry(limit: &Value) -> Option<(String, Value)> {
         (kind == "weekly_all").then(|| "All models".to_owned())
     };
 
+    // "critical" means nearly out, not out: only an explicitly exceeded
+    // severity (or a full window) counts as reached, so a 92% window is not
+    // mislabeled "Limit reached".
     let severity = limit.get("severity").and_then(Value::as_str);
-    let reached = severity.is_some_and(|severity| {
-        !matches!(severity, "normal" | "warning" | "notice")
-    });
+    let reached = used >= 100.0
+        || severity.is_some_and(|severity| {
+            matches!(severity, "exceeded" | "reached" | "exhausted" | "blocked")
+        });
 
     let mut snapshot = Map::new();
     snapshot.insert("limitId".into(), Value::from(id.clone()));
@@ -412,11 +428,18 @@ fn normalize_limit_entry(limit: &Value) -> Option<(String, Value)> {
             Value::from(severity.unwrap_or("limit_reached")),
         );
     }
-    let mut window = window_snapshot(used, duration, parse_reset_timestamp(limit.get("resets_at")));
+    let resets_at = parse_reset_timestamp(limit.get("resets_at")).or(if duration == Some(300.0) {
+        session_fallback
+    } else if duration == Some(10_080.0) {
+        weekly_fallback
+    } else {
+        None
+    });
+    let mut window = window_snapshot(used, duration, resets_at);
     if let Some(name) = scope_name {
-        // Model-scoped windows are marked so the tray can include or skip
-        // them per the "Include Model Limits" preference, and labeled so the
-        // tooltip can say which window the menu-bar number belongs to.
+        // Model-scoped windows are marked so the tray can treat them as
+        // optional, and labeled so the menu-bar picker and tooltip can name
+        // which window the number belongs to.
         if let Value::Object(map) = &mut window {
             map.insert("excludeFromTray".into(), Value::Bool(true));
             map.insert("windowLabel".into(), Value::from(name));
@@ -508,14 +531,13 @@ mod tests {
         assert_eq!(scoped.get("limitName"), Some(&json!("Weekly limit")));
         assert_eq!(scoped.pointer("/secondary/excludeFromTray"), Some(&json!(true)));
 
-        // Account-wide mode skips the scoped window (weekly at 41% wins);
-        // include-scoped mode surfaces Fable at 63% with its label.
-        let cooked = most_cooked_window(Some(&normalized), false).expect("cooked window");
-        assert!((cooked.used_percent - 41.0).abs() < 1e-9);
-        assert_eq!(cooked.label, None);
-        let scoped = most_cooked_window(Some(&normalized), true).expect("scoped window");
-        assert!((scoped.used_percent - 63.0).abs() < 1e-9);
-        assert_eq!(scoped.label.as_deref(), Some("Fable"));
+        // The tray picker sees all three windows, labeled for the menu.
+        let windows = collect_windows(Some(&normalized));
+        let labels: Vec<&str> = windows.iter().map(|window| window.label.as_str()).collect();
+        assert_eq!(labels, vec!["5-hour", "Weekly", "Fable"]);
+        let auto = select_window(&windows, crate::prefs::TRAY_WINDOW_AUTO).expect("auto");
+        assert!((auto.used_percent - 63.0).abs() < 1e-9);
+        assert_eq!(auto.label, "Fable");
     }
 
     #[test]
@@ -554,6 +576,44 @@ mod tests {
     }
 
     #[test]
+    fn a_critical_window_short_of_the_cap_is_not_reached() {
+        // "critical" means nearly out; only an exceeded window is reached.
+        let payload = json!({
+            "limits": [{ "kind": "weekly_scoped", "group": "weekly", "percent": 92,
+                         "severity": "critical", "resets_at": null,
+                         "scope": { "model": { "display_name": "Fable" } } }]
+        });
+        let normalized = normalize_usage(&payload);
+        assert_eq!(
+            normalized.pointer("/rateLimitsByLimitId/weekly-scoped-fable/rateLimitReachedType"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_null_window_reset_falls_back_to_the_legacy_timestamp() {
+        // The API can report resets_at on the legacy objects but not on the
+        // matching `limits` entry, which showed up as "Reset time unavailable".
+        let payload = json!({
+            "five_hour": { "utilization": 8.0, "resets_at": "2026-08-16T07:59:59.515922+00:00" },
+            "seven_day": { "utilization": 57.0, "resets_at": "2026-08-16T22:59:59.515938+00:00" },
+            "limits": [
+                { "kind": "session", "group": "session", "percent": 8, "resets_at": null },
+                { "kind": "weekly_all", "group": "weekly", "percent": 57, "resets_at": null }
+            ]
+        });
+        let normalized = normalize_usage(&payload);
+        assert_eq!(
+            normalized.pointer("/rateLimitsByLimitId/session/primary/resetsAt"),
+            Some(&json!(1_786_867_199.0))
+        );
+        assert_eq!(
+            normalized.pointer("/rateLimitsByLimitId/weekly-all/secondary/resetsAt"),
+            Some(&json!(1_786_921_199.0))
+        );
+    }
+
+    #[test]
     fn picks_the_freshest_usable_credential_source() {
         let creds = |expires_at: f64| Credentials {
             access_token: format!("token-{expires_at}"),
@@ -587,3 +647,4 @@ mod tests {
         assert!(parse_credentials("not json").is_none());
     }
 }
+

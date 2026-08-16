@@ -26,6 +26,17 @@ pub async fn refresh_claude(manager: State<'_, ClaudeManager>) -> Result<ClaudeS
     manager.refresh().await
 }
 
+#[tauri::command]
+pub fn get_app_prefs(prefs: State<'_, crate::prefs::PrefsStore>) -> crate::prefs::AppPrefs {
+    prefs.get()
+}
+
+/// Records that the first-run walkthrough finished so it does not reappear.
+#[tauri::command]
+pub fn complete_onboarding(prefs: State<'_, crate::prefs::PrefsStore>) {
+    prefs.update(|prefs| prefs.onboarding_complete = true);
+}
+
 /// The renderer reports when an announced reset is pending (`until` = unix
 /// seconds it lands, `None` to clear); the Codex tray shows ⚡ while pending.
 #[tauri::command]

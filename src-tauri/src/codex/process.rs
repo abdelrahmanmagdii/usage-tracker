@@ -20,7 +20,7 @@ use tokio::{
 };
 
 use super::protocol::{route_line, RoutedMessage};
-use crate::tray::{most_cooked_window, tray_title};
+use crate::tray::{collect_windows, select_window, tray_title};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -363,19 +363,19 @@ impl CodexManager {
         let Some(tray) = self.app.tray_by_id(crate::tray::CODEX_TRAY_ID) else {
             return;
         };
-        let cooked = most_cooked_window(state.rate_limits.as_ref(), false);
-        let used = cooked.as_ref().map(|window| window.used_percent);
-        let compact = self
+        let prefs = self
             .app
             .try_state::<crate::prefs::PrefsStore>()
-            .map(|prefs| prefs.get().compact_tray)
-            .unwrap_or(false);
+            .map(|prefs| prefs.get())
+            .unwrap_or_default();
+        let windows = collect_windows(state.rate_limits.as_ref());
+        let selected = select_window(&windows, &prefs.codex_tray_window);
         let now = now_unix_seconds();
         let title = tray_title(
-            used,
-            cooked.as_ref().and_then(|window| window.resets_at),
+            selected.map(|window| window.used_percent),
+            selected.and_then(|window| window.resets_at),
             now,
-            compact,
+            prefs.compact_tray,
         );
         let incoming = self
             .app
@@ -383,6 +383,12 @@ impl CodexManager {
             .is_some_and(|radar| radar.incoming_at(now));
         let title = crate::tray::with_incoming_prefix(title, incoming);
         let _ = tray.set_title(Some(title.as_str()));
+        let tooltip = match selected {
+            Some(window) => format!("Codex · {} window", window.label),
+            None => "UsageBar".to_owned(),
+        };
+        let _ = tray.set_tooltip(Some(tooltip.as_str()));
+        crate::tray::sync_tray_menu(&self.app, crate::tray::Provider::Codex, &windows);
     }
 
     async fn stop_child(&self) {

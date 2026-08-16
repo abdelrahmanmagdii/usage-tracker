@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Clock3, PanelTop, Power, RefreshCw, Share2, ShieldCheck, Ticket } from "lucide-react";
 import { MeterMark } from "./components/MeterMark";
@@ -12,6 +13,7 @@ import { ShareModal } from "./components/ShareModal";
 import { ResetAlert } from "./components/ResetAlert";
 import { NotchSettings } from "./components/NotchSettings";
 import { ClaudeSection } from "./components/ClaudeSection";
+import { Onboarding } from "./components/Onboarding";
 import { useCodexMeter } from "./hooks/useCodexMeter";
 import { useClaudeMeter } from "./hooks/useClaudeMeter";
 import { useResetEvents } from "./features/tibo-watch/useResetEvents";
@@ -25,7 +27,7 @@ function headerResetText(bucket: RateLimitBucket, now: number): string {
     ? formatCountdown(bucket.resetsAt, now)
         .replace(/^Resets in /, "Renews in ")
         .replace(/^Reset due$/, "Renewing now")
-        .replace(/^Reset time unavailable$/, "Renewal unavailable")
+        .replace(/^Reset time not reported$/, "Renewal time not reported")
     : "";
   return countdown || "Renewal unavailable";
 }
@@ -36,7 +38,32 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [sharing, setSharing] = useState(false);
   const [notchSettings, setNotchSettings] = useState(false);
+  const [onboarding, setOnboarding] = useState(false);
   const resetEvents = useResetEvents();
+
+  // First run shows the walkthrough; the tray's Setup Guide item reopens it.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setOnboarding(new URLSearchParams(window.location.search).has("onboarding"));
+      return;
+    }
+    let active = true;
+    void invoke<{ onboardingComplete: boolean }>("get_app_prefs")
+      .then((prefs) => active && setOnboarding(!prefs.onboardingComplete))
+      .catch(() => undefined);
+    const unlisten = listen("usagebar://show-onboarding", () => {
+      if (active) setOnboarding(true);
+    });
+    return () => {
+      active = false;
+      void unlisten.then((off) => off());
+    };
+  }, []);
+
+  const closeOnboarding = () => {
+    setOnboarding(false);
+    if ("__TAURI_INTERNALS__" in window) void invoke("complete_onboarding");
+  };
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
@@ -155,6 +182,32 @@ export default function App() {
       </footer>
       {sharing && mostCooked ? <ShareModal bucket={mostCooked} onClose={() => setSharing(false)} /> : null}
       {notchSettings ? <NotchSettings onClose={() => setNotchSettings(false)} /> : null}
+      {onboarding ? (
+        <Onboarding
+          onClose={closeOnboarding}
+          codex={{
+            label: "Codex",
+            connected,
+            detail: connected
+              ? "Connected through the Codex app server"
+              : state.diagnostic ?? "Sign in with the codex CLI, then retry",
+            onRetry: () => void refresh(),
+          }}
+          claude={
+            claude.state.connection === "cli_not_found"
+              ? null
+              : {
+                  label: "Claude Code",
+                  connected: claude.state.connection === "connected",
+                  detail:
+                    claude.state.connection === "connected"
+                      ? "Reading your existing Claude Code login"
+                      : claude.state.diagnostic ?? "Open Claude Code once to sign in",
+                  onRetry: () => void claude.refresh(),
+                }
+          }
+        />
+      ) : null}
     </main>
   );
 }

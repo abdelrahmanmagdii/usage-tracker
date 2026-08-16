@@ -121,7 +121,10 @@ export function extractUsage(payload: unknown): UsageSummary | null {
 }
 
 export function formatCountdown(resetsAt?: number, nowMs = Date.now()): string {
-  if (!resetsAt) return "Reset time unavailable";
+  // Providers occasionally omit a window's reset time (most often a 5-hour
+  // window that has not started yet). Say so plainly instead of implying a
+  // failure on our side.
+  if (!resetsAt) return "Reset time not reported";
   const seconds = Math.max(0, Math.floor(resetsAt - nowMs / 1000));
   if (seconds <= 0) return "Reset due";
   const days = Math.floor(seconds / 86_400);

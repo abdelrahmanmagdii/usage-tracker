@@ -63,6 +63,7 @@ pub fn run() {
             app.manage(prefs::PrefsStore::load(prefs_path));
             app.manage(alerts::UsageAlerts::default());
             app.manage(tray::ResetRadar::default());
+            app.manage(tray::TrayMenuState::default());
             let manager = CodexManager::new(app.handle().clone());
             app.manage(manager.clone());
             let claude_manager = ClaudeManager::new(app.handle().clone());
@@ -180,6 +181,8 @@ pub fn run() {
             commands::get_claude_state,
             commands::refresh_claude,
             commands::set_reset_incoming,
+            commands::get_app_prefs,
+            commands::complete_onboarding,
             commands::get_notch_status,
             commands::set_notch_mode,
             commands::set_notch_expanded,
