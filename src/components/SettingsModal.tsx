@@ -171,8 +171,8 @@ export function SettingsModal({
 
         <div className="settings-body">
           <p className="settings-intro">
-            Choose which quota window each menu-bar meter follows. “Most used”
-            always tracks whichever window is closest to its limit.
+            Pick which limit each meter tracks. “Most used” follows whichever
+            one you are closest to using up.
           </p>
           <WindowPicker
             title="Codex meter"
@@ -191,7 +191,7 @@ export function SettingsModal({
             <span className="setting-label">General</span>
             <Toggle
               label="Compact meter"
-              detail="Percentage only, no countdown."
+              detail="Show just the percentage, no countdown."
               checked={prefs.compactTray}
               onChange={(next) => {
                 setPrefs((current) => ({ ...current, compactTray: next }));
@@ -200,7 +200,7 @@ export function SettingsModal({
             />
             <Toggle
               label="Usage alerts"
-              detail="Notify at 80% and 95% used, and on a fresh window."
+              detail="Get notified at 80% and 95%, and when a limit resets."
               checked={prefs.usageAlerts}
               onChange={(next) => {
                 setPrefs((current) => ({ ...current, usageAlerts: next }));
@@ -209,7 +209,7 @@ export function SettingsModal({
             />
             <Toggle
               label="Launch at login"
-              detail="Start UsageBar automatically."
+              detail="Start UsageBar when you log in."
               checked={autostart}
               onChange={(next) => {
                 setAutostart(next);

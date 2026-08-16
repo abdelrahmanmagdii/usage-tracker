@@ -39,24 +39,24 @@ function StepWelcome() {
           <strong>63%</strong> · 4:12:08
         </span>
       </div>
-      <h2>Your quota, always visible</h2>
+      <h2>Welcome to UsageBar</h2>
       <p>
-        UsageBar puts one live meter per provider in your menu bar, so you never
-        open a terminal to find out how much is left.
+        It keeps your Codex and Claude Code usage in the menu bar, so you can
+        check it without running anything.
       </p>
       <ul className="onboard-list">
         <li>
           <span className="onboard-bullet">%</span>
           <span>
-            Percentages are <strong>how much you have used</strong> — the same
-            way Codex and Claude Code report them.
+            The number is <strong>how much you have used</strong>, not how much
+            is left. That is what Codex and Claude Code show you too.
           </span>
         </li>
         <li>
           <span className="onboard-bullet">
             <MousePointerClick size={13} aria-hidden="true" />
           </span>
-          <span>Click a menu-bar icon to open this panel. Right-click it for settings.</span>
+          <span>Click an icon to open this window. Right-click it for quick settings.</span>
         </li>
       </ul>
     </>
@@ -68,8 +68,8 @@ function StepProviders({ codex, claude }: { codex: ProviderStatus; claude: Provi
     <>
       <h2>Connections</h2>
       <p>
-        Nothing to configure — UsageBar reads the logins these tools already
-        keep on this Mac.
+        There is nothing to set up. UsageBar uses the logins Codex and Claude
+        Code already keep on this Mac.
       </p>
       <div className="onboard-providers">
         {[codex, claude].filter((value): value is ProviderStatus => value !== null).map((provider) => (
@@ -92,10 +92,10 @@ function StepProviders({ codex, claude }: { codex: ProviderStatus; claude: Provi
       <div className="onboard-note">
         <KeyRound size={14} aria-hidden="true" />
         <p>
-          For Claude Code, macOS asks once for Keychain access. Choose{" "}
-          <strong>Always Allow</strong> so background refresh stays silent.
-          UsageBar only ever reads that token and sends it to Anthropic's own
-          usage endpoint — never anywhere else.
+          The first time it reads your Claude Code login, macOS will ask for
+          Keychain access. Pick <strong>Always Allow</strong> so it can keep
+          updating in the background. UsageBar only reads that token, and only
+          sends it to Anthropic to look up your usage.
         </p>
       </div>
     </>
@@ -121,29 +121,25 @@ function StepAlerts() {
 
   return (
     <>
-      <h2>Never miss a reset</h2>
+      <h2>Resets</h2>
       <p>
-        UsageBar watches for surprise quota resets and tells you{" "}
-        <strong>before</strong> they land — so you can spend what is left of the
-        current window instead of saving it for nothing.
+        Usage limits sometimes get reset early. UsageBar tells you when one is
+        announced, while you still have time to use up what you have.
       </p>
       <ul className="onboard-list">
         <li>
           <span className="onboard-bullet">
             <Radio size={13} aria-hidden="true" />
           </span>
-          <span>
-            Reset radar tracks public announcements and flags an incoming reset
-            with a ⚡ in the menu bar.
-          </span>
+          <span>A bolt shows up in the menu bar when a reset is on the way.</span>
         </li>
         <li>
           <span className="onboard-bullet">
             <BellRing size={13} aria-hidden="true" />
           </span>
           <span>
-            Usage alerts fire when a window passes 80% and 95% used, and when a
-            fresh window starts.
+            You can also be notified when a limit reaches 80% and 95%, and when
+            it resets.
           </span>
         </li>
       </ul>
@@ -164,36 +160,37 @@ function StepAlerts() {
 function StepSettings() {
   return (
     <>
-      <h2>Make it yours</h2>
-      <p>Right-click either menu-bar icon to find:</p>
+      <h2>Settings</h2>
+      <p>
+        Open Settings from the button at the bottom of this window, or by
+        right-clicking a menu-bar icon.
+      </p>
       <ul className="onboard-list">
         <li>
           <span className="onboard-bullet">
             <Sparkles size={13} aria-hidden="true" />
           </span>
           <span>
-            <strong>Menu Bar Shows</strong> — pick which window the meter
-            follows: most used, 5-hour, weekly, or a per-model limit like Fable.
+            Pick which limit each meter tracks. By default it follows whichever
+            one you are closest to using up.
           </span>
         </li>
         <li>
           <span className="onboard-bullet">%</span>
           <span>
-            <strong>Compact Meter</strong> — percentage only, no countdown, for
-            tight menu bars.
+            Compact mode drops the countdown and leaves just the percentage, if
+            your menu bar is crowded.
           </span>
         </li>
         <li>
           <span className="onboard-bullet">
             <Check size={13} aria-hidden="true" />
           </span>
-          <span>
-            <strong>Launch at Login</strong> and <strong>Usage Alerts</strong>.
-          </span>
+          <span>Turn on Launch at Login so it starts with your Mac.</span>
         </li>
       </ul>
       <p className="onboard-footnote">
-        You can reopen this guide any time from the menu-bar icon → Setup Guide.
+        This guide stays in Settings if you want to read it again.
       </p>
     </>
   );
