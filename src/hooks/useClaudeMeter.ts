@@ -10,7 +10,7 @@ function previewState(): CodexBackendState {
   const now = Date.now() / 1000;
   return {
     connection: "connected",
-    updatedAt: Date.now(),
+    updatedAt: Math.floor(Date.now() / 1_000), // the backend reports seconds
     account: { type: "oauth", planType: "max" },
     rateLimits: {
       rateLimitsByLimitId: {

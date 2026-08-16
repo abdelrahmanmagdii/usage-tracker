@@ -381,12 +381,22 @@ impl CodexManager {
             .app
             .try_state::<crate::tray::ResetRadar>()
             .is_some_and(|radar| radar.incoming_at(now));
+        // A dead app-server leaves the last numbers in place, so the age has to
+        // be visible or the menu bar silently reports yesterday's quota.
+        let stale_age = crate::tray::stale_age(state.updated_at, now);
+        let title = crate::tray::with_stale_marker(title, stale_age.is_some());
         let title = crate::tray::with_incoming_prefix(title, incoming);
         let _ = tray.set_title(Some(title.as_str()));
-        let tooltip = match selected {
+        let mut tooltip = match selected {
             Some(window) => format!("Codex · {} window", window.label),
             None => "UsageBar".to_owned(),
         };
+        if let Some(age) = stale_age {
+            tooltip.push_str(&format!(
+                " · last updated {} ago",
+                crate::tray::format_age(age)
+            ));
+        }
         let _ = tray.set_tooltip(Some(tooltip.as_str()));
         crate::tray::sync_tray_menu(&self.app, crate::tray::Provider::Codex, &windows);
     }

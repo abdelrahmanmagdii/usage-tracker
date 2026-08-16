@@ -27,6 +27,43 @@ impl ResetRadar {
     }
 }
 
+/// How old a meter's numbers may get before the menu bar admits they are old.
+/// Refreshes are attempted every few minutes, so this is several missed cycles
+/// rather than a single hiccup.
+pub const TRAY_STALE_AFTER_SECS: u64 = 15 * 60;
+
+/// Age of a meter's numbers once they count as stale, or `None` while they are
+/// still current (or while the meter has never had any).
+pub fn stale_age(updated_at: Option<u64>, now_unix: u64) -> Option<u64> {
+    updated_at
+        .map(|at| now_unix.saturating_sub(at))
+        .filter(|age| *age >= TRAY_STALE_AFTER_SECS)
+}
+
+/// Marks a title whose numbers stopped refreshing. Without it the menu bar goes
+/// on presenting a frozen percentage as if it were current — the failure mode
+/// where an expired session quietly pinned the meter at an old number for
+/// hours. The `~` reads as "about", and the tooltip spells out the age.
+pub fn with_stale_marker(title: String, stale: bool) -> String {
+    if !stale || title.is_empty() {
+        return title;
+    }
+    format!("~{title}")
+}
+
+/// Coarse "how long ago" for tooltips.
+pub fn format_age(seconds: u64) -> String {
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h {}m", minutes % 60);
+    }
+    format!("{}d {}h", hours / 24, hours % 24)
+}
+
 pub fn with_incoming_prefix(title: String, incoming: bool) -> String {
     if !incoming {
         return title;
@@ -742,6 +779,35 @@ mod tests {
         radar.0.store(2_000, std::sync::atomic::Ordering::Relaxed);
         assert!(radar.incoming_at(1_000));
         assert!(!radar.incoming_at(2_000));
+    }
+
+    #[test]
+    fn stale_numbers_are_marked_in_the_title() {
+        let now = 100_000;
+        // Fresh data, and data that has never arrived, are left alone.
+        assert_eq!(stale_age(Some(now - 60), now), None);
+        assert_eq!(stale_age(None, now), None);
+        assert_eq!(stale_age(Some(now - TRAY_STALE_AFTER_SECS), now), Some(TRAY_STALE_AFTER_SECS));
+        // A clock that jumped backwards must not read as stale.
+        assert_eq!(stale_age(Some(now + 500), now), None);
+
+        assert_eq!(with_stale_marker("42% · 9:05".into(), true), "~42% · 9:05");
+        assert_eq!(with_stale_marker("42%".into(), false), "42%");
+        // An empty title has no number to qualify, so it stays empty.
+        assert_eq!(with_stale_marker(String::new(), true), "");
+        // Stale and incoming compose without fighting over the prefix.
+        assert_eq!(
+            with_incoming_prefix(with_stale_marker("42%".into(), true), true),
+            "⚡ ~42%"
+        );
+    }
+
+    #[test]
+    fn age_reads_in_the_largest_useful_unit() {
+        assert_eq!(format_age(59), "0m");
+        assert_eq!(format_age(15 * 60), "15m");
+        assert_eq!(format_age(3 * 3_600 + 25 * 60), "3h 25m");
+        assert_eq!(format_age(50 * 3_600), "2d 2h");
     }
 
     #[test]

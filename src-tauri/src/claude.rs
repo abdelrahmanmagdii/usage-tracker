@@ -9,7 +9,10 @@
 
 use std::{
     process::Stdio,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -28,6 +31,15 @@ use crate::tray::{self, collect_windows, select_window, tray_title};
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
+/// Exit status `security(1)` reports for errSecItemNotFound (-25300 truncated to
+/// a shell exit code). It is the ONLY status that proves the login is absent;
+/// every other failure — locked keychain, denied or auto-dismissed access
+/// prompt, a subprocess killed mid-lookup — says nothing about whether Claude
+/// Code is signed in, and used to be misread as "Claude Code is not installed".
+const KEYCHAIN_ITEM_NOT_FOUND: i32 = 44;
+/// Consecutive empty reads required before the menu-bar meter disappears, once
+/// it has shown a number at least once.
+const ABSENT_READS_BEFORE_HIDING: u32 = 2;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +69,10 @@ pub struct ClaudeManager {
     state: Arc<RwLock<ClaudeState>>,
     client: reqwest::Client,
     refresh_lock: Arc<Mutex<()>>,
+    /// How many consecutive reads found no stored login. Hiding the tray waits
+    /// for a confirming second read, so a credential store caught mid-rewrite
+    /// cannot blank the meter.
+    absent_reads: Arc<AtomicU32>,
 }
 
 impl ClaudeManager {
@@ -71,6 +87,7 @@ impl ClaudeManager {
             state: Arc::new(RwLock::new(ClaudeState::default())),
             client,
             refresh_lock: Arc::new(Mutex::new(())),
+            absent_reads: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -81,16 +98,35 @@ impl ClaudeManager {
     pub async fn refresh(&self) -> Result<ClaudeState, String> {
         let _guard = self.refresh_lock.lock().await;
         let credentials = match load_credentials().await {
-            Ok(Some(credentials)) => credentials,
-            Ok(None) => {
-                self.set_connection(
-                    ConnectionState::CliNotFound,
-                    Some("No Claude Code login was found on this Mac".into()),
-                )
-                .await;
-                return Ok(self.snapshot().await);
+            CredentialRead::Found(credentials) => {
+                self.absent_reads.store(0, Ordering::Relaxed);
+                credentials
             }
-            Err(message) => {
+            CredentialRead::Absent => {
+                let reads = self.absent_reads.fetch_add(1, Ordering::Relaxed) + 1;
+                let has_shown_usage = self.snapshot().await.updated_at.is_some();
+                if hides_tray(has_shown_usage, reads) {
+                    self.set_connection(
+                        ConnectionState::CliNotFound,
+                        Some("No Claude Code login was found on this Mac".into()),
+                    )
+                    .await;
+                    return Ok(self.snapshot().await);
+                }
+                // Claude Code rewrites its keychain item and credentials file
+                // when it rotates its own OAuth token, so a single empty read
+                // right after a working session is far more likely a write race
+                // than a sign-out. Keep the meter and let the next read decide.
+                let message = "Claude Code's stored login could not be read".to_owned();
+                self.set_connection(ConnectionState::Error, Some(message.clone()))
+                    .await;
+                return Err(message);
+            }
+            CredentialRead::Unavailable(message) => {
+                // A store that could not be read proves nothing about whether
+                // Claude Code is installed, so the meter keeps its last known
+                // numbers and stays in the menu bar instead of vanishing.
+                self.absent_reads.store(0, Ordering::Relaxed);
                 self.set_connection(ConnectionState::Error, Some(message.clone()))
                     .await;
                 return Err(message);
@@ -212,17 +248,27 @@ impl ClaudeManager {
             .unwrap_or_default();
         let windows = collect_windows(state.rate_limits.as_ref());
         let selected = select_window(&windows, &prefs.claude_tray_window);
+        let now = now_unix_millis() / 1_000;
         let title = tray_title(
             selected.map(|window| window.used_percent),
             selected.and_then(|window| window.resets_at),
-            now_unix_millis() / 1_000,
+            now,
             prefs.compact_tray,
         );
+        // Claude Code's OAuth token expires roughly hourly and is only renewed
+        // by Claude Code itself, so refreshes can stop succeeding for hours.
+        // Marking the age keeps the menu bar from presenting a frozen number as
+        // if it were current.
+        let stale_age = tray::stale_age(state.updated_at, now);
+        let title = tray::with_stale_marker(title, stale_age.is_some());
         let _ = tray.set_title(Some(title.as_str()));
-        let tooltip = match selected {
+        let mut tooltip = match selected {
             Some(window) => format!("Claude Code · {} window", window.label),
             None => "Claude Code usage".to_owned(),
         };
+        if let Some(age) = stale_age {
+            tooltip.push_str(&format!(" · last updated {} ago", tray::format_age(age)));
+        }
         let _ = tray.set_tooltip(Some(tooltip.as_str()));
         tray::sync_tray_menu(&self.app, tray::Provider::Claude, &windows);
     }
@@ -241,70 +287,126 @@ impl Credentials {
     }
 }
 
+/// What one credential store (or both together) had to say. Keeping "there is
+/// no login" apart from "the store could not be read" is what stops a passing
+/// keychain hiccup from looking like an uninstalled Claude Code.
+enum CredentialRead {
+    Found(Credentials),
+    /// The store was readable and holds no usable Claude Code login.
+    Absent,
+    /// The store could not be read this time; the answer is unknown. Carries a
+    /// human-readable reason for the popover diagnostic.
+    Unavailable(String),
+}
+
 /// Reads Claude Code's stored OAuth session without ever modifying it. Both
 /// stores are consulted and the freshest usable token wins, because either one
 /// can lag behind the other depending on how Claude Code was last used.
-async fn load_credentials() -> Result<Option<Credentials>, String> {
-    let keychain = load_from_keychain().await?;
-    let file = match load_from_file().await {
-        Ok(file) => file,
-        Err(_) if keychain.is_some() => None,
-        Err(error) => return Err(error),
-    };
-    Ok(pick_credentials(keychain, file, now_unix_millis()))
+async fn load_credentials() -> CredentialRead {
+    let keychain = load_from_keychain().await;
+    let file = load_from_file().await;
+    combine_reads(keychain, file, now_unix_millis())
 }
 
-fn pick_credentials(
-    first: Option<Credentials>,
-    second: Option<Credentials>,
-    now_ms: u64,
-) -> Option<Credentials> {
+/// Merges the two stores. A usable login from either one wins; failing that, a
+/// read failure anywhere outranks "absent", because an unreadable store cannot
+/// prove that the user is signed out.
+fn combine_reads(first: CredentialRead, second: CredentialRead, now_ms: u64) -> CredentialRead {
     match (first, second) {
-        (Some(first), Some(second)) => {
-            let first_usable = !first.is_expired(now_ms);
-            let second_usable = !second.is_expired(now_ms);
-            Some(match (first_usable, second_usable) {
-                (true, false) => first,
-                (false, true) => second,
-                _ => {
-                    let first_expiry = first.expires_at_ms.unwrap_or(0.0);
-                    let second_expiry = second.expires_at_ms.unwrap_or(0.0);
-                    if second_expiry > first_expiry {
-                        second
-                    } else {
-                        first
-                    }
-                }
-            })
+        (CredentialRead::Found(first), CredentialRead::Found(second)) => {
+            CredentialRead::Found(freshest(first, second, now_ms))
         }
-        (first, second) => first.or(second),
+        (CredentialRead::Found(found), _) | (_, CredentialRead::Found(found)) => {
+            CredentialRead::Found(found)
+        }
+        (CredentialRead::Unavailable(reason), _) | (_, CredentialRead::Unavailable(reason)) => {
+            CredentialRead::Unavailable(reason)
+        }
+        _ => CredentialRead::Absent,
     }
 }
 
-async fn load_from_keychain() -> Result<Option<Credentials>, String> {
+fn freshest(first: Credentials, second: Credentials, now_ms: u64) -> Credentials {
+    match (!first.is_expired(now_ms), !second.is_expired(now_ms)) {
+        (true, false) => first,
+        (false, true) => second,
+        // Both usable or both expired: the later expiry is the more recently
+        // issued token, and its diagnostic is the more accurate one.
+        _ => {
+            if second.expires_at_ms.unwrap_or(0.0) > first.expires_at_ms.unwrap_or(0.0) {
+                second
+            } else {
+                first
+            }
+        }
+    }
+}
+
+/// Whether an empty credential read should hide the menu-bar meter. A meter
+/// that has never shown a number can hide at once — nothing is lost — but once
+/// usage has been on screen, absence has to repeat: Claude Code rewrites both
+/// credential stores while rotating its own token, and a read landing inside
+/// that window used to make the icon disappear.
+fn hides_tray(has_shown_usage: bool, consecutive_absent_reads: u32) -> bool {
+    !has_shown_usage || consecutive_absent_reads >= ABSENT_READS_BEFORE_HIDING
+}
+
+/// Classifies a failing `security find-generic-password` run. Only
+/// errSecItemNotFound means the login is absent.
+fn classify_keychain_exit(code: Option<i32>) -> CredentialRead {
+    match code {
+        Some(KEYCHAIN_ITEM_NOT_FOUND) => CredentialRead::Absent,
+        // Locked keychain (36/51), a denied or dismissed access prompt (128),
+        // or anything else the tool reports: the lookup failed, so the meter
+        // must keep whatever it was already showing.
+        Some(code) => CredentialRead::Unavailable(format!(
+            "The Claude Code login could not be read from the keychain (security exited {code})"
+        )),
+        // No exit code at all means the subprocess was signalled, e.g. killed
+        // while another app held the keychain.
+        None => CredentialRead::Unavailable(
+            "The keychain lookup for the Claude Code login was interrupted".to_owned(),
+        ),
+    }
+}
+
+async fn load_from_keychain() -> CredentialRead {
     let output = Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
         .stdin(Stdio::null())
         .output()
-        .await
-        .map_err(|error| format!("Keychain lookup failed to run: {error}"))?;
+        .await;
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            return CredentialRead::Unavailable(format!("Keychain lookup failed to run: {error}"))
+        }
+    };
     if !output.status.success() {
-        // Exit code 44 means the item does not exist; other failures (locked
-        // keychain, denied access) also fall through to the file fallback.
-        return Ok(None);
+        return classify_keychain_exit(output.status.code());
     }
-    Ok(parse_credentials(&String::from_utf8_lossy(&output.stdout)))
+    match parse_credentials(&String::from_utf8_lossy(&output.stdout)) {
+        Some(credentials) => CredentialRead::Found(credentials),
+        // The item is readable but carries no usable token: signed out.
+        None => CredentialRead::Absent,
+    }
 }
 
-async fn load_from_file() -> Result<Option<Credentials>, String> {
+async fn load_from_file() -> CredentialRead {
     let Some(home) = std::env::var_os("HOME") else {
-        return Ok(None);
+        return CredentialRead::Unavailable(
+            "HOME is not set, so the Claude Code credentials file could not be located".to_owned(),
+        );
     };
     let path = std::path::PathBuf::from(home).join(".claude/.credentials.json");
     match tokio::fs::read_to_string(&path).await {
-        Ok(contents) => Ok(parse_credentials(&contents)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("Could not read {}: {error}", path.display())),
+        Ok(contents) => match parse_credentials(&contents) {
+            Some(credentials) => CredentialRead::Found(credentials),
+            None => CredentialRead::Absent,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CredentialRead::Absent,
+        // Permissions, I/O errors, a half-written file: unknown, not absent.
+        Err(error) => CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display())),
     }
 }
 
@@ -613,24 +715,94 @@ mod tests {
         );
     }
 
-    #[test]
-    fn picks_the_freshest_usable_credential_source() {
-        let creds = |expires_at: f64| Credentials {
+    fn creds(expires_at: f64) -> Credentials {
+        Credentials {
             access_token: format!("token-{expires_at}"),
             expires_at_ms: Some(expires_at),
             subscription_type: None,
-        };
+        }
+    }
+
+    fn expiry(read: &CredentialRead) -> Option<f64> {
+        match read {
+            CredentialRead::Found(credentials) => credentials.expires_at_ms,
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn picks_the_freshest_usable_credential_source() {
         // A valid source beats an expired one regardless of order.
-        let picked = pick_credentials(Some(creds(500.0)), Some(creds(2_000.0)), 1_000).unwrap();
-        assert_eq!(picked.expires_at_ms, Some(2_000.0));
-        let picked = pick_credentials(Some(creds(2_000.0)), Some(creds(500.0)), 1_000).unwrap();
-        assert_eq!(picked.expires_at_ms, Some(2_000.0));
+        assert_eq!(freshest(creds(500.0), creds(2_000.0), 1_000).expires_at_ms, Some(2_000.0));
+        assert_eq!(freshest(creds(2_000.0), creds(500.0), 1_000).expires_at_ms, Some(2_000.0));
         // Both expired: the fresher one wins (its message is more accurate).
-        let picked = pick_credentials(Some(creds(500.0)), Some(creds(800.0)), 1_000).unwrap();
-        assert_eq!(picked.expires_at_ms, Some(800.0));
-        // Single or missing sources pass through.
-        assert!(pick_credentials(None, Some(creds(500.0)), 1_000).is_some());
-        assert!(pick_credentials(None, None, 1_000).is_none());
+        assert_eq!(freshest(creds(500.0), creds(800.0), 1_000).expires_at_ms, Some(800.0));
+    }
+
+    #[test]
+    fn only_err_sec_item_not_found_means_the_login_is_absent() {
+        // 44 is errSecItemNotFound: Claude Code really has no keychain item.
+        assert!(matches!(
+            classify_keychain_exit(Some(44)),
+            CredentialRead::Absent
+        ));
+        // A locked keychain (36), a denied prompt (51), a dismissed one (128)
+        // and a signalled subprocess are all unknowns, never absence.
+        for code in [36, 51, 128, 1] {
+            let read = classify_keychain_exit(Some(code));
+            let CredentialRead::Unavailable(reason) = read else {
+                panic!("exit {code} must not be read as a missing login");
+            };
+            assert!(reason.contains(&code.to_string()));
+        }
+        assert!(matches!(
+            classify_keychain_exit(None),
+            CredentialRead::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn an_unreadable_store_never_reports_a_sign_out() {
+        let unavailable = || CredentialRead::Unavailable("keychain locked".to_owned());
+        // A usable login from either store wins outright.
+        assert_eq!(
+            expiry(&combine_reads(unavailable(), CredentialRead::Found(creds(2_000.0)), 1_000)),
+            Some(2_000.0)
+        );
+        assert_eq!(
+            expiry(&combine_reads(
+                CredentialRead::Found(creds(2_000.0)),
+                CredentialRead::Found(creds(3_000.0)),
+                1_000
+            )),
+            Some(3_000.0)
+        );
+        // One store failing outranks the other's emptiness: the tray must not
+        // be hidden on the strength of a lookup that never completed.
+        assert!(matches!(
+            combine_reads(unavailable(), CredentialRead::Absent, 1_000),
+            CredentialRead::Unavailable(_)
+        ));
+        assert!(matches!(
+            combine_reads(CredentialRead::Absent, unavailable(), 1_000),
+            CredentialRead::Unavailable(_)
+        ));
+        // Both stores readable and empty is the one true "no login here".
+        assert!(matches!(
+            combine_reads(CredentialRead::Absent, CredentialRead::Absent, 1_000),
+            CredentialRead::Absent
+        ));
+    }
+
+    #[test]
+    fn hiding_the_tray_needs_a_confirmed_absence() {
+        // Nothing has ever been shown: hide immediately, no icon is lost.
+        assert!(hides_tray(false, 1));
+        // A meter that has been showing usage survives one empty read (a
+        // credential store caught mid-rewrite) and hides on the second.
+        assert!(!hides_tray(true, 1));
+        assert!(hides_tray(true, ABSENT_READS_BEFORE_HIDING));
+        assert!(hides_tray(true, ABSENT_READS_BEFORE_HIDING + 5));
     }
 
     #[test]

@@ -11,14 +11,48 @@ use tauri::{Manager, WindowEvent};
 
 /// Meters refresh when their data is older than this.
 const STALE_AFTER_SECS: u64 = 5 * 60;
-/// Minimum spacing between refresh attempts, so failures cannot hammer.
+/// Steady-state spacing between refresh attempts, so a healthy meter cannot
+/// hammer its backend.
 const MIN_RETRY_SECS: u64 = 4 * 60;
+/// Spacing after the first failed attempt. A denied keychain prompt or a
+/// dropped network call recovers on the next watchdog tick instead of leaving
+/// the meter wrong (or hidden) for minutes.
+const FIRST_RETRY_SECS: u64 = 30;
 
 fn now_unix_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// How long to wait before the next attempt: healthy meters keep the steady
+/// cadence, while a run of failures backs off from `FIRST_RETRY_SECS` up to the
+/// same ceiling, so a persistent outage (an expired session that only Claude
+/// Code itself can renew) is not retried any harder than before.
+fn retry_after_secs(consecutive_failures: u32) -> u64 {
+    if consecutive_failures == 0 {
+        return MIN_RETRY_SECS;
+    }
+    let doublings = consecutive_failures.saturating_sub(1).min(16);
+    FIRST_RETRY_SECS
+        .saturating_mul(1_u64 << doublings)
+        .min(MIN_RETRY_SECS)
+}
+
+/// Whether a meter is due for a refresh. Data younger than `STALE_AFTER_SECS`
+/// is left alone; anything older waits only for the retry spacing.
+fn should_refresh(
+    now: u64,
+    updated_at: Option<u64>,
+    last_attempt: u64,
+    consecutive_failures: u32,
+) -> bool {
+    let fresh = updated_at.is_some_and(|at| now.saturating_sub(at) < STALE_AFTER_SECS);
+    if fresh {
+        return false;
+    }
+    now.saturating_sub(last_attempt) >= retry_after_secs(consecutive_failures)
 }
 
 /// Opts the process out of App Nap. Without this, macOS throttles the process
@@ -125,25 +159,37 @@ pub fn run() {
             // tokio timers pause during system sleep, so a fixed 5-minute
             // sleep silently stretched across naps. Checking `updated_at`
             // against the wall clock every 30 seconds catches up within one
-            // tick of waking, while MIN_RETRY_SECS keeps failures from
+            // tick of waking, while the retry spacing keeps failures from
             // hammering the backends.
+            //
+            // Success is measured by `updated_at` moving rather than by the
+            // returned Result: both providers report "signed out" as an Ok
+            // state, and that still leaves the meter frozen.
             let refresh_manager = app.state::<CodexManager>().inner().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 let mut last_attempt = now_unix_seconds();
+                // Start in the failure lane: if the startup refresh did not
+                // land, the meter recovers on the next tick instead of waiting
+                // out the steady-state interval. A refresh that did land is
+                // fresh, so the watchdog skips anyway.
+                let mut failures: u32 = 1;
                 loop {
                     interval.tick().await;
                     let now = now_unix_seconds();
-                    let snapshot = refresh_manager.snapshot().await;
-                    let fresh = snapshot
-                        .updated_at
-                        .is_some_and(|at| now.saturating_sub(at) < STALE_AFTER_SECS);
-                    if fresh || now.saturating_sub(last_attempt) < MIN_RETRY_SECS {
+                    let before = refresh_manager.snapshot().await.updated_at;
+                    if !should_refresh(now, before, last_attempt, failures) {
                         continue;
                     }
                     last_attempt = now;
                     let _ = refresh_manager.refresh_or_start().await;
+                    let after = refresh_manager.snapshot().await.updated_at;
+                    failures = if after == before {
+                        failures.saturating_add(1)
+                    } else {
+                        0
+                    };
                 }
             });
             let claude_refresher = claude_manager.clone();
@@ -151,18 +197,26 @@ pub fn run() {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 let mut last_attempt = now_unix_seconds();
+                // Start in the failure lane: if the startup refresh did not
+                // land, the meter recovers on the next tick instead of waiting
+                // out the steady-state interval. A refresh that did land is
+                // fresh, so the watchdog skips anyway.
+                let mut failures: u32 = 1;
                 loop {
                     interval.tick().await;
                     let now = now_unix_seconds();
-                    let snapshot = claude_refresher.snapshot().await;
-                    let fresh = snapshot
-                        .updated_at
-                        .is_some_and(|at| now.saturating_sub(at) < STALE_AFTER_SECS);
-                    if fresh || now.saturating_sub(last_attempt) < MIN_RETRY_SECS {
+                    let before = claude_refresher.snapshot().await.updated_at;
+                    if !should_refresh(now, before, last_attempt, failures) {
                         continue;
                     }
                     last_attempt = now;
                     let _ = claude_refresher.refresh().await;
+                    let after = claude_refresher.snapshot().await.updated_at;
+                    failures = if after == before {
+                        failures.saturating_add(1)
+                    } else {
+                        0
+                    };
                 }
             });
             Ok(())
@@ -192,4 +246,38 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running UsageBar");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failures_retry_quickly_then_back_off_to_the_steady_cadence() {
+        assert_eq!(retry_after_secs(0), MIN_RETRY_SECS);
+        assert_eq!(retry_after_secs(1), FIRST_RETRY_SECS);
+        assert_eq!(retry_after_secs(2), 60);
+        assert_eq!(retry_after_secs(3), 120);
+        // The backoff never exceeds the healthy cadence, so a session only
+        // Claude Code can renew is not polled harder than before.
+        assert_eq!(retry_after_secs(4), MIN_RETRY_SECS);
+        assert_eq!(retry_after_secs(u32::MAX), MIN_RETRY_SECS);
+    }
+
+    #[test]
+    fn fresh_data_is_left_alone_and_stale_data_retries_on_schedule() {
+        let now = 1_000_000;
+        // Data younger than the staleness window is never re-fetched.
+        assert!(!should_refresh(now, Some(now - 60), now - 3_600, 0));
+        // Stale data waits out the steady cadence after a healthy run...
+        assert!(!should_refresh(now, Some(now - STALE_AFTER_SECS), now - 60, 0));
+        assert!(should_refresh(now, Some(now - STALE_AFTER_SECS), now - MIN_RETRY_SECS, 0));
+        // ...but a failed attempt is retried on the next watchdog tick, which
+        // is what pulls a hidden or frozen Claude meter back within seconds.
+        assert!(should_refresh(now, Some(now - STALE_AFTER_SECS), now - FIRST_RETRY_SECS, 1));
+        assert!(!should_refresh(now, Some(now - STALE_AFTER_SECS), now - 10, 1));
+        // A meter that never got data at all is due as soon as spacing allows.
+        assert!(should_refresh(now, None, now - FIRST_RETRY_SECS, 1));
+        assert!(!should_refresh(now, None, now, 1));
+    }
 }
