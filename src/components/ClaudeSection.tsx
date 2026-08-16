@@ -28,7 +28,7 @@ function unavailableNote(state: CodexBackendState, showingUsage: boolean, nowMs:
     return state.diagnostic ?? (expired ? "Claude Code is signed out." : "Claude usage is unavailable right now.");
   }
   const reason = expired
-    ? "the Claude Code session has expired. It recovers on its own after any Claude Code use."
+    ? "the stored Claude Code login has expired. UsageBar reads the login kept by the `claude` command-line tool, so it refreshes the next time that runs — the desktop app keeps a separate login."
     : `${state.diagnostic ?? "Claude usage could not be refreshed"}.`;
   const age = describeAge(state.updatedAt, nowMs);
   return `Showing the last known usage — ${reason}${age ? ` Last updated ${age}.` : ""}`;

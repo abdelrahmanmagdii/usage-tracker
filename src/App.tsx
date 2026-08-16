@@ -209,8 +209,8 @@ export default function App() {
                   connected: claude.state.connection === "connected",
                   detail:
                     claude.state.connection === "connected"
-                      ? "Reading your existing Claude Code login"
-                      : claude.state.diagnostic ?? "Open Claude Code once to sign in",
+                      ? "Reading the login kept by the claude command-line tool"
+                      : claude.state.diagnostic ?? "Sign in with the claude command-line tool",
                   onRetry: () => void claude.refresh(),
                 }
           }

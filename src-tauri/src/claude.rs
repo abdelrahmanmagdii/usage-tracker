@@ -136,7 +136,7 @@ impl ClaudeManager {
         if credentials.is_expired(now_unix_millis()) {
             self.set_connection(
                 ConnectionState::NotAuthenticated,
-                Some("The Claude Code session has expired. Open Claude Code once to sign in again.".into()),
+                Some("The Claude Code login has expired. It refreshes the next time the `claude` command-line tool runs.".into()),
             )
             .await;
             return Ok(self.snapshot().await);
@@ -163,7 +163,7 @@ impl ClaudeManager {
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             self.set_connection(
                 ConnectionState::NotAuthenticated,
-                Some("Anthropic rejected the Claude Code session token. Open Claude Code once to sign in again.".into()),
+                Some("Anthropic rejected the stored Claude Code token. It refreshes the next time the `claude` command-line tool runs.".into()),
             )
             .await;
             return Ok(self.snapshot().await);
