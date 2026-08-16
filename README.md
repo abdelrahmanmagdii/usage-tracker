@@ -14,6 +14,25 @@ The menu bar shows one live meter per provider: a tiny provider mark plus a `42%
 
 Open **Settings** in the popover (or right-click a menu-bar icon) to choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — plus **Compact Meter** (percentage only), **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), and **Launch at Login**.
 
+## Install
+
+Download the latest `.dmg` from [Releases](https://github.com/abdelrahmanmagdii/usage-tracker/releases),
+open it, and drag UsageBar to Applications. Builds are signed and notarized by
+Apple, so they open without a security warning.
+
+Or build it yourself:
+
+```sh
+git clone https://github.com/abdelrahmanmagdii/usage-tracker.git
+cd usage-tracker
+npm install
+npm run tauri build
+```
+
+The app lands in `src-tauri/target/release/bundle/macos/`.
+
+Maintainers: see [docs/RELEASING.md](docs/RELEASING.md) for how signed releases are cut.
+
 ## Requirements
 
 - macOS 10.15 or newer
@@ -113,12 +132,12 @@ Run the scraper yourself with `node tools/tibo-watch/check.mjs` (`--dry-run` to 
 
 - The reset feed relies on unofficial Nitter mirrors, which rate-limit and occasionally return empty responses; the workflow retries and simply catches up on the next run. Local on-device reset detection remains as a fallback, and hand-written `manual` entries always win.
 - GitHub's scheduled workflows can be delayed by a few minutes under load.
-- Packaging is unsigned and has no updater yet.
+- There is no auto-updater yet, so new versions mean downloading the next release.
 - A GUI-launched app must still be able to locate an executable `codex` command; common Homebrew paths and the login shell are checked.
 
 ## Future ideas
 
-- Signed/notarized distribution and auto-update
+- Auto-update
 - Richer local history trends and reset correlation
 - Selectable share-card themes
 - Local Claude usage history and trends
