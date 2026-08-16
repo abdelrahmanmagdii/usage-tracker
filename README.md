@@ -6,11 +6,13 @@ UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding
 
 The menu bar shows one live meter per provider: a tiny provider mark plus a `42% · 1:25:49`-style **used-percentage** and reset countdown for the most-used window — the same "% used" convention Codex and Claude Code report themselves, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
 
+![UsageBar showing an announced reset before it lands](docs/usagebar-demo.gif)
+
 | Codex meters & reset radar | Claude Code meters |
 | :---: | :---: |
 | ![Codex quota windows in the popover](docs/usagebar-popover.png) | ![Claude Code quota windows in the popover](docs/usagebar-claude.png) |
 
-*Screenshots show preview data.*
+*Demo and screenshots use preview data.*
 
 Open **Settings** in the popover (or right-click a menu-bar icon) to choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — plus **Compact Meter** (percentage only), **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), and **Launch at Login**.
 
