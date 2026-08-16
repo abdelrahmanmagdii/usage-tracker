@@ -2,7 +2,6 @@ mod alerts;
 mod claude;
 mod codex;
 mod commands;
-mod notch;
 mod prefs;
 mod tray;
 
@@ -69,7 +68,6 @@ pub fn run() {
             let claude_manager = ClaudeManager::new(app.handle().clone());
             app.manage(claude_manager.clone());
             tray::setup(app)?;
-            notch::setup(app)?;
 
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
@@ -183,10 +181,12 @@ pub fn run() {
             commands::set_reset_incoming,
             commands::get_app_prefs,
             commands::complete_onboarding,
-            commands::get_notch_status,
-            commands::set_notch_mode,
-            commands::set_notch_expanded,
-            commands::show_main_window,
+            commands::get_tray_windows,
+            commands::set_tray_window,
+            commands::set_compact_tray,
+            commands::set_usage_alerts,
+            commands::get_autostart,
+            commands::set_autostart,
             commands::write_share_card,
             commands::quit_app
         ])

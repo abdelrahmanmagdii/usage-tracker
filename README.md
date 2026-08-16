@@ -4,7 +4,7 @@
 
 UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding quota windows, how much remains, and exactly when each window resets. Codex data comes from your existing Codex login through the official Codex App Server—no OpenAI API key and no credential scraping. If Claude Code is installed, a second meter shows its 5-hour and weekly windows too.
 
-The menu bar shows one live meter per provider: a tiny provider mark plus a `42% · 1:25:49`-style **used-percentage** and reset countdown for the most-used window — the same "% used" convention Codex and Claude Code report themselves, so the numbers always agree. For Claude, model-scoped weekly limits (e.g. Fable) count by default since they are usually the binding one — the tray tooltip names which window is shown, and right-clicking the Claude icon → **Include Model Limits** switches the meter to account-wide windows only. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
+The menu bar shows one live meter per provider: a tiny provider mark plus a `42% · 1:25:49`-style **used-percentage** and reset countdown for the most-used window — the same "% used" convention Codex and Claude Code report themselves, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
 
 | Codex meters & reset radar | Claude Code meters |
 | :---: | :---: |
@@ -12,7 +12,7 @@ The menu bar shows one live meter per provider: a tiny provider mark plus a `42%
 
 *Screenshots show preview data.*
 
-Right-click either menu-bar icon for quick settings: **Compact Meter** (percentage only, no countdown), **Usage Alerts** (local notifications when a window crosses 80% / 95% used, and when a fresh window starts), and **Launch at Login**.
+Open **Settings** in the popover (or right-click a menu-bar icon) to choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — plus **Compact Meter** (percentage only), **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), and **Launch at Login**.
 
 ## Requirements
 
@@ -113,7 +113,6 @@ Run the scraper yourself with `node tools/tibo-watch/check.mjs` (`--dry-run` to 
 
 - The reset feed relies on unofficial Nitter mirrors, which rate-limit and occasionally return empty responses; the workflow retries and simply catches up on the next run. Local on-device reset detection remains as a fallback, and hand-written `manual` entries always win.
 - GitHub's scheduled workflows can be delayed by a few minutes under load.
-- The popover is a compact borderless Tauri window rather than a native `NSPopover`.
 - Packaging is unsigned and has no updater yet.
 - A GUI-launched app must still be able to locate an executable `codex` command; common Homebrew paths and the login shell are checked.
 
@@ -122,7 +121,7 @@ Run the scraper yourself with `node tools/tibo-watch/check.mjs` (`--dry-run` to 
 - Signed/notarized distribution and auto-update
 - Richer local history trends and reset correlation
 - Selectable share-card themes
-- Claude meter in the notch companion and local Claude usage history
+- Local Claude usage history and trends
 - A combined single-tray mode for tight menu bars, and a Gemini CLI provider
 
 UsageBar is an independent community project and is not an official OpenAI product.

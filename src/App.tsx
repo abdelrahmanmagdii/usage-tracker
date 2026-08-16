@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Clock3, PanelTop, Power, RefreshCw, Share2, ShieldCheck, Ticket } from "lucide-react";
+import { Clock3, Power, RefreshCw, Settings2, Share2, ShieldCheck, Ticket } from "lucide-react";
 import { MeterMark } from "./components/MeterMark";
 import { meterTone } from "./components/EdgeMeter";
 import { QuotaSection } from "./components/QuotaSection";
@@ -11,7 +11,7 @@ import { UsageDetails } from "./components/UsageDetails";
 import { TiboWatch } from "./components/TiboWatch";
 import { ShareModal } from "./components/ShareModal";
 import { ResetAlert } from "./components/ResetAlert";
-import { NotchSettings } from "./components/NotchSettings";
+import { SettingsModal } from "./components/SettingsModal";
 import { ClaudeSection } from "./components/ClaudeSection";
 import { Onboarding } from "./components/Onboarding";
 import { useCodexMeter } from "./hooks/useCodexMeter";
@@ -37,7 +37,7 @@ export default function App() {
   const claude = useClaudeMeter();
   const [now, setNow] = useState(Date.now());
   const [sharing, setSharing] = useState(false);
-  const [notchSettings, setNotchSettings] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
   const resetEvents = useResetEvents();
 
@@ -173,15 +173,23 @@ export default function App() {
         >
           <RefreshCw size={17} className={refreshing || claude.refreshing ? "spinning" : ""} />
         </button>
-        <button className="icon-button" onClick={() => setNotchSettings(true)} aria-label="Configure notch meter" title="Notch meter">
-          <PanelTop size={17} />
+        <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Open settings" title="Settings">
+          <Settings2 size={17} />
         </button>
         <button className="icon-button danger-hover" onClick={() => void invoke("quit_app")} aria-label="Quit UsageBar" title="Quit">
           <Power size={17} />
         </button>
       </footer>
       {sharing && mostCooked ? <ShareModal bucket={mostCooked} onClose={() => setSharing(false)} /> : null}
-      {notchSettings ? <NotchSettings onClose={() => setNotchSettings(false)} /> : null}
+      {settingsOpen ? (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          onShowGuide={() => {
+            setSettingsOpen(false);
+            setOnboarding(true);
+          }}
+        />
+      ) : null}
       {onboarding ? (
         <Onboarding
           onClose={closeOnboarding}

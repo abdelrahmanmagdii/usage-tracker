@@ -123,6 +123,13 @@ impl TrayMenuState {
     }
 }
 
+/// Re-syncs both trays after a preference changes anywhere (tray menu or the
+/// in-app settings panel), so titles and menu checkmarks stay in agreement.
+pub fn apply_preference_change(app: &AppHandle) {
+    app.state::<TrayMenuState>().invalidate();
+    refresh_all_tray_titles(app);
+}
+
 fn window_menu_id(provider: Provider, window_id: &str) -> String {
     format!("win|{}|{}", provider.key(), window_id)
 }
@@ -524,7 +531,8 @@ fn distance_to_segment(x: f64, y: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> f6
 }
 
 /// One quota window a menu-bar meter can follow.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrayWindow {
     /// Stable identifier used by the menu-bar picker preference.
     pub id: String,

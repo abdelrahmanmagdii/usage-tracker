@@ -4,7 +4,6 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::claude::{ClaudeManager, ClaudeState};
 use crate::codex::process::{CodexManager, CodexState};
-use crate::notch::{self, NotchController, NotchMode, NotchStatus};
 
 #[tauri::command]
 pub async fn get_codex_state(manager: State<'_, CodexManager>) -> Result<CodexState, String> {
@@ -31,6 +30,76 @@ pub fn get_app_prefs(prefs: State<'_, crate::prefs::PrefsStore>) -> crate::prefs
     prefs.get()
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrayWindowOptions {
+    pub codex: Vec<crate::tray::TrayWindow>,
+    pub claude: Vec<crate::tray::TrayWindow>,
+}
+
+/// Windows each provider currently reports, for the in-app menu-bar picker.
+#[tauri::command]
+pub async fn get_tray_windows(
+    codex: State<'_, CodexManager>,
+    claude: State<'_, ClaudeManager>,
+) -> Result<TrayWindowOptions, String> {
+    let codex_state = codex.snapshot().await;
+    let claude_state = claude.snapshot().await;
+    Ok(TrayWindowOptions {
+        codex: crate::tray::collect_windows(codex_state.rate_limits.as_ref()),
+        claude: crate::tray::collect_windows(claude_state.rate_limits.as_ref()),
+    })
+}
+
+#[tauri::command]
+pub fn set_tray_window(app: AppHandle, provider: String, window: String) -> Result<(), String> {
+    match provider.as_str() {
+        "codex" => app
+            .state::<crate::prefs::PrefsStore>()
+            .update(|prefs| prefs.codex_tray_window = window),
+        "claude" => app
+            .state::<crate::prefs::PrefsStore>()
+            .update(|prefs| prefs.claude_tray_window = window),
+        other => return Err(format!("Unknown provider: {other}")),
+    };
+    crate::tray::apply_preference_change(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_compact_tray(app: AppHandle, enabled: bool) {
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.compact_tray = enabled);
+    crate::tray::apply_preference_change(&app);
+}
+
+#[tauri::command]
+pub fn set_usage_alerts(app: AppHandle, enabled: bool) {
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.usage_alerts = enabled);
+    crate::tray::apply_preference_change(&app);
+}
+
+#[tauri::command]
+pub fn get_autostart(app: AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    let result = if enabled {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    };
+    result.map_err(|error| error.to_string())?;
+    crate::tray::apply_preference_change(&app);
+    Ok(())
+}
+
 /// Records that the first-run walkthrough finished so it does not reappear.
 #[tauri::command]
 pub fn complete_onboarding(prefs: State<'_, crate::prefs::PrefsStore>) {
@@ -52,46 +121,6 @@ pub fn set_reset_incoming(
     tauri::async_runtime::spawn(async move {
         manager.update_tray().await;
     });
-}
-
-#[tauri::command]
-pub fn get_notch_status(controller: State<'_, NotchController>) -> NotchStatus {
-    controller.status()
-}
-
-#[tauri::command]
-pub fn set_notch_mode(
-    app: AppHandle,
-    controller: State<'_, NotchController>,
-    mode: NotchMode,
-) -> Result<NotchStatus, String> {
-    controller.set_mode(mode)?;
-    notch::schedule_sync(app)?;
-    Ok(controller.status())
-}
-
-#[tauri::command]
-pub fn show_main_window(app: AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "The UsageBar window is unavailable".to_owned())?;
-    window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn set_notch_expanded(app: AppHandle, expanded: bool) -> Result<(), String> {
-    let window = app
-        .get_webview_window(notch::NOTCH_WINDOW_LABEL)
-        .ok_or_else(|| "The notch companion is unavailable".to_owned())?;
-    let height = if expanded {
-        notch::NOTCH_EXPANDED_HEIGHT
-    } else {
-        notch::NOTCH_COLLAPSED_HEIGHT
-    };
-    window
-        .set_size(tauri::LogicalSize::new(notch::NOTCH_WIDTH, height))
-        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
