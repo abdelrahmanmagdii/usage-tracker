@@ -8,11 +8,14 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::claude::ClaudeManager;
-use crate::codex::process::CodexManager;
+use crate::codex::process::{CodexManager, ConnectionState};
 use crate::prefs::PrefsStore;
 
-pub const CODEX_TRAY_ID: &str = "provider-codex";
-pub const CLAUDE_TRAY_ID: &str = "provider-claude";
+/// One menu-bar item carries both providers. Two separate icons doubled our
+/// width, and macOS hides the lowest-priority status items first when the bar
+/// gets crowded (or collides with a notch) — which read as the Claude meter
+/// randomly vanishing. One narrow item is far less likely to be dropped.
+pub const TRAY_ID: &str = "usagebar";
 
 /// Unix timestamp (seconds) until which an announced-but-not-yet-landed reset
 /// is pending. While pending, the Codex tray title carries a ⚡ prefix so the
@@ -95,12 +98,11 @@ fn quit_from_menu(app: &AppHandle) {
     });
 }
 
-fn refresh_all_tray_titles(app: &AppHandle) {
-    let codex = app.state::<CodexManager>().inner().clone();
-    let claude = app.state::<ClaudeManager>().inner().clone();
+/// Recomputes and repaints the single tray item from the current app state.
+fn refresh_tray(app: &AppHandle) {
+    let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        codex.update_tray().await;
-        claude.update_tray().await;
+        refresh_unified_tray(&handle).await;
     });
 }
 
@@ -111,13 +113,6 @@ pub enum Provider {
 }
 
 impl Provider {
-    pub fn tray_id(self) -> &'static str {
-        match self {
-            Provider::Codex => CODEX_TRAY_ID,
-            Provider::Claude => CLAUDE_TRAY_ID,
-        }
-    }
-
     fn key(self) -> &'static str {
         match self {
             Provider::Codex => "codex",
@@ -132,12 +127,6 @@ impl Provider {
         }
     }
 
-    pub fn window_preference(self, prefs: &crate::prefs::AppPrefs) -> String {
-        match self {
-            Provider::Codex => prefs.codex_tray_window.clone(),
-            Provider::Claude => prefs.claude_tray_window.clone(),
-        }
-    }
 }
 
 /// Remembers the menu each tray currently displays so the once-per-second
@@ -160,36 +149,27 @@ impl TrayMenuState {
     }
 }
 
-/// Re-syncs both trays after a preference changes anywhere (tray menu or the
-/// in-app settings panel), so titles and menu checkmarks stay in agreement.
+/// Re-syncs the tray after a preference changes anywhere (tray menu or the
+/// in-app settings panel), so the title and menu checkmarks stay in agreement.
 pub fn apply_preference_change(app: &AppHandle) {
     app.state::<TrayMenuState>().invalidate();
-    refresh_all_tray_titles(app);
+    refresh_tray(app);
 }
 
 fn window_menu_id(provider: Provider, window_id: &str) -> String {
     format!("win|{}|{}", provider.key(), window_id)
 }
 
-fn build_menu(
+/// A provider's "Menu Bar Shows" submenu: "Most used" plus one entry per window.
+fn window_picker(
     app: &AppHandle,
     provider: Provider,
     windows: &[TrayWindow],
     selected: &str,
-) -> tauri::Result<Menu<tauri::Wry>> {
+) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
     use tauri::menu::{IsMenuItem, Submenu};
 
-    let prefs = app.state::<PrefsStore>().get();
-    let refresh = MenuItem::with_id(
-        app,
-        format!("{}-refresh", provider.key()),
-        "Refresh",
-        true,
-        None::<&str>,
-    )?;
-
-    // Menu-bar window picker: "Most used" plus one entry per reported window.
-    let mut picker: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = vec![Box::new(CheckMenuItem::with_id(
+    let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = vec![Box::new(CheckMenuItem::with_id(
         app,
         window_menu_id(provider, crate::prefs::TRAY_WINDOW_AUTO),
         "Most used",
@@ -198,7 +178,7 @@ fn build_menu(
         None::<&str>,
     )?)];
     for window in windows {
-        picker.push(Box::new(CheckMenuItem::with_id(
+        items.push(Box::new(CheckMenuItem::with_id(
             app,
             window_menu_id(provider, &window.id),
             &window.label,
@@ -207,23 +187,26 @@ fn build_menu(
             None::<&str>,
         )?));
     }
-    let picker_refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
-        picker.iter().map(|item| item.as_ref()).collect();
-    let picker_menu = Submenu::with_items(app, "Menu Bar Shows", true, &picker_refs)?;
+    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|item| item.as_ref()).collect();
+    let title = format!("{} shows", provider.display_name());
+    Submenu::with_items(app, title, true, &refs)
+}
 
-    let quit = MenuItem::with_id(
-        app,
-        format!("{}-quit", provider.key()),
-        "Quit UsageBar",
-        true,
-        None::<&str>,
-    )?;
+/// Builds the one shared tray menu: a "Menu Bar Shows" picker per available
+/// provider, the app-wide toggles, the setup guide, and quit.
+fn build_unified_menu(
+    app: &AppHandle,
+    codex_windows: &[TrayWindow],
+    claude_windows: &[TrayWindow],
+    claude_present: bool,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    let prefs = app.state::<PrefsStore>().get();
+    let refresh = MenuItem::with_id(app, "refresh-all", "Refresh", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
 
-    // Preferences that apply app-wide live on the Codex (primary) tray only.
-    if provider == Provider::Claude {
-        return Menu::with_items(app, &[&refresh, &separator, &picker_menu, &separator, &quit]);
-    }
+    let codex_picker = window_picker(app, Provider::Codex, codex_windows, &prefs.codex_tray_window)?;
+    let claude_picker =
+        window_picker(app, Provider::Claude, claude_windows, &prefs.claude_tray_window)?;
 
     let compact = CheckMenuItem::with_id(
         app,
@@ -250,51 +233,99 @@ fn build_menu(
         None::<&str>,
     )?;
     let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
-    Menu::with_items(
-        app,
-        &[
-            &refresh,
-            &separator,
-            &picker_menu,
-            &separator,
-            &compact,
-            &alerts,
-            &autostart,
-            &separator,
-            &walkthrough,
-            &quit,
-        ],
-    )
+    let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
+
+    use tauri::menu::IsMenuItem;
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&refresh, &separator, &codex_picker];
+    // The Claude picker only appears once a Claude login has been found.
+    if claude_present {
+        items.push(&claude_picker);
+    }
+    items.extend([
+        &separator as &dyn IsMenuItem<tauri::Wry>,
+        &compact,
+        &alerts,
+        &autostart,
+        &separator,
+        &walkthrough,
+        &quit,
+    ]);
+    Menu::with_items(app, &items)
 }
 
-/// Rebuilds a tray's menu when its window list or preferences change. Native
-/// menu objects must be created on the macOS main thread.
-pub fn sync_tray_menu(app: &AppHandle, provider: Provider, windows: &[TrayWindow]) {
-    let Some(menu_state) = app.try_state::<TrayMenuState>() else {
+/// Reads both providers, repaints the shared tray title and tooltip, and
+/// rebuilds the menu only when its window lists or preferences actually change.
+pub async fn refresh_unified_tray(app: &AppHandle) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
     let prefs = app.state::<PrefsStore>().get();
-    let selected = provider.window_preference(&prefs);
+    let now = now_unix_seconds();
+
+    let codex_state = app.state::<CodexManager>().inner().snapshot().await;
+    let codex_windows = collect_windows(codex_state.rate_limits.as_ref());
+    let codex_selected = select_window(&codex_windows, &prefs.codex_tray_window).cloned();
+    let incoming = app
+        .try_state::<ResetRadar>()
+        .is_some_and(|radar| radar.incoming_at(now));
+    let codex_seg = MeterSegment {
+        present: codex_selected.is_some(),
+        remaining: codex_selected.as_ref().map(remaining_percent).unwrap_or(0.0),
+        resets_at: codex_selected.as_ref().and_then(|window| window.resets_at),
+        incoming,
+        stale: stale_age(codex_state.updated_at, now).is_some(),
+    };
+
+    let claude_state = app.state::<ClaudeManager>().inner().snapshot().await;
+    let claude_present = claude_state.connection != ConnectionState::CliNotFound;
+    let claude_windows = collect_windows(claude_state.rate_limits.as_ref());
+    let claude_selected = select_window(&claude_windows, &prefs.claude_tray_window).cloned();
+    let claude_seg = MeterSegment {
+        present: claude_present && claude_selected.is_some(),
+        remaining: claude_selected.as_ref().map(remaining_percent).unwrap_or(0.0),
+        resets_at: claude_selected.as_ref().and_then(|window| window.resets_at),
+        incoming: false,
+        stale: stale_age(claude_state.updated_at, now).is_some(),
+    };
+
+    let title = combined_title(codex_seg, claude_seg, now, prefs.compact_tray);
+    let _ = tray.set_title(Some(title.as_str()));
+    let _ = tray.set_tooltip(Some(
+        unified_tooltip(
+            &codex_seg,
+            codex_selected.as_ref(),
+            codex_state.updated_at,
+            &claude_seg,
+            claude_selected.as_ref(),
+            claude_state.updated_at,
+            now,
+        )
+        .as_str(),
+    ));
+
+    // Rebuild the menu only when it would actually differ.
     let signature = format!(
-        "{selected}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{claude_present}",
+        prefs.codex_tray_window,
+        prefs.claude_tray_window,
         prefs.compact_tray,
         prefs.usage_alerts,
-        windows
+        [&codex_windows, &claude_windows]
             .iter()
+            .flat_map(|list| list.iter())
             .map(|window| format!("{}={}", window.id, window.label))
             .collect::<Vec<_>>()
-            .join(",")
+            .join(","),
     );
-    if !menu_state.changed(provider.key(), &signature) {
+    if !app.state::<TrayMenuState>().changed(TRAY_ID, &signature) {
         return;
     }
     let handle = app.clone();
-    let windows = windows.to_vec();
     let _ = app.run_on_main_thread(move || {
-        let Some(tray) = handle.tray_by_id(provider.tray_id()) else {
+        let Some(tray) = handle.tray_by_id(TRAY_ID) else {
             return;
         };
-        match build_menu(&handle, provider, &windows, &selected) {
+        match build_unified_menu(&handle, &codex_windows, &claude_windows, claude_present) {
             Ok(menu) => {
                 let _ = tray.set_menu(Some(menu));
             }
@@ -304,6 +335,52 @@ pub fn sync_tray_menu(app: &AppHandle, provider: Provider, windows: &[TrayWindow
             }
         }
     });
+}
+
+fn window_tooltip_line(
+    name: &str,
+    seg: &MeterSegment,
+    window: Option<&TrayWindow>,
+    updated_at: Option<u64>,
+    now: u64,
+) -> String {
+    let percent = seg.remaining.clamp(0.0, 100.0).round() as u32;
+    let label = window.map(|window| window.label.as_str()).unwrap_or("usage");
+    let mut line = format!("{name}: {percent}% left ({label})");
+    if let Some(age) = stale_age(updated_at, now) {
+        line.push_str(&format!(" · last updated {} ago", format_age(age)));
+    } else if let Some(target) = seg.resets_at.filter(|target| *target > now) {
+        line.push_str(&format!(" · resets in {}", format_countdown(target - now)));
+    }
+    line
+}
+
+fn unified_tooltip(
+    codex: &MeterSegment,
+    codex_window: Option<&TrayWindow>,
+    codex_updated_at: Option<u64>,
+    claude: &MeterSegment,
+    claude_window: Option<&TrayWindow>,
+    claude_updated_at: Option<u64>,
+    now: u64,
+) -> String {
+    let mut lines = Vec::new();
+    if codex.present {
+        lines.push(window_tooltip_line("Codex", codex, codex_window, codex_updated_at, now));
+    }
+    if claude.present {
+        lines.push(window_tooltip_line(
+            "Claude Code",
+            claude,
+            claude_window,
+            claude_updated_at,
+            now,
+        ));
+    }
+    if lines.is_empty() {
+        return "UsageBar".to_owned();
+    }
+    lines.join("\n")
 }
 
 fn handle_menu_event(app: &AppHandle, id: &str) {
@@ -322,28 +399,24 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             Provider::Claude => prefs.claude_tray_window = window_id.to_owned(),
         });
         app.state::<TrayMenuState>().invalidate();
-        refresh_all_tray_titles(app);
+        refresh_tray(app);
         return;
     }
 
     match id {
-        "codex-refresh" => {
-            let manager = app.state::<CodexManager>().inner().clone();
+        "refresh-all" => {
+            let codex = app.state::<CodexManager>().inner().clone();
+            let claude = app.state::<ClaudeManager>().inner().clone();
             tauri::async_runtime::spawn(async move {
-                let _ = manager.refresh_or_start().await;
-            });
-        }
-        "claude-refresh" => {
-            let manager = app.state::<ClaudeManager>().inner().clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = manager.refresh().await;
+                let _ = codex.refresh_or_start().await;
+                let _ = claude.refresh().await;
             });
         }
         "toggle-compact" => {
             app.state::<PrefsStore>()
                 .update(|prefs| prefs.compact_tray = !prefs.compact_tray);
             app.state::<TrayMenuState>().invalidate();
-            refresh_all_tray_titles(app);
+            refresh_tray(app);
         }
         "toggle-alerts" => {
             app.state::<PrefsStore>()
@@ -369,29 +442,26 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             }
             let _ = app.emit("usagebar://show-onboarding", ());
         }
-        "codex-quit" | "claude-quit" => quit_from_menu(app),
+        "quit-app" => quit_from_menu(app),
         _ => {}
     }
 }
 
+fn now_unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 pub fn setup(app: &App) -> tauri::Result<()> {
-    let handle = app.handle().clone();
-    let menu = build_menu(
-        &handle,
-        Provider::Codex,
-        &[],
-        &app.state::<PrefsStore>().get().codex_tray_window,
-    )?;
-    TrayIconBuilder::with_id(CODEX_TRAY_ID)
+    let menu = build_unified_menu(&app.handle().clone(), &[], &[], false)?;
+    TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("UsageBar")
-        .icon(codex_tray_icon())
+        .icon(usagebar_tray_icon())
         .icon_as_template(false)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        // Menu-event handlers are GLOBAL in Tauri: this one handler receives
-        // events from every tray menu, including Claude's. Registering a
-        // second handler there would run each click twice and turn the
-        // toggles into no-ops, so this is deliberately the only one.
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -407,44 +477,66 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Builds the Claude tray item on first successful credential detection so
-/// Macs without Claude Code never grow an empty second icon.
+/// The single tray already carries both providers, so a Claude login appearing
+/// just needs the menu rebuilt to add its picker — no second icon is created.
 pub fn ensure_claude_tray(app: &AppHandle) -> tauri::Result<()> {
-    if let Some(tray) = app.tray_by_id(CLAUDE_TRAY_ID) {
-        let _ = tray.set_visible(true);
-        return Ok(());
-    }
-    let menu = build_menu(
-        app,
-        Provider::Claude,
-        &[],
-        &app.state::<PrefsStore>().get().claude_tray_window,
-    )?;
-    TrayIconBuilder::with_id(CLAUDE_TRAY_ID)
-        .tooltip("Claude Code usage")
-        .icon(claude_tray_icon())
-        .icon_as_template(false)
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        // No on_menu_event here on purpose — see the note on the Codex tray.
-        // Tray icon (click) handlers, unlike menu handlers, are per-tray.
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                toggle_main_window(tray.app_handle());
-            }
-        })
-        .build(app)?;
+    app.state::<TrayMenuState>().invalidate();
+    refresh_tray(app);
     Ok(())
 }
 
-/// A compact Codex-purple version of the cloud/terminal mark. Keeping one tray
-/// item per provider lets Claude/Gemini add their own neighboring, distinctly
-/// colored menu-bar meters later without combining brand identities.
+/// The combined menu-bar mark: two rounded bars — Codex purple, Claude coral —
+/// reading as one "usage bars" glyph for both providers under a single icon.
+pub fn usagebar_tray_icon() -> Image<'static> {
+    const WIDTH: u32 = 20;
+    const HEIGHT: u32 = 18;
+    const SAMPLES: u32 = 4;
+    // (x0, x1, top, bottom, [r,g,b]) for each bar, in icon pixels.
+    let bars = [
+        (4.0_f64, 8.6_f64, 4.5_f64, 15.0_f64, [140.0_f64, 92.0, 240.0]),
+        (11.4_f64, 16.0_f64, 8.0_f64, 15.0_f64, [217.0_f64, 119.0, 87.0]),
+    ];
+    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
+
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            for (x0, x1, top, bottom, color) in bars {
+                let mut coverage = 0_u32;
+                for sample_y in 0..SAMPLES {
+                    for sample_x in 0..SAMPLES {
+                        let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
+                        let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
+                        // Rounded ends: clamp the sample toward the bar's core
+                        // and test a capsule radius.
+                        let radius = (x1 - x0) / 2.0;
+                        let cx = (x0 + x1) / 2.0;
+                        let cy = py.clamp(top + radius, bottom - radius);
+                        if (px - cx).powi(2) + (py - cy).powi(2) <= radius * radius {
+                            coverage += 1;
+                        }
+                    }
+                }
+                if coverage == 0 {
+                    continue;
+                }
+                let alpha = ((coverage * 255) / (SAMPLES * SAMPLES)) as u8;
+                let index = ((y * WIDTH + x) * 4) as usize;
+                // First bar to cover this pixel wins (they do not overlap).
+                if rgba[index + 3] == 0 {
+                    rgba[index] = color[0] as u8;
+                    rgba[index + 1] = color[1] as u8;
+                    rgba[index + 2] = color[2] as u8;
+                    rgba[index + 3] = alpha;
+                }
+            }
+        }
+    }
+    Image::new_owned(rgba, WIDTH, HEIGHT)
+}
+
+/// A compact Codex-purple version of the cloud/terminal mark. Retained for the
+/// popover brand mark and tests even though the tray now uses a combined glyph.
+#[allow(dead_code)]
 pub fn codex_tray_icon() -> Image<'static> {
     const WIDTH: u32 = 22;
     const HEIGHT: u32 = 18;
@@ -506,8 +598,9 @@ fn inside_terminal_glyph(x: f64, y: f64) -> bool {
     chevron || underscore
 }
 
-/// Claude's coral starburst, drawn with the same supersampled rasterizer as the
-/// Codex cloud so the two provider icons sit together at matching weights.
+/// Claude's coral starburst. Retained for reference and tests even though the
+/// tray now uses the combined glyph.
+#[allow(dead_code)]
 pub fn claude_tray_icon() -> Image<'static> {
     const WIDTH: u32 = 22;
     const HEIGHT: u32 = 18;
@@ -662,23 +755,66 @@ pub fn select_window<'a>(windows: &'a [TrayWindow], preference: &str) -> Option<
     })
 }
 
-/// Titles show percent USED, mirroring how Codex and Claude Code both report
-/// usage, so the menu bar never disagrees with the tools themselves.
+/// Titles show percent REMAINING, mirroring what the Codex and Claude apps
+/// display, so the menu bar never disagrees with the app it mirrors.
 pub fn tray_title(
-    used_percent: Option<f64>,
+    remaining_percent: Option<f64>,
     resets_at: Option<u64>,
     now_unix: u64,
     compact: bool,
 ) -> String {
-    let Some(used) = used_percent else {
+    let Some(remaining) = remaining_percent else {
         return String::new();
     };
-    let percent = used.clamp(0.0, 100.0).round() as u32;
+    let percent = remaining.clamp(0.0, 100.0).round() as u32;
     match resets_at {
         Some(target) if !compact && target > now_unix => {
             format!("{percent}% · {}", format_countdown(target - now_unix))
         }
         _ => format!("{percent}%"),
+    }
+}
+
+/// Percent of a window still available.
+pub fn remaining_percent(window: &TrayWindow) -> f64 {
+    (100.0 - window.used_percent).clamp(0.0, 100.0)
+}
+
+/// One provider's contribution to the single combined menu-bar title.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MeterSegment {
+    /// Whether this provider has usable data to show at all.
+    pub present: bool,
+    pub remaining: f64,
+    pub resets_at: Option<u64>,
+    pub incoming: bool,
+    pub stale: bool,
+}
+
+fn segment_percent(seg: &MeterSegment) -> String {
+    let percent = seg.remaining.clamp(0.0, 100.0).round() as u32;
+    with_incoming_prefix(with_stale_marker(format!("{percent}%"), seg.stale), seg.incoming)
+}
+
+/// The combined menu-bar title, Codex first then Claude. A lone provider keeps
+/// its countdown (there is room); two providers drop the countdowns so both
+/// percentages fit in one narrow item — the whole point of merging the icons.
+pub fn combined_title(codex: MeterSegment, claude: MeterSegment, now: u64, compact: bool) -> String {
+    let present: Vec<&MeterSegment> = [&codex, &claude]
+        .into_iter()
+        .filter(|seg| seg.present)
+        .collect();
+    match present.as_slice() {
+        [] => String::new(),
+        [only] => {
+            let base = tray_title(Some(only.remaining), only.resets_at, now, compact);
+            with_incoming_prefix(with_stale_marker(base, only.stale), only.incoming)
+        }
+        segments => segments
+            .iter()
+            .map(|seg| segment_percent(seg))
+            .collect::<Vec<_>>()
+            .join(" · "),
     }
 }
 
@@ -760,13 +896,51 @@ mod tests {
     }
 
     #[test]
-    fn title_shows_used_percent_and_countdown() {
+    fn title_shows_remaining_percent_and_countdown() {
         assert_eq!(tray_title(Some(42.0), Some(4_661), 1_000, false), "42% · 1:01:01");
         assert_eq!(tray_title(Some(42.0), Some(1_545), 1_000, false), "42% · 9:05");
         assert_eq!(tray_title(Some(42.0), Some(200_000), 1_000, false), "42% · 2d 7h");
         assert_eq!(tray_title(Some(42.0), None, 1_000, false), "42%");
         assert_eq!(tray_title(Some(42.0), Some(900), 1_000, false), "42%");
         assert_eq!(tray_title(None, Some(4_661), 1_000, false), "");
+    }
+
+    #[test]
+    fn remaining_percent_complements_used() {
+        let window = TrayWindow {
+            id: "w".into(),
+            label: "Weekly".into(),
+            used_percent: 38.0,
+            resets_at: None,
+            duration_mins: Some(10_080.0),
+        };
+        assert!((remaining_percent(&window) - 62.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn combined_title_shows_both_providers_without_countdowns() {
+        let codex = MeterSegment { present: true, remaining: 62.0, resets_at: Some(9_000), incoming: false, stale: false };
+        let claude = MeterSegment { present: true, remaining: 8.0, resets_at: Some(9_000), incoming: false, stale: false };
+        // Two providers: percentages only, joined, no countdowns.
+        assert_eq!(combined_title(codex, claude, 1_000, false), "62% · 8%");
+        // Markers still attach to the right segment.
+        let stale_claude = MeterSegment { stale: true, ..claude };
+        assert_eq!(combined_title(codex, stale_claude, 1_000, false), "62% · ~8%");
+        let incoming_codex = MeterSegment { incoming: true, ..codex };
+        assert_eq!(combined_title(incoming_codex, claude, 1_000, false), "⚡ 62% · 8%");
+    }
+
+    #[test]
+    fn combined_title_keeps_the_countdown_for_a_lone_provider() {
+        let codex = MeterSegment { present: true, remaining: 62.0, resets_at: Some(4_661), incoming: false, stale: false };
+        let absent = MeterSegment::default();
+        assert_eq!(combined_title(codex, absent, 1_000, false), "62% · 1:01:01");
+        assert_eq!(combined_title(codex, absent, 1_000, true), "62%");
+        // Nothing present yields an empty title.
+        assert_eq!(combined_title(absent, absent, 1_000, false), "");
+        // Claude-only (Codex still loading) shows just Claude.
+        let claude = MeterSegment { present: true, remaining: 8.0, resets_at: None, incoming: false, stale: false };
+        assert_eq!(combined_title(absent, claude, 1_000, false), "8%");
     }
 
     #[test]

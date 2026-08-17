@@ -69,7 +69,7 @@ function WindowPicker({
             >
               <span className="window-option-name">{option.label}</span>
               {option.usedPercent >= 0 ? (
-                <span className="window-option-value">{Math.round(option.usedPercent)}%</span>
+                <span className="window-option-value">{Math.round(100 - option.usedPercent)}% left</span>
               ) : (
                 <span className="window-option-value muted">auto</span>
               )}
@@ -172,7 +172,7 @@ export function SettingsModal({
         <div className="settings-body">
           <p className="settings-intro">
             Pick which limit each meter tracks. “Most used” follows whichever
-            one you are closest to using up.
+            one you are closest to using up. Percentages show how much is left.
           </p>
           <WindowPicker
             title="Codex meter"

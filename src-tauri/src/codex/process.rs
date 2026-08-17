@@ -20,7 +20,6 @@ use tokio::{
 };
 
 use super::protocol::{route_line, RoutedMessage};
-use crate::tray::{collect_windows, select_window, tray_title};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -359,46 +358,9 @@ impl CodexManager {
     }
 
     pub async fn update_tray(&self) {
-        let state = self.state.read().await;
-        let Some(tray) = self.app.tray_by_id(crate::tray::CODEX_TRAY_ID) else {
-            return;
-        };
-        let prefs = self
-            .app
-            .try_state::<crate::prefs::PrefsStore>()
-            .map(|prefs| prefs.get())
-            .unwrap_or_default();
-        let windows = collect_windows(state.rate_limits.as_ref());
-        let selected = select_window(&windows, &prefs.codex_tray_window);
-        let now = now_unix_seconds();
-        let title = tray_title(
-            selected.map(|window| window.used_percent),
-            selected.and_then(|window| window.resets_at),
-            now,
-            prefs.compact_tray,
-        );
-        let incoming = self
-            .app
-            .try_state::<crate::tray::ResetRadar>()
-            .is_some_and(|radar| radar.incoming_at(now));
-        // A dead app-server leaves the last numbers in place, so the age has to
-        // be visible or the menu bar silently reports yesterday's quota.
-        let stale_age = crate::tray::stale_age(state.updated_at, now);
-        let title = crate::tray::with_stale_marker(title, stale_age.is_some());
-        let title = crate::tray::with_incoming_prefix(title, incoming);
-        let _ = tray.set_title(Some(title.as_str()));
-        let mut tooltip = match selected {
-            Some(window) => format!("Codex · {} window", window.label),
-            None => "UsageBar".to_owned(),
-        };
-        if let Some(age) = stale_age {
-            tooltip.push_str(&format!(
-                " · last updated {} ago",
-                crate::tray::format_age(age)
-            ));
-        }
-        let _ = tray.set_tooltip(Some(tooltip.as_str()));
-        crate::tray::sync_tray_menu(&self.app, crate::tray::Provider::Codex, &windows);
+        // Both providers share one menu-bar item now, so the tray is repainted
+        // from a single coordinator that reads both managers' state.
+        crate::tray::refresh_unified_tray(&self.app).await;
     }
 
     async fn stop_child(&self) {

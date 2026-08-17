@@ -26,7 +26,7 @@ use tokio::{
 };
 
 use crate::codex::process::ConnectionState;
-use crate::tray::{self, collect_windows, select_window, tray_title};
+use crate::tray::{self};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
@@ -222,11 +222,9 @@ impl ClaudeManager {
             state.connection = connection;
             state.diagnostic = diagnostic;
         }
-        if connection == ConnectionState::CliNotFound {
-            if let Some(tray) = self.app.tray_by_id(tray::CLAUDE_TRAY_ID) {
-                let _ = tray.set_visible(false);
-            }
-        }
+        // A missing Claude login no longer hides anything: the shared tray keeps
+        // showing Codex, and Claude simply drops out of the title and menu until
+        // it reappears. That is handled by refresh_unified_tray reading state.
         self.emit_state().await;
     }
 
@@ -237,40 +235,8 @@ impl ClaudeManager {
     }
 
     pub async fn update_tray(&self) {
-        let state = self.state.read().await;
-        let Some(tray) = self.app.tray_by_id(tray::CLAUDE_TRAY_ID) else {
-            return;
-        };
-        let prefs = self
-            .app
-            .try_state::<crate::prefs::PrefsStore>()
-            .map(|prefs| prefs.get())
-            .unwrap_or_default();
-        let windows = collect_windows(state.rate_limits.as_ref());
-        let selected = select_window(&windows, &prefs.claude_tray_window);
-        let now = now_unix_millis() / 1_000;
-        let title = tray_title(
-            selected.map(|window| window.used_percent),
-            selected.and_then(|window| window.resets_at),
-            now,
-            prefs.compact_tray,
-        );
-        // Claude Code's OAuth token expires roughly hourly and is only renewed
-        // by Claude Code itself, so refreshes can stop succeeding for hours.
-        // Marking the age keeps the menu bar from presenting a frozen number as
-        // if it were current.
-        let stale_age = tray::stale_age(state.updated_at, now);
-        let title = tray::with_stale_marker(title, stale_age.is_some());
-        let _ = tray.set_title(Some(title.as_str()));
-        let mut tooltip = match selected {
-            Some(window) => format!("Claude Code · {} window", window.label),
-            None => "Claude Code usage".to_owned(),
-        };
-        if let Some(age) = stale_age {
-            tooltip.push_str(&format!(" · last updated {} ago", tray::format_age(age)));
-        }
-        let _ = tray.set_tooltip(Some(tooltip.as_str()));
-        tray::sync_tray_menu(&self.app, tray::Provider::Claude, &windows);
+        // Both providers share one menu-bar item; the coordinator reads both.
+        tray::refresh_unified_tray(&self.app).await;
     }
 }
 
@@ -634,10 +600,10 @@ mod tests {
         assert_eq!(scoped.pointer("/secondary/excludeFromTray"), Some(&json!(true)));
 
         // The tray picker sees all three windows, labeled for the menu.
-        let windows = collect_windows(Some(&normalized));
+        let windows = crate::tray::collect_windows(Some(&normalized));
         let labels: Vec<&str> = windows.iter().map(|window| window.label.as_str()).collect();
         assert_eq!(labels, vec!["5-hour", "Weekly", "Fable"]);
-        let auto = select_window(&windows, crate::prefs::TRAY_WINDOW_AUTO).expect("auto");
+        let auto = crate::tray::select_window(&windows, crate::prefs::TRAY_WINDOW_AUTO).expect("auto");
         assert!((auto.used_percent - 63.0).abs() < 1e-9);
         assert_eq!(auto.label, "Fable");
     }

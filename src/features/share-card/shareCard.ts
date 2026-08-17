@@ -22,10 +22,10 @@ function traceRoundedRect(
   context.closePath();
 }
 
-function quipFor(used: number): string {
-  if (used >= 95) return "Effectively out of quota.";
-  if (used >= 65) return "Running low.";
-  if (used <= 10) return "Freshly reset.";
+function quipFor(remaining: number): string {
+  if (remaining <= 5) return "Effectively out of quota.";
+  if (remaining <= 35) return "Running low.";
+  if (remaining >= 90) return "Freshly reset.";
   return "Holding steady.";
 }
 
@@ -39,8 +39,8 @@ export async function generateShareCard(bucket: RateLimitBucket): Promise<{
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas is unavailable");
 
-  const used = Math.round(bucket.usedPercent);
-  const accent = used >= 90 ? "#ff453a" : used >= 65 ? "#ff9f0a" : "#30d158";
+  const remaining = Math.round(bucket.remainingPercent);
+  const accent = remaining <= 10 ? "#ff453a" : remaining <= 35 ? "#ff9f0a" : "#30d158";
 
   // Ambient backdrop
   const backdrop = context.createLinearGradient(0, 0, 0, HEIGHT);
@@ -91,18 +91,18 @@ export async function generateShareCard(bucket: RateLimitBucket): Promise<{
   context.shadowBlur = 64;
   context.fillStyle = accent;
   context.font = "700 188px -apple-system, BlinkMacSystemFont, sans-serif";
-  context.fillText(`${used}%`, left - 8, 330);
+  context.fillText(`${remaining}%`, left - 8, 330);
   context.restore();
   context.fillStyle = "#f5f5f7";
   context.font = "650 32px -apple-system, BlinkMacSystemFont, sans-serif";
-  context.fillText(`${windowDurationLabel(bucket.windowDurationMins).toUpperCase()} QUOTA USED`, left, 386);
+  context.fillText(`${windowDurationLabel(bucket.windowDurationMins).toUpperCase()} QUOTA LEFT`, left, 386);
 
   // Glass capsule progress bar
   const barWidth = WIDTH - 256;
   traceRoundedRect(context, left, 428, barWidth, 22, 11);
   context.fillStyle = "rgba(255, 255, 255, 0.09)";
   context.fill();
-  const fillWidth = Math.max(22, barWidth * (bucket.usedPercent / 100));
+  const fillWidth = Math.max(22, barWidth * (bucket.remainingPercent / 100));
   traceRoundedRect(context, left, 428, fillWidth, 22, 11);
   const fillGradient = context.createLinearGradient(0, 428, 0, 450);
   fillGradient.addColorStop(0, `${accent}f2`);
@@ -116,7 +116,7 @@ export async function generateShareCard(bucket: RateLimitBucket): Promise<{
   context.fillText(formatCountdown(bucket.resetsAt).replace("Resets", "resets"), left, 512);
   context.fillStyle = "#f5f5f7";
   context.font = "550 24px -apple-system, BlinkMacSystemFont, sans-serif";
-  context.fillText(quipFor(used), left, 566);
+  context.fillText(quipFor(remaining), left, 566);
 
   context.textAlign = "right";
   context.fillStyle = "rgba(235, 235, 245, 0.42)";

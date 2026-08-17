@@ -112,10 +112,10 @@ export default function App() {
               data-tauri-drag-region
             >
               <div className="available-value" data-tauri-drag-region>
-                <strong data-tauri-drag-region>{Math.round(mostCooked.usedPercent)}</strong><span data-tauri-drag-region>%</span>
+                <strong data-tauri-drag-region>{Math.round(mostCooked.remainingPercent)}</strong><span data-tauri-drag-region>%</span>
               </div>
               <div className="status-copy" data-tauri-drag-region>
-                <span className="status-eyebrow" data-tauri-drag-region><i aria-hidden="true" />Used · {windowDurationLabel(mostCooked.windowDurationMins)}</span>
+                <span className="status-eyebrow" data-tauri-drag-region><i aria-hidden="true" />Left · {windowDurationLabel(mostCooked.windowDurationMins)}</span>
                 <strong data-tauri-drag-region><Clock3 size={12} strokeWidth={2} aria-hidden="true" />{headerResetText(mostCooked, now)}</strong>
               </div>
             </div>
