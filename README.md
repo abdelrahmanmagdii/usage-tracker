@@ -4,7 +4,7 @@
 
 UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding quota windows, how much remains, and exactly when each window resets. Codex data comes from your existing Codex login through the official Codex App Server—no OpenAI API key and no credential scraping. If Claude Code is installed, a second meter shows its 5-hour and weekly windows too.
 
-The menu bar shows one live meter per provider: a tiny provider mark plus a `42% · 1:25:49`-style **used-percentage** and reset countdown for the most-used window — the same "% used" convention Codex and Claude Code report themselves, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
+The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset countdown for each provider — how much you have left, matching what the Codex and Claude Code apps show, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
 
 ![UsageBar showing an announced reset before it lands](docs/usagebar-demo.gif)
 
@@ -14,7 +14,7 @@ The menu bar shows one live meter per provider: a tiny provider mark plus a `42%
 
 *Demo and screenshots use preview data.*
 
-By default both providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude), which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **two icons**, one per provider, and to choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — plus **Compact Meter** (percentage only), **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), and **Launch at Login**.
+By default both providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude) — the **Compact** layout, which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **Extended** (one icon per provider), choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — and toggle **Usage Alerts** (notifications at 80% / 95% used and on a fresh window) and **Launch at Login**.
 
 ## Install
 

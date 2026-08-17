@@ -10,7 +10,6 @@ type TrayWindow = {
 };
 
 type AppPrefs = {
-  compactTray: boolean;
   usageAlerts: boolean;
   codexTrayWindow: string;
   claudeTrayWindow: string;
@@ -19,7 +18,6 @@ type AppPrefs = {
 
 const AUTO = "auto";
 const DEFAULT_PREFS: AppPrefs = {
-  compactTray: false,
   usageAlerts: true,
   codexTrayWindow: AUTO,
   claudeTrayWindow: AUTO,
@@ -193,8 +191,8 @@ export function SettingsModal({
             <span className="setting-label">Menu bar</span>
             <div className="layout-choice" role="radiogroup" aria-label="Menu bar layout">
               {[
-                { value: true, name: "One icon", detail: "Both meters share a single icon." },
-                { value: false, name: "Two icons", detail: "A separate icon per provider." },
+                { value: true, name: "Compact", detail: "Both meters in one icon." },
+                { value: false, name: "Extended", detail: "One icon per provider." },
               ].map((option) => {
                 const active = prefs.combinedTray === option.value;
                 return (
@@ -216,21 +214,12 @@ export function SettingsModal({
               })}
             </div>
             <p className="setting-hint">
-              One icon is less likely to be hidden when the menu bar is crowded.
+              Compact is less likely to be hidden when the menu bar is crowded.
             </p>
           </div>
 
           <div className="setting-group">
             <span className="setting-label">General</span>
-            <Toggle
-              label="Compact meter"
-              detail="Just the percentage — the most-used limit when both share one icon."
-              checked={prefs.compactTray}
-              onChange={(next) => {
-                setPrefs((current) => ({ ...current, compactTray: next }));
-                if (inTauri()) void invoke("set_compact_tray", { enabled: next });
-              }}
-            />
             <Toggle
               label="Usage alerts"
               detail="Get notified at 80% and 95%, and when a limit resets."

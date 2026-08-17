@@ -210,14 +210,6 @@ fn build_unified_menu(
     let claude_picker =
         window_picker(app, Provider::Claude, claude_windows, &prefs.claude_tray_window)?;
 
-    let compact = CheckMenuItem::with_id(
-        app,
-        "toggle-compact",
-        "Compact Meter",
-        true,
-        prefs.compact_tray,
-        None::<&str>,
-    )?;
     let alerts = CheckMenuItem::with_id(
         app,
         "toggle-alerts",
@@ -245,7 +237,6 @@ fn build_unified_menu(
     }
     items.extend([
         &separator as &dyn IsMenuItem<tauri::Wry>,
-        &compact,
         &alerts,
         &autostart,
         &separator,
@@ -279,12 +270,11 @@ fn build_provider_menu(
         return Menu::with_items(app, &[&refresh, &separator, &picker, &separator, &quit]);
     }
 
-    let compact = CheckMenuItem::with_id(app, "toggle-compact", "Compact Meter", true, prefs.compact_tray, None::<&str>)?;
     let alerts = CheckMenuItem::with_id(app, "toggle-alerts", "Usage Alerts", true, prefs.usage_alerts, None::<&str>)?;
     let autostart = CheckMenuItem::with_id(app, "toggle-autostart", "Launch at Login", true, app.autolaunch().is_enabled().unwrap_or(false), None::<&str>)?;
     let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
     let items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
-        &refresh, &separator, &picker, &separator, &compact, &alerts, &autostart, &separator, &walkthrough, &quit,
+        &refresh, &separator, &picker, &separator, &alerts, &autostart, &separator, &walkthrough, &quit,
     ];
     Menu::with_items(app, &items)
 }
@@ -347,7 +337,7 @@ pub async fn refresh_unified_tray(app: &AppHandle) {
 
     let absent = MeterSegment::default();
     if prefs.combined_tray {
-        let title = combined_title(codex.seg, claude.seg, now, prefs.compact_tray);
+        let title = combined_title(codex.seg, claude.seg, now);
         let tooltip = unified_tooltip(
             &codex.seg,
             codex.selected.as_ref(),
@@ -359,11 +349,11 @@ pub async fn refresh_unified_tray(app: &AppHandle) {
         );
         paint(app, TRAY_ID, &title, &tooltip);
     } else {
-        let codex_title = combined_title(codex.seg, absent, now, prefs.compact_tray);
+        let codex_title = combined_title(codex.seg, absent, now);
         let codex_tip = unified_tooltip(&codex.seg, codex.selected.as_ref(), codex.updated_at, &absent, None, None, now);
         paint(app, CODEX_TRAY_ID, &codex_title, &codex_tip);
         if claude.present {
-            let claude_title = combined_title(absent, claude.seg, now, prefs.compact_tray);
+            let claude_title = combined_title(absent, claude.seg, now);
             let claude_tip = unified_tooltip(&absent, None, None, &claude.seg, claude.selected.as_ref(), claude.updated_at, now);
             paint(app, CLAUDE_TRAY_ID, &claude_title, &claude_tip);
         }
@@ -395,7 +385,7 @@ fn sync_menus(app: &AppHandle, prefs: &crate::prefs::AppPrefs, codex: &ProviderV
             .collect::<Vec<_>>()
             .join(",")
     };
-    let shared = format!("{}|{}", prefs.compact_tray, prefs.usage_alerts);
+    let shared = prefs.usage_alerts.to_string();
 
     if prefs.combined_tray {
         let sig = format!(
@@ -526,12 +516,6 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 let _ = codex.refresh_or_start().await;
                 let _ = claude.refresh().await;
             });
-        }
-        "toggle-compact" => {
-            app.state::<PrefsStore>()
-                .update(|prefs| prefs.compact_tray = !prefs.compact_tray);
-            app.state::<TrayMenuState>().invalidate();
-            refresh_tray(app);
         }
         "toggle-alerts" => {
             app.state::<PrefsStore>()
@@ -906,18 +890,13 @@ pub fn select_window<'a>(windows: &'a [TrayWindow], preference: &str) -> Option<
 
 /// Titles show percent REMAINING, mirroring what the Codex and Claude apps
 /// display, so the menu bar never disagrees with the app it mirrors.
-pub fn tray_title(
-    remaining_percent: Option<f64>,
-    resets_at: Option<u64>,
-    now_unix: u64,
-    compact: bool,
-) -> String {
+pub fn tray_title(remaining_percent: Option<f64>, resets_at: Option<u64>, now_unix: u64) -> String {
     let Some(remaining) = remaining_percent else {
         return String::new();
     };
     let percent = remaining.clamp(0.0, 100.0).round() as u32;
     match resets_at {
-        Some(target) if !compact && target > now_unix => {
+        Some(target) if target > now_unix => {
             format!("{percent}% · {}", format_countdown(target - now_unix))
         }
         _ => format!("{percent}%"),
@@ -945,31 +924,18 @@ fn segment_percent(seg: &MeterSegment) -> String {
     with_incoming_prefix(with_stale_marker(format!("{percent}%"), seg.stale), seg.incoming)
 }
 
-/// The combined menu-bar title, Codex first then Claude.
-///
-/// Compact reduces to a single bare percentage — for two providers, the
-/// most-cooked (lowest remaining), which is the number worth watching. Not
-/// compact, a lone provider keeps its countdown (there is room) and two
-/// providers show both percentages without countdowns so they fit.
-pub fn combined_title(codex: MeterSegment, claude: MeterSegment, now: u64, compact: bool) -> String {
+/// The combined (compact-layout) menu-bar title, Codex first then Claude. A
+/// lone provider keeps its countdown since there is room; two providers show
+/// both percentages without countdowns so they fit in one narrow item.
+pub fn combined_title(codex: MeterSegment, claude: MeterSegment, now: u64) -> String {
     let present: Vec<&MeterSegment> = [&codex, &claude]
         .into_iter()
         .filter(|seg| seg.present)
         .collect();
-    if present.is_empty() {
-        return String::new();
-    }
-    if compact {
-        // The lowest-remaining segment is the one a tight menu bar should keep.
-        let most_cooked = present
-            .iter()
-            .min_by(|a, b| a.remaining.partial_cmp(&b.remaining).unwrap_or(std::cmp::Ordering::Equal))
-            .expect("present is non-empty");
-        return segment_percent(most_cooked);
-    }
     match present.as_slice() {
+        [] => String::new(),
         [only] => {
-            let base = tray_title(Some(only.remaining), only.resets_at, now, false);
+            let base = tray_title(Some(only.remaining), only.resets_at, now);
             with_incoming_prefix(with_stale_marker(base, only.stale), only.incoming)
         }
         segments => segments
@@ -1059,12 +1025,12 @@ mod tests {
 
     #[test]
     fn title_shows_remaining_percent_and_countdown() {
-        assert_eq!(tray_title(Some(42.0), Some(4_661), 1_000, false), "42% · 1:01:01");
-        assert_eq!(tray_title(Some(42.0), Some(1_545), 1_000, false), "42% · 9:05");
-        assert_eq!(tray_title(Some(42.0), Some(200_000), 1_000, false), "42% · 2d 7h");
-        assert_eq!(tray_title(Some(42.0), None, 1_000, false), "42%");
-        assert_eq!(tray_title(Some(42.0), Some(900), 1_000, false), "42%");
-        assert_eq!(tray_title(None, Some(4_661), 1_000, false), "");
+        assert_eq!(tray_title(Some(42.0), Some(4_661), 1_000), "42% · 1:01:01");
+        assert_eq!(tray_title(Some(42.0), Some(1_545), 1_000), "42% · 9:05");
+        assert_eq!(tray_title(Some(42.0), Some(200_000), 1_000), "42% · 2d 7h");
+        assert_eq!(tray_title(Some(42.0), None, 1_000), "42%");
+        assert_eq!(tray_title(Some(42.0), Some(900), 1_000), "42%");
+        assert_eq!(tray_title(None, Some(4_661), 1_000), "");
     }
 
     #[test]
@@ -1084,35 +1050,25 @@ mod tests {
         let codex = MeterSegment { present: true, remaining: 62.0, resets_at: Some(9_000), incoming: false, stale: false };
         let claude = MeterSegment { present: true, remaining: 8.0, resets_at: Some(9_000), incoming: false, stale: false };
         // Two providers: percentages only, joined, no countdowns.
-        assert_eq!(combined_title(codex, claude, 1_000, false), "62% · 8%");
+        assert_eq!(combined_title(codex, claude, 1_000), "62% · 8%");
         // Markers still attach to the right segment.
         let stale_claude = MeterSegment { stale: true, ..claude };
-        assert_eq!(combined_title(codex, stale_claude, 1_000, false), "62% · ~8%");
+        assert_eq!(combined_title(codex, stale_claude, 1_000), "62% · ~8%");
         let incoming_codex = MeterSegment { incoming: true, ..codex };
-        assert_eq!(combined_title(incoming_codex, claude, 1_000, false), "⚡ 62% · 8%");
+        assert_eq!(combined_title(incoming_codex, claude, 1_000), "⚡ 62% · 8%");
     }
 
     #[test]
     fn combined_title_keeps_the_countdown_for_a_lone_provider() {
         let codex = MeterSegment { present: true, remaining: 62.0, resets_at: Some(4_661), incoming: false, stale: false };
         let absent = MeterSegment::default();
-        assert_eq!(combined_title(codex, absent, 1_000, false), "62% · 1:01:01");
-        assert_eq!(combined_title(codex, absent, 1_000, true), "62%");
+        // A lone provider has room for the countdown.
+        assert_eq!(combined_title(codex, absent, 1_000), "62% · 1:01:01");
         // Nothing present yields an empty title.
-        assert_eq!(combined_title(absent, absent, 1_000, false), "");
+        assert_eq!(combined_title(absent, absent, 1_000), "");
         // Claude-only (Codex still loading) shows just Claude.
         let claude = MeterSegment { present: true, remaining: 8.0, resets_at: None, incoming: false, stale: false };
-        assert_eq!(combined_title(absent, claude, 1_000, false), "8%");
-    }
-
-    #[test]
-    fn compact_collapses_two_providers_to_the_most_cooked() {
-        let codex = MeterSegment { present: true, remaining: 62.0, resets_at: Some(4_661), incoming: false, stale: false };
-        let claude = MeterSegment { present: true, remaining: 8.0, resets_at: None, incoming: false, stale: true };
-        // Compact: only the lowest-remaining number, with its marker.
-        assert_eq!(combined_title(codex, claude, 1_000, true), "~8%");
-        // Not compact: both, so toggling compact is always visible.
-        assert_eq!(combined_title(codex, claude, 1_000, false), "62% · ~8%");
+        assert_eq!(combined_title(absent, claude, 1_000), "8%");
     }
 
     #[test]
@@ -1154,12 +1110,6 @@ mod tests {
         assert_eq!(format_age(15 * 60), "15m");
         assert_eq!(format_age(3 * 3_600 + 25 * 60), "3h 25m");
         assert_eq!(format_age(50 * 3_600), "2d 2h");
-    }
-
-    #[test]
-    fn compact_title_drops_the_countdown() {
-        assert_eq!(tray_title(Some(42.0), Some(4_661), 1_000, true), "42%");
-        assert_eq!(tray_title(None, Some(4_661), 1_000, true), "");
     }
 
     #[test]

@@ -67,13 +67,6 @@ pub fn set_tray_window(app: AppHandle, provider: String, window: String) -> Resu
 }
 
 #[tauri::command]
-pub fn set_compact_tray(app: AppHandle, enabled: bool) {
-    app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.compact_tray = enabled);
-    crate::tray::apply_preference_change(&app);
-}
-
-#[tauri::command]
 pub fn set_usage_alerts(app: AppHandle, enabled: bool) {
     app.state::<crate::prefs::PrefsStore>()
         .update(|prefs| prefs.usage_alerts = enabled);

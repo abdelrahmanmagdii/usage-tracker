@@ -237,7 +237,6 @@ pub fn run() {
             commands::complete_onboarding,
             commands::get_tray_windows,
             commands::set_tray_window,
-            commands::set_compact_tray,
             commands::set_usage_alerts,
             commands::set_combined_tray,
             commands::get_autostart,

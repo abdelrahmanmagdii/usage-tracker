@@ -181,15 +181,9 @@ function StepSettings() {
             <Columns2 size={13} aria-hidden="true" />
           </span>
           <span>
-            Show both providers under one menu-bar icon, or give each its own.
-            One icon is less likely to get hidden when the bar is full.
-          </span>
-        </li>
-        <li>
-          <span className="onboard-bullet">%</span>
-          <span>
-            Compact mode trims to a single percentage — the most-used limit
-            when both meters share one icon — for a crowded menu bar.
+            <strong>Compact</strong> puts both providers under one menu-bar
+            icon; <strong>Extended</strong> gives each its own. Compact is less
+            likely to get hidden when the bar is full.
           </span>
         </li>
         <li>

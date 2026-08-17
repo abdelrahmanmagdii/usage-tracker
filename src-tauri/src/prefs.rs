@@ -10,16 +10,15 @@ pub const TRAY_WINDOW_AUTO: &str = "auto";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppPrefs {
-    /// Tray shows only the percentage, no countdown.
-    pub compact_tray: bool,
     /// Local notifications at 80%/95% used and when a window resets.
     pub usage_alerts: bool,
     /// Window the Codex meter follows.
     pub codex_tray_window: String,
     /// Window the Claude meter follows.
     pub claude_tray_window: String,
-    /// One combined menu-bar icon for both providers (true, the default, which
-    /// resists macOS hiding it on crowded bars) versus one icon per provider.
+    /// Compact layout: both providers under one menu-bar icon (the default,
+    /// which resists macOS hiding it on crowded bars). Extended (false) gives
+    /// each provider its own icon.
     pub combined_tray: bool,
     /// First-run walkthrough has been completed or skipped.
     pub onboarding_complete: bool,
@@ -28,7 +27,6 @@ pub struct AppPrefs {
 impl Default for AppPrefs {
     fn default() -> Self {
         Self {
-            compact_tray: false,
             usage_alerts: true,
             codex_tray_window: TRAY_WINDOW_AUTO.to_owned(),
             claude_tray_window: TRAY_WINDOW_AUTO.to_owned(),
@@ -79,9 +77,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_full_meter_with_alerts_on() {
+    fn defaults_are_compact_layout_with_alerts_on() {
         let prefs = AppPrefs::default();
-        assert!(!prefs.compact_tray);
+        assert!(prefs.combined_tray);
         assert!(prefs.usage_alerts);
         assert_eq!(prefs.codex_tray_window, TRAY_WINDOW_AUTO);
         assert_eq!(prefs.claude_tray_window, TRAY_WINDOW_AUTO);
@@ -90,10 +88,11 @@ mod tests {
 
     #[test]
     fn unknown_and_missing_keys_fall_back_to_defaults() {
-        // Preference files written by older builds must still load.
+        // Preference files written by older builds (including the retired
+        // compactTray key) must still load.
         let prefs: AppPrefs =
             serde_json::from_str(r#"{"compactTray":true,"claudeIncludeScoped":false}"#).unwrap();
-        assert!(prefs.compact_tray);
+        assert!(prefs.combined_tray);
         assert!(prefs.usage_alerts);
         assert_eq!(prefs.claude_tray_window, TRAY_WINDOW_AUTO);
     }
@@ -102,9 +101,9 @@ mod tests {
     fn update_persists_and_reloads() {
         let path = std::env::temp_dir().join(format!("usagebar-prefs-{}.json", std::process::id()));
         let store = PrefsStore::load(path.clone());
-        store.update(|prefs| prefs.compact_tray = true);
+        store.update(|prefs| prefs.combined_tray = false);
         let reloaded = PrefsStore::load(path.clone());
-        assert!(reloaded.get().compact_tray);
+        assert!(!reloaded.get().combined_tray);
         assert!(reloaded.get().usage_alerts);
         let _ = fs::remove_file(path);
     }
