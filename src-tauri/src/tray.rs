@@ -11,11 +11,13 @@ use crate::claude::ClaudeManager;
 use crate::codex::process::{CodexManager, ConnectionState};
 use crate::prefs::PrefsStore;
 
-/// One menu-bar item carries both providers. Two separate icons doubled our
-/// width, and macOS hides the lowest-priority status items first when the bar
-/// gets crowded (or collides with a notch) — which read as the Claude meter
-/// randomly vanishing. One narrow item is far less likely to be dropped.
+/// The combined menu-bar item carrying both providers. One narrow item resists
+/// macOS hiding it when the bar is crowded (or collides with a notch), which is
+/// why it is the default; the per-provider items below are the opt-in layout.
 pub const TRAY_ID: &str = "usagebar";
+/// Per-provider items, used only in the "two separate icons" layout.
+pub const CODEX_TRAY_ID: &str = "provider-codex";
+pub const CLAUDE_TRAY_ID: &str = "provider-claude";
 
 /// Unix timestamp (seconds) until which an announced-but-not-yet-landed reset
 /// is pending. While pending, the Codex tray title carries a ⚡ prefix so the
@@ -253,79 +255,192 @@ fn build_unified_menu(
     Menu::with_items(app, &items)
 }
 
-/// Reads both providers, repaints the shared tray title and tooltip, and
-/// rebuilds the menu only when its window lists or preferences actually change.
-pub async fn refresh_unified_tray(app: &AppHandle) {
-    let Some(tray) = app.tray_by_id(TRAY_ID) else {
-        return;
-    };
-    let prefs = app.state::<PrefsStore>().get();
-    let now = now_unix_seconds();
+/// A single provider's menu for the two-icon layout: its window picker, plus
+/// the app-wide toggles on the primary (Codex) item only.
+fn build_provider_menu(
+    app: &AppHandle,
+    provider: Provider,
+    windows: &[TrayWindow],
+    include_shared: bool,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    use tauri::menu::IsMenuItem;
 
-    let codex_state = app.state::<CodexManager>().inner().snapshot().await;
-    let codex_windows = collect_windows(codex_state.rate_limits.as_ref());
-    let codex_selected = select_window(&codex_windows, &prefs.codex_tray_window).cloned();
+    let prefs = app.state::<PrefsStore>().get();
+    let selected = match provider {
+        Provider::Codex => prefs.codex_tray_window.clone(),
+        Provider::Claude => prefs.claude_tray_window.clone(),
+    };
+    let refresh = MenuItem::with_id(app, "refresh-all", "Refresh", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let picker = window_picker(app, provider, windows, &selected)?;
+    let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
+
+    if !include_shared {
+        return Menu::with_items(app, &[&refresh, &separator, &picker, &separator, &quit]);
+    }
+
+    let compact = CheckMenuItem::with_id(app, "toggle-compact", "Compact Meter", true, prefs.compact_tray, None::<&str>)?;
+    let alerts = CheckMenuItem::with_id(app, "toggle-alerts", "Usage Alerts", true, prefs.usage_alerts, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(app, "toggle-autostart", "Launch at Login", true, app.autolaunch().is_enabled().unwrap_or(false), None::<&str>)?;
+    let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
+    let items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
+        &refresh, &separator, &picker, &separator, &compact, &alerts, &autostart, &separator, &walkthrough, &quit,
+    ];
+    Menu::with_items(app, &items)
+}
+
+/// A provider's rendered menu-bar state for one refresh.
+struct ProviderView {
+    seg: MeterSegment,
+    windows: Vec<TrayWindow>,
+    selected: Option<TrayWindow>,
+    updated_at: Option<u64>,
+    present: bool,
+}
+
+async fn codex_view(app: &AppHandle, prefs: &crate::prefs::AppPrefs, now: u64) -> ProviderView {
+    let state = app.state::<CodexManager>().inner().snapshot().await;
+    let windows = collect_windows(state.rate_limits.as_ref());
+    let selected = select_window(&windows, &prefs.codex_tray_window).cloned();
     let incoming = app
         .try_state::<ResetRadar>()
         .is_some_and(|radar| radar.incoming_at(now));
-    let codex_seg = MeterSegment {
-        present: codex_selected.is_some(),
-        remaining: codex_selected.as_ref().map(remaining_percent).unwrap_or(0.0),
-        resets_at: codex_selected.as_ref().and_then(|window| window.resets_at),
+    let seg = MeterSegment {
+        present: selected.is_some(),
+        remaining: selected.as_ref().map(remaining_percent).unwrap_or(0.0),
+        resets_at: selected.as_ref().and_then(|window| window.resets_at),
         incoming,
-        stale: stale_age(codex_state.updated_at, now).is_some(),
+        stale: stale_age(state.updated_at, now).is_some(),
     };
+    ProviderView { seg, windows, selected, updated_at: state.updated_at, present: true }
+}
 
-    let claude_state = app.state::<ClaudeManager>().inner().snapshot().await;
-    let claude_present = claude_state.connection != ConnectionState::CliNotFound;
-    let claude_windows = collect_windows(claude_state.rate_limits.as_ref());
-    let claude_selected = select_window(&claude_windows, &prefs.claude_tray_window).cloned();
-    let claude_seg = MeterSegment {
-        present: claude_present && claude_selected.is_some(),
-        remaining: claude_selected.as_ref().map(remaining_percent).unwrap_or(0.0),
-        resets_at: claude_selected.as_ref().and_then(|window| window.resets_at),
+async fn claude_view(app: &AppHandle, prefs: &crate::prefs::AppPrefs, now: u64) -> ProviderView {
+    let state = app.state::<ClaudeManager>().inner().snapshot().await;
+    let present = state.connection != ConnectionState::CliNotFound;
+    let windows = collect_windows(state.rate_limits.as_ref());
+    let selected = select_window(&windows, &prefs.claude_tray_window).cloned();
+    let seg = MeterSegment {
+        present: present && selected.is_some(),
+        remaining: selected.as_ref().map(remaining_percent).unwrap_or(0.0),
+        resets_at: selected.as_ref().and_then(|window| window.resets_at),
         incoming: false,
-        stale: stale_age(claude_state.updated_at, now).is_some(),
+        stale: stale_age(state.updated_at, now).is_some(),
     };
+    ProviderView { seg, windows, selected, updated_at: state.updated_at, present }
+}
 
-    let title = combined_title(codex_seg, claude_seg, now, prefs.compact_tray);
-    let _ = tray.set_title(Some(title.as_str()));
-    let _ = tray.set_tooltip(Some(
-        unified_tooltip(
-            &codex_seg,
-            codex_selected.as_ref(),
-            codex_state.updated_at,
-            &claude_seg,
-            claude_selected.as_ref(),
-            claude_state.updated_at,
+/// Repaints the menu bar in whichever layout the user chose, toggling the
+/// visibility of the combined item versus the per-provider items so only one
+/// layout is on screen at a time.
+pub async fn refresh_unified_tray(app: &AppHandle) {
+    let prefs = app.state::<PrefsStore>().get();
+    let now = now_unix_seconds();
+    let codex = codex_view(app, &prefs, now).await;
+    let claude = claude_view(app, &prefs, now).await;
+
+    // Only the active layout's items are visible; the others stay created but
+    // hidden so their menu handlers and click targets persist across toggles.
+    set_visible(app, TRAY_ID, prefs.combined_tray);
+    set_visible(app, CODEX_TRAY_ID, !prefs.combined_tray);
+    set_visible(app, CLAUDE_TRAY_ID, !prefs.combined_tray && claude.present);
+
+    let absent = MeterSegment::default();
+    if prefs.combined_tray {
+        let title = combined_title(codex.seg, claude.seg, now, prefs.compact_tray);
+        let tooltip = unified_tooltip(
+            &codex.seg,
+            codex.selected.as_ref(),
+            codex.updated_at,
+            &claude.seg,
+            claude.selected.as_ref(),
+            claude.updated_at,
             now,
-        )
-        .as_str(),
-    ));
+        );
+        paint(app, TRAY_ID, &title, &tooltip);
+    } else {
+        let codex_title = combined_title(codex.seg, absent, now, prefs.compact_tray);
+        let codex_tip = unified_tooltip(&codex.seg, codex.selected.as_ref(), codex.updated_at, &absent, None, None, now);
+        paint(app, CODEX_TRAY_ID, &codex_title, &codex_tip);
+        if claude.present {
+            let claude_title = combined_title(absent, claude.seg, now, prefs.compact_tray);
+            let claude_tip = unified_tooltip(&absent, None, None, &claude.seg, claude.selected.as_ref(), claude.updated_at, now);
+            paint(app, CLAUDE_TRAY_ID, &claude_title, &claude_tip);
+        }
+    }
 
-    // Rebuild the menu only when it would actually differ.
-    let signature = format!(
-        "{}|{}|{}|{}|{}|{claude_present}",
-        prefs.codex_tray_window,
-        prefs.claude_tray_window,
-        prefs.compact_tray,
-        prefs.usage_alerts,
-        [&codex_windows, &claude_windows]
+    sync_menus(app, &prefs, &codex, &claude);
+}
+
+fn set_visible(app: &AppHandle, id: &str, visible: bool) {
+    if let Some(tray) = app.tray_by_id(id) {
+        let _ = tray.set_visible(visible);
+    }
+}
+
+fn paint(app: &AppHandle, id: &str, title: &str, tooltip: &str) {
+    if let Some(tray) = app.tray_by_id(id) {
+        let _ = tray.set_title(Some(title));
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
+}
+
+/// Rebuilds whichever menus the active layout needs, but only when their window
+/// lists or preferences actually changed (native menu builds are not free).
+fn sync_menus(app: &AppHandle, prefs: &crate::prefs::AppPrefs, codex: &ProviderView, claude: &ProviderView) {
+    let windows_sig = |windows: &[TrayWindow]| {
+        windows
             .iter()
-            .flat_map(|list| list.iter())
             .map(|window| format!("{}={}", window.id, window.label))
             .collect::<Vec<_>>()
-            .join(","),
-    );
-    if !app.state::<TrayMenuState>().changed(TRAY_ID, &signature) {
+            .join(",")
+    };
+    let shared = format!("{}|{}", prefs.compact_tray, prefs.usage_alerts);
+
+    if prefs.combined_tray {
+        let sig = format!(
+            "combined|{}|{}|{shared}|{}|{}|{}",
+            prefs.codex_tray_window,
+            prefs.claude_tray_window,
+            windows_sig(&codex.windows),
+            windows_sig(&claude.windows),
+            claude.present,
+        );
+        rebuild_menu(app, TRAY_ID, sig, {
+            let codex_windows = codex.windows.clone();
+            let claude_windows = claude.windows.clone();
+            let claude_present = claude.present;
+            move |app| build_unified_menu(app, &codex_windows, &claude_windows, claude_present)
+        });
+    } else {
+        let codex_sig = format!("codex|{}|{shared}|{}", prefs.codex_tray_window, windows_sig(&codex.windows));
+        rebuild_menu(app, CODEX_TRAY_ID, codex_sig, {
+            let windows = codex.windows.clone();
+            move |app| build_provider_menu(app, Provider::Codex, &windows, true)
+        });
+        if claude.present {
+            let claude_sig = format!("claude|{}|{}", prefs.claude_tray_window, windows_sig(&claude.windows));
+            rebuild_menu(app, CLAUDE_TRAY_ID, claude_sig, {
+                let windows = claude.windows.clone();
+                move |app| build_provider_menu(app, Provider::Claude, &windows, false)
+            });
+        }
+    }
+}
+
+fn rebuild_menu<F>(app: &AppHandle, id: &'static str, signature: String, build: F)
+where
+    F: FnOnce(&AppHandle) -> tauri::Result<Menu<tauri::Wry>> + Send + 'static,
+{
+    if !app.state::<TrayMenuState>().changed(id, &signature) {
         return;
     }
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let Some(tray) = handle.tray_by_id(TRAY_ID) else {
+        let Some(tray) = handle.tray_by_id(id) else {
             return;
         };
-        match build_unified_menu(&handle, &codex_windows, &claude_windows, claude_present) {
+        match build(&handle) {
             Ok(menu) => {
                 let _ = tray.set_menu(Some(menu));
             }
@@ -454,32 +569,66 @@ fn now_unix_seconds() -> u64 {
         .as_secs()
 }
 
+/// Every tray item toggles the popover on a left click.
+fn on_left_click(tray: &tauri::tray::TrayIcon, event: TrayIconEvent) {
+    if let TrayIconEvent::Click {
+        button: MouseButton::Left,
+        button_state: MouseButtonState::Up,
+        ..
+    } = event
+    {
+        toggle_main_window(tray.app_handle());
+    }
+}
+
 pub fn setup(app: &App) -> tauri::Result<()> {
-    let menu = build_unified_menu(&app.handle().clone(), &[], &[], false)?;
+    let handle = app.handle().clone();
+    let combined = app.state::<PrefsStore>().get().combined_tray;
+
+    // The combined item also owns the single global menu-event handler that
+    // serves every item's menu, so it is always created (just hidden when the
+    // two-icon layout is active).
+    let unified_menu = build_unified_menu(&handle, &[], &[], false)?;
     TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("UsageBar")
         .icon(usagebar_tray_icon())
         .icon_as_template(false)
-        .menu(&menu)
+        .menu(&unified_menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                toggle_main_window(tray.app_handle());
-            }
-        })
+        .on_tray_icon_event(on_left_click)
         .build(app)?;
+
+    // Codex always exists, so its per-provider item is built up front (hidden
+    // unless the two-icon layout is active). Claude's is built on first login.
+    let codex_menu = build_provider_menu(&handle, Provider::Codex, &[], true)?;
+    TrayIconBuilder::with_id(CODEX_TRAY_ID)
+        .tooltip("Codex usage")
+        .icon(codex_tray_icon())
+        .icon_as_template(false)
+        .menu(&codex_menu)
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(on_left_click)
+        .build(app)?;
+    set_visible(&handle, TRAY_ID, combined);
+    set_visible(&handle, CODEX_TRAY_ID, !combined);
     Ok(())
 }
 
-/// The single tray already carries both providers, so a Claude login appearing
-/// just needs the menu rebuilt to add its picker — no second icon is created.
+/// Builds the Claude per-provider item on first login so the two-icon layout
+/// has one to show. In the combined layout it stays created but hidden.
 pub fn ensure_claude_tray(app: &AppHandle) -> tauri::Result<()> {
+    if app.tray_by_id(CLAUDE_TRAY_ID).is_none() {
+        let menu = build_provider_menu(app, Provider::Claude, &[], false)?;
+        TrayIconBuilder::with_id(CLAUDE_TRAY_ID)
+            .tooltip("Claude Code usage")
+            .icon(claude_tray_icon())
+            .icon_as_template(false)
+            .menu(&menu)
+            .show_menu_on_left_click(false)
+            .on_tray_icon_event(on_left_click)
+            .build(app)?;
+    }
     app.state::<TrayMenuState>().invalidate();
     refresh_tray(app);
     Ok(())

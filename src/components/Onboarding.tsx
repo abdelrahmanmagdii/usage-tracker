@@ -8,6 +8,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Columns2,
   KeyRound,
   MousePointerClick,
   Radio,
@@ -173,6 +174,15 @@ function StepSettings() {
           <span>
             Pick which limit each meter tracks. By default it follows whichever
             one you are closest to using up.
+          </span>
+        </li>
+        <li>
+          <span className="onboard-bullet">
+            <Columns2 size={13} aria-hidden="true" />
+          </span>
+          <span>
+            Show both providers under one menu-bar icon, or give each its own.
+            One icon is less likely to get hidden when the bar is full.
           </span>
         </li>
         <li>

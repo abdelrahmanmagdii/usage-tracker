@@ -80,6 +80,14 @@ pub fn set_usage_alerts(app: AppHandle, enabled: bool) {
     crate::tray::apply_preference_change(&app);
 }
 
+/// `true` = one combined menu-bar icon; `false` = one icon per provider.
+#[tauri::command]
+pub fn set_combined_tray(app: AppHandle, enabled: bool) {
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.combined_tray = enabled);
+    crate::tray::apply_preference_change(&app);
+}
+
 #[tauri::command]
 pub fn get_autostart(app: AppHandle) -> bool {
     use tauri_plugin_autostart::ManagerExt;

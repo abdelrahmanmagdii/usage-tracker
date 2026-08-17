@@ -14,7 +14,7 @@ The menu bar shows one live meter per provider: a tiny provider mark plus a `42%
 
 *Demo and screenshots use preview data.*
 
-Open **Settings** in the popover (or right-click a menu-bar icon) to choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — plus **Compact Meter** (percentage only), **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), and **Launch at Login**.
+By default both providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude), which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **two icons**, one per provider, and to choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — plus **Compact Meter** (percentage only), **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), and **Launch at Login**.
 
 ## Install
 

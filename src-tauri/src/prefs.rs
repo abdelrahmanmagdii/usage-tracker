@@ -18,6 +18,9 @@ pub struct AppPrefs {
     pub codex_tray_window: String,
     /// Window the Claude meter follows.
     pub claude_tray_window: String,
+    /// One combined menu-bar icon for both providers (true, the default, which
+    /// resists macOS hiding it on crowded bars) versus one icon per provider.
+    pub combined_tray: bool,
     /// First-run walkthrough has been completed or skipped.
     pub onboarding_complete: bool,
 }
@@ -29,6 +32,7 @@ impl Default for AppPrefs {
             usage_alerts: true,
             codex_tray_window: TRAY_WINDOW_AUTO.to_owned(),
             claude_tray_window: TRAY_WINDOW_AUTO.to_owned(),
+            combined_tray: true,
             onboarding_complete: false,
         }
     }

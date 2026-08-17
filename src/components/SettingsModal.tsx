@@ -14,6 +14,7 @@ type AppPrefs = {
   usageAlerts: boolean;
   codexTrayWindow: string;
   claudeTrayWindow: string;
+  combinedTray: boolean;
 };
 
 const AUTO = "auto";
@@ -22,6 +23,7 @@ const DEFAULT_PREFS: AppPrefs = {
   usageAlerts: true,
   codexTrayWindow: AUTO,
   claudeTrayWindow: AUTO,
+  combinedTray: true,
 };
 
 const PREVIEW_WINDOWS: Record<"codex" | "claude", TrayWindow[]> = {
@@ -186,6 +188,37 @@ export function SettingsModal({
             selected={prefs.claudeTrayWindow}
             onSelect={(id) => chooseWindow("claude", id)}
           />
+
+          <div className="setting-group">
+            <span className="setting-label">Menu bar</span>
+            <div className="layout-choice" role="radiogroup" aria-label="Menu bar layout">
+              {[
+                { value: true, name: "One icon", detail: "Both meters share a single icon." },
+                { value: false, name: "Two icons", detail: "A separate icon per provider." },
+              ].map((option) => {
+                const active = prefs.combinedTray === option.value;
+                return (
+                  <button
+                    key={option.name}
+                    className={`layout-option${active ? " selected" : ""}`}
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => {
+                      setPrefs((current) => ({ ...current, combinedTray: option.value }));
+                      if (inTauri()) void invoke("set_combined_tray", { enabled: option.value });
+                    }}
+                  >
+                    <strong>{option.name}</strong>
+                    <small>{option.detail}</small>
+                    {active ? <Check size={14} aria-hidden="true" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="setting-hint">
+              One icon is less likely to be hidden when the menu bar is crowded.
+            </p>
+          </div>
 
           <div className="setting-group">
             <span className="setting-label">General</span>
