@@ -945,18 +945,31 @@ fn segment_percent(seg: &MeterSegment) -> String {
     with_incoming_prefix(with_stale_marker(format!("{percent}%"), seg.stale), seg.incoming)
 }
 
-/// The combined menu-bar title, Codex first then Claude. A lone provider keeps
-/// its countdown (there is room); two providers drop the countdowns so both
-/// percentages fit in one narrow item — the whole point of merging the icons.
+/// The combined menu-bar title, Codex first then Claude.
+///
+/// Compact reduces to a single bare percentage — for two providers, the
+/// most-cooked (lowest remaining), which is the number worth watching. Not
+/// compact, a lone provider keeps its countdown (there is room) and two
+/// providers show both percentages without countdowns so they fit.
 pub fn combined_title(codex: MeterSegment, claude: MeterSegment, now: u64, compact: bool) -> String {
     let present: Vec<&MeterSegment> = [&codex, &claude]
         .into_iter()
         .filter(|seg| seg.present)
         .collect();
+    if present.is_empty() {
+        return String::new();
+    }
+    if compact {
+        // The lowest-remaining segment is the one a tight menu bar should keep.
+        let most_cooked = present
+            .iter()
+            .min_by(|a, b| a.remaining.partial_cmp(&b.remaining).unwrap_or(std::cmp::Ordering::Equal))
+            .expect("present is non-empty");
+        return segment_percent(most_cooked);
+    }
     match present.as_slice() {
-        [] => String::new(),
         [only] => {
-            let base = tray_title(Some(only.remaining), only.resets_at, now, compact);
+            let base = tray_title(Some(only.remaining), only.resets_at, now, false);
             with_incoming_prefix(with_stale_marker(base, only.stale), only.incoming)
         }
         segments => segments
@@ -1090,6 +1103,16 @@ mod tests {
         // Claude-only (Codex still loading) shows just Claude.
         let claude = MeterSegment { present: true, remaining: 8.0, resets_at: None, incoming: false, stale: false };
         assert_eq!(combined_title(absent, claude, 1_000, false), "8%");
+    }
+
+    #[test]
+    fn compact_collapses_two_providers_to_the_most_cooked() {
+        let codex = MeterSegment { present: true, remaining: 62.0, resets_at: Some(4_661), incoming: false, stale: false };
+        let claude = MeterSegment { present: true, remaining: 8.0, resets_at: None, incoming: false, stale: true };
+        // Compact: only the lowest-remaining number, with its marker.
+        assert_eq!(combined_title(codex, claude, 1_000, true), "~8%");
+        // Not compact: both, so toggling compact is always visible.
+        assert_eq!(combined_title(codex, claude, 1_000, false), "62% · ~8%");
     }
 
     #[test]

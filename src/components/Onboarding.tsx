@@ -49,8 +49,8 @@ function StepWelcome() {
         <li>
           <span className="onboard-bullet">%</span>
           <span>
-            The number is <strong>how much you have used</strong>, not how much
-            is left. That is what Codex and Claude Code show you too.
+            The number is <strong>how much you have left</strong>, the same as
+            the Codex and Claude Code apps show you.
           </span>
         </li>
         <li>
@@ -188,8 +188,8 @@ function StepSettings() {
         <li>
           <span className="onboard-bullet">%</span>
           <span>
-            Compact mode drops the countdown and leaves just the percentage, if
-            your menu bar is crowded.
+            Compact mode trims to a single percentage — the most-used limit
+            when both meters share one icon — for a crowded menu bar.
           </span>
         </li>
         <li>

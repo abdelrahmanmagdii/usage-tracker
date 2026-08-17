@@ -224,7 +224,7 @@ export function SettingsModal({
             <span className="setting-label">General</span>
             <Toggle
               label="Compact meter"
-              detail="Show just the percentage, no countdown."
+              detail="Just the percentage — the most-used limit when both share one icon."
               checked={prefs.compactTray}
               onChange={(next) => {
                 setPrefs((current) => ({ ...current, compactTray: next }));
