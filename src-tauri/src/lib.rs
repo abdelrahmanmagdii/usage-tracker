@@ -97,6 +97,7 @@ pub fn run() {
             app.manage(alerts::UsageAlerts::default());
             app.manage(tray::ResetRadar::default());
             app.manage(tray::TrayMenuState::default());
+            app.manage(tray::TrayRenderCache::default());
             let manager = CodexManager::new(app.handle().clone());
             app.manage(manager.clone());
             let claude_manager = ClaudeManager::new(app.handle().clone());
@@ -135,15 +136,17 @@ pub fn run() {
                 window.set_focus()?;
             }
 
-            let tray_ticker = manager.clone();
-            let claude_ticker = claude_manager.clone();
+            // Both providers share one tray coordinator, so a single repaint per
+            // tick keeps the menu-bar countdown live. Refreshing once (rather
+            // than once per manager, as before) halves the per-second work and
+            // removes a redundant second pass over the same AppKit items.
+            let tray_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     interval.tick().await;
-                    tray_ticker.update_tray().await;
-                    claude_ticker.update_tray().await;
+                    tray::refresh_unified_tray(&tray_handle).await;
                 }
             });
 

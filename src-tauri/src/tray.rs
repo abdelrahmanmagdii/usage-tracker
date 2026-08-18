@@ -151,6 +151,17 @@ impl TrayMenuState {
     }
 }
 
+/// Caches the last state applied to each tray so the once-per-second tick only
+/// reaches into AppKit when a title, tooltip, or visibility actually changed —
+/// and always does so on the main thread, which is the only thread an
+/// `NSStatusItem` may be mutated from. Skipping the visibility calls in steady
+/// state is what stops the menu-bar items from flickering or dropping out.
+#[derive(Default)]
+pub struct TrayRenderCache {
+    visible: std::sync::Mutex<std::collections::HashMap<&'static str, bool>>,
+    labels: std::sync::Mutex<std::collections::HashMap<&'static str, (String, String)>>,
+}
+
 /// Re-syncs the tray after a preference changes anywhere (tray menu or the
 /// in-app settings panel), so the title and menu checkmarks stay in agreement.
 pub fn apply_preference_change(app: &AppHandle) {
@@ -374,17 +385,44 @@ pub async fn refresh_unified_tray(app: &AppHandle) {
     sync_menus(app, &prefs, &codex, &claude);
 }
 
-fn set_visible(app: &AppHandle, id: &str, visible: bool) {
-    if let Some(tray) = app.tray_by_id(id) {
-        let _ = tray.set_visible(visible);
+fn set_visible(app: &AppHandle, id: &'static str, visible: bool) {
+    {
+        let cache = app.state::<TrayRenderCache>();
+        let mut map = cache.visible.lock().expect("tray render cache poisoned");
+        if map.get(id) == Some(&visible) {
+            return;
+        }
+        map.insert(id, visible);
     }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(tray) = handle.tray_by_id(id) {
+            let _ = tray.set_visible(visible);
+        }
+    });
 }
 
-fn paint(app: &AppHandle, id: &str, title: &str, tooltip: &str) {
-    if let Some(tray) = app.tray_by_id(id) {
-        let _ = tray.set_title(Some(title));
-        let _ = tray.set_tooltip(Some(tooltip));
+fn paint(app: &AppHandle, id: &'static str, title: &str, tooltip: &str) {
+    {
+        let cache = app.state::<TrayRenderCache>();
+        let mut map = cache.labels.lock().expect("tray render cache poisoned");
+        if map
+            .get(id)
+            .is_some_and(|(last_title, last_tip)| last_title == title && last_tip == tooltip)
+        {
+            return;
+        }
+        map.insert(id, (title.to_owned(), tooltip.to_owned()));
     }
+    let handle = app.clone();
+    let title = title.to_owned();
+    let tooltip = tooltip.to_owned();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(tray) = handle.tray_by_id(id) {
+            let _ = tray.set_title(Some(title));
+            let _ = tray.set_tooltip(Some(tooltip));
+        }
+    });
 }
 
 /// Rebuilds whichever menus the active layout needs, but only when their window
