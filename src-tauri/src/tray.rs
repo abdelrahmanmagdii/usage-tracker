@@ -226,7 +226,13 @@ fn build_unified_menu(
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let prefs = app.state::<PrefsStore>().get();
     let refresh = MenuItem::with_id(app, "refresh-all", "Refresh", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
+    // Each separator must be its own instance: a `PredefinedMenuItem` wraps a
+    // single native menu item, and macOS cannot place one item at several
+    // positions, so reusing one dropped whatever followed it (the Menu Bar
+    // Layout submenu, intermittently) from the rebuilt menu.
+    let sep_after_refresh = PredefinedMenuItem::separator(app)?;
+    let sep_after_pickers = PredefinedMenuItem::separator(app)?;
+    let sep_after_toggles = PredefinedMenuItem::separator(app)?;
 
     let codex_picker = window_picker(app, Provider::Codex, codex_windows, &prefs.codex_tray_window)?;
     let claude_picker =
@@ -253,30 +259,32 @@ fn build_unified_menu(
     let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
 
     use tauri::menu::IsMenuItem;
-    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&refresh, &separator, &codex_picker];
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&refresh, &sep_after_refresh, &codex_picker];
     // The Claude picker only appears once a Claude login has been found.
     if claude_present {
         items.push(&claude_picker);
     }
     items.extend([
         &layout as &dyn IsMenuItem<tauri::Wry>,
-        &separator,
+        &sep_after_pickers,
         &alerts,
         &autostart,
-        &separator,
+        &sep_after_toggles,
         &walkthrough,
         &quit,
     ]);
     Menu::with_items(app, &items)
 }
 
-/// A single provider's menu for the two-icon layout: its window picker, plus
-/// the app-wide toggles on the primary (Codex) item only.
+/// A single provider's menu for the two-icon layout: its own window picker plus
+/// the full app-wide section (layout switch, toggles, setup guide, quit). Every
+/// provider icon carries the whole section so either one can reach every
+/// setting — right-clicking Claude must not be a dead end that can't even
+/// switch back to the compact layout.
 fn build_provider_menu(
     app: &AppHandle,
     provider: Provider,
     windows: &[TrayWindow],
-    include_shared: bool,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     use tauri::menu::IsMenuItem;
 
@@ -286,20 +294,19 @@ fn build_provider_menu(
         Provider::Claude => prefs.claude_tray_window.clone(),
     };
     let refresh = MenuItem::with_id(app, "refresh-all", "Refresh", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
+    // Distinct separator instances — see build_unified_menu; one shared item
+    // cannot occupy several menu positions on macOS.
+    let sep_after_refresh = PredefinedMenuItem::separator(app)?;
+    let sep_after_picker = PredefinedMenuItem::separator(app)?;
+    let sep_after_toggles = PredefinedMenuItem::separator(app)?;
     let picker = window_picker(app, provider, windows, &selected)?;
-    let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
-
-    if !include_shared {
-        return Menu::with_items(app, &[&refresh, &separator, &picker, &separator, &quit]);
-    }
-
     let layout = layout_submenu(app, prefs.combined_tray)?;
     let alerts = CheckMenuItem::with_id(app, "toggle-alerts", "Usage Alerts", true, prefs.usage_alerts, None::<&str>)?;
     let autostart = CheckMenuItem::with_id(app, "toggle-autostart", "Launch at Login", true, app.autolaunch().is_enabled().unwrap_or(false), None::<&str>)?;
     let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
     let items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
-        &refresh, &separator, &picker, &layout, &separator, &alerts, &autostart, &separator, &walkthrough, &quit,
+        &refresh, &sep_after_refresh, &picker, &layout, &sep_after_picker, &alerts, &autostart, &sep_after_toggles, &walkthrough, &quit,
     ];
     Menu::with_items(app, &items)
 }
@@ -458,13 +465,15 @@ fn sync_menus(app: &AppHandle, prefs: &crate::prefs::AppPrefs, codex: &ProviderV
         let codex_sig = format!("codex|{}|{shared}|{}", prefs.codex_tray_window, windows_sig(&codex.windows));
         rebuild_menu(app, CODEX_TRAY_ID, codex_sig, {
             let windows = codex.windows.clone();
-            move |app| build_provider_menu(app, Provider::Codex, &windows, true)
+            move |app| build_provider_menu(app, Provider::Codex, &windows)
         });
         if claude.present {
-            let claude_sig = format!("claude|{}|{}", prefs.claude_tray_window, windows_sig(&claude.windows));
+            // The shared section now lives on this menu too, so its signature
+            // must track the shared state or the toggles' checkmarks go stale.
+            let claude_sig = format!("claude|{}|{shared}|{}", prefs.claude_tray_window, windows_sig(&claude.windows));
             rebuild_menu(app, CLAUDE_TRAY_ID, claude_sig, {
                 let windows = claude.windows.clone();
-                move |app| build_provider_menu(app, Provider::Claude, &windows, false)
+                move |app| build_provider_menu(app, Provider::Claude, &windows)
             });
         }
     }
@@ -645,7 +654,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
 
     // Codex always exists, so its per-provider item is built up front (hidden
     // unless the two-icon layout is active). Claude's is built on first login.
-    let codex_menu = build_provider_menu(&handle, Provider::Codex, &[], true)?;
+    let codex_menu = build_provider_menu(&handle, Provider::Codex, &[])?;
     TrayIconBuilder::with_id(CODEX_TRAY_ID)
         .tooltip("Codex usage")
         .icon(codex_tray_icon())
@@ -663,7 +672,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
 /// has one to show. In the combined layout it stays created but hidden.
 pub fn ensure_claude_tray(app: &AppHandle) -> tauri::Result<()> {
     if app.tray_by_id(CLAUDE_TRAY_ID).is_none() {
-        let menu = build_provider_menu(app, Provider::Claude, &[], false)?;
+        let menu = build_provider_menu(app, Provider::Claude, &[])?;
         TrayIconBuilder::with_id(CLAUDE_TRAY_ID)
             .tooltip("Claude Code usage")
             .icon(claude_tray_icon())
