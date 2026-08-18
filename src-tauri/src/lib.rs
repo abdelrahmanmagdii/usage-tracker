@@ -70,6 +70,36 @@ fn disable_app_nap() {
     std::mem::forget(activity);
 }
 
+/// Brings the app to the foreground so a just-shown window becomes key.
+///
+/// An `Accessory`-policy (menu-bar) app is not activated when a window is
+/// merely shown, so on modern macOS the window stays non-key: its traffic-light
+/// buttons render inactive and the first click on them is swallowed as an
+/// activation click rather than a press. Tauri's `set_focus` tries to fix this
+/// with `activateIgnoringOtherApps:`, which is deprecated and unreliable on
+/// recent macOS. Activating the running application directly is dependable back
+/// to 10.6 and makes the window controls live immediately.
+#[cfg(target_os = "macos")]
+pub(crate) fn activate_app() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    // Window activation must happen on the main thread.
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    // macOS 14 replaced `activateIgnoringOtherApps:` (now a no-op) with the
+    // cooperative `activate`, which the system grants for user-initiated events
+    // like the status-item click that shows this window.
+    if objc2::available!(macos = 14.0) {
+        app.activate();
+    } else {
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

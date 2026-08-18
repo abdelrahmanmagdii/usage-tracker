@@ -86,6 +86,8 @@ fn toggle_main_window(app: &AppHandle) {
             let _ = window.hide();
         } else {
             let _ = window.show();
+            #[cfg(target_os = "macos")]
+            crate::activate_app();
             let _ = window.set_focus();
         }
     }
@@ -593,6 +595,8 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         "show-onboarding" => {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
+                #[cfg(target_os = "macos")]
+                crate::activate_app();
                 let _ = window.set_focus();
             }
             let _ = app.emit("usagebar://show-onboarding", ());
