@@ -162,6 +162,15 @@ fn window_menu_id(provider: Provider, window_id: &str) -> String {
     format!("win|{}|{}", provider.key(), window_id)
 }
 
+/// The Compact/Extended layout picker, shown on the shared (primary) menu.
+fn layout_submenu(app: &AppHandle, combined: bool) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+    use tauri::menu::{IsMenuItem, Submenu};
+    let compact = CheckMenuItem::with_id(app, "layout-compact", "Compact (one icon)", true, combined, None::<&str>)?;
+    let extended = CheckMenuItem::with_id(app, "layout-extended", "Extended (two icons)", true, !combined, None::<&str>)?;
+    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&compact, &extended];
+    Submenu::with_items(app, "Menu Bar Layout", true, &refs)
+}
+
 /// A provider's "Menu Bar Shows" submenu: "Most used" plus one entry per window.
 fn window_picker(
     app: &AppHandle,
@@ -226,6 +235,7 @@ fn build_unified_menu(
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
+    let layout = layout_submenu(app, prefs.combined_tray)?;
     let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
 
@@ -236,7 +246,8 @@ fn build_unified_menu(
         items.push(&claude_picker);
     }
     items.extend([
-        &separator as &dyn IsMenuItem<tauri::Wry>,
+        &layout as &dyn IsMenuItem<tauri::Wry>,
+        &separator,
         &alerts,
         &autostart,
         &separator,
@@ -270,11 +281,12 @@ fn build_provider_menu(
         return Menu::with_items(app, &[&refresh, &separator, &picker, &separator, &quit]);
     }
 
+    let layout = layout_submenu(app, prefs.combined_tray)?;
     let alerts = CheckMenuItem::with_id(app, "toggle-alerts", "Usage Alerts", true, prefs.usage_alerts, None::<&str>)?;
     let autostart = CheckMenuItem::with_id(app, "toggle-autostart", "Launch at Login", true, app.autolaunch().is_enabled().unwrap_or(false), None::<&str>)?;
     let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
     let items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
-        &refresh, &separator, &picker, &separator, &alerts, &autostart, &separator, &walkthrough, &quit,
+        &refresh, &separator, &picker, &layout, &separator, &alerts, &autostart, &separator, &walkthrough, &quit,
     ];
     Menu::with_items(app, &items)
 }
@@ -385,7 +397,7 @@ fn sync_menus(app: &AppHandle, prefs: &crate::prefs::AppPrefs, codex: &ProviderV
             .collect::<Vec<_>>()
             .join(",")
     };
-    let shared = prefs.usage_alerts.to_string();
+    let shared = format!("{}|{}", prefs.usage_alerts, prefs.combined_tray);
 
     if prefs.combined_tray {
         let sig = format!(
@@ -516,6 +528,12 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 let _ = codex.refresh_or_start().await;
                 let _ = claude.refresh().await;
             });
+        }
+        "layout-compact" | "layout-extended" => {
+            let combined = id == "layout-compact";
+            app.state::<PrefsStore>()
+                .update(|prefs| prefs.combined_tray = combined);
+            apply_preference_change(app);
         }
         "toggle-alerts" => {
             app.state::<PrefsStore>()
