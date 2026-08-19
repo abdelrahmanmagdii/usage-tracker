@@ -139,7 +139,13 @@ pub fn run() {
                 use window_vibrancy::{
                     apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
                 };
-                let _ = window.set_minimizable(true);
+                // Minimize and zoom have no meaning for a menu-bar popover (no
+                // Dock icon to restore a minimized window from), so both stay
+                // disabled — greyed out — leaving only the close button active,
+                // which hides the window. This override also stops the config
+                // from being re-enabled at runtime.
+                let _ = window.set_minimizable(false);
+                let _ = window.set_maximizable(false);
                 let _ = window.set_closable(true);
                 let _ = window.set_always_on_top(false);
                 #[cfg(debug_assertions)]

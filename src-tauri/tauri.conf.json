@@ -22,7 +22,7 @@
         "maxWidth": 388,
         "maxHeight": 720,
         "resizable": false,
-        "minimizable": true,
+        "minimizable": false,
         "closable": true,
         "maximizable": false,
         "fullscreen": false,
