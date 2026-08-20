@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Clock3, Power, RefreshCw, Settings2, Share2, ShieldCheck, Ticket } from "lucide-react";
+import { ChevronUp, Clock3, Power, RefreshCw, Settings2, Share2, ShieldCheck, Ticket } from "lucide-react";
 import { MeterMark } from "./components/MeterMark";
 import { meterTone } from "./components/EdgeMeter";
 import { QuotaSection } from "./components/QuotaSection";
@@ -79,6 +79,30 @@ export default function App() {
       : null;
     void invoke("set_reset_incoming", { until });
   }, [resetEvents]);
+
+  // Esc unwinds the topmost layer first — share card, settings, onboarding —
+  // and only then dismisses the popover itself, like any macOS popover.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (sharing) {
+        setSharing(false);
+        return;
+      }
+      if (settingsOpen) {
+        setSettingsOpen(false);
+        return;
+      }
+      if (onboarding) {
+        setOnboarding(false);
+        if ("__TAURI_INTERNALS__" in window) void invoke("complete_onboarding");
+        return;
+      }
+      if ("__TAURI_INTERNALS__" in window) void invoke("hide_window");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sharing, settingsOpen, onboarding]);
   const connected = state.connection === "connected";
   const mostCooked = buckets.reduce<(typeof buckets)[number] | undefined>(
     (lowest, bucket) => !lowest || bucket.remainingPercent < lowest.remainingPercent ? bucket : lowest,
@@ -87,11 +111,33 @@ export default function App() {
 
   return (
     <main className="app-shell" data-tauri-drag-region>
+      {/* The traffic-light corner: where macOS puts window chrome, so it is
+          where the eye goes for "make this window go away". Hiding the popover
+          sends it back to the menu bar — the app keeps running, which is what
+          separates this from the power button in the footer. The chevron
+          points at that home; the label spells it out on hover. */}
+      <button
+        type="button"
+        className="dismiss-button"
+        aria-label="Hide UsageBar to the menu bar"
+        onClick={() => {
+          if ("__TAURI_INTERNALS__" in window) void invoke("hide_window");
+        }}
+      >
+        <ChevronUp size={15} strokeWidth={2.5} aria-hidden="true" />
+        <span className="dismiss-label">Hide to menu bar</span>
+      </button>
       <header
         className="app-header"
         data-tauri-drag-region
         onMouseDown={(event) => {
-          if (event.button === 0 && "__TAURI_INTERNALS__" in window) {
+          // Only drag from a surface that opts in. Without this check the
+          // window-button corner (and any control in the header) starts a drag
+          // on mousedown and the click never reaches what it was aimed at.
+          if (event.button !== 0) return;
+          if (!(event.target instanceof Element)) return;
+          if (!event.target.hasAttribute("data-tauri-drag-region")) return;
+          if ("__TAURI_INTERNALS__" in window) {
             void getCurrentWindow().startDragging();
           }
         }}

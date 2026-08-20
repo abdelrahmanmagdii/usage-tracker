@@ -89,6 +89,9 @@ pub(crate) fn activate_app() {
         return;
     };
     let app = NSApplication::sharedApplication(mtm);
+    // Dismissing the popover hides the whole application (see `hide_app`), and
+    // a hidden app stays hidden through `activate` alone.
+    app.unhide(None);
     // macOS 14 replaced `activateIgnoringOtherApps:` (now a no-op) with the
     // cooperative `activate`, which the system grants for user-initiated events
     // like the status-item click that shows this window.
@@ -98,6 +101,56 @@ pub(crate) fn activate_app() {
         #[allow(deprecated)]
         app.activateIgnoringOtherApps(true);
     }
+}
+
+/// Removes the native window buttons entirely; the toolbar's own dismiss
+/// control replaces them.
+///
+/// The popover's titlebar strip is transparent — the glass card starts below
+/// it — so the traffic lights floated over a see-through area where a click a
+/// few pixels wide of a button passed through the window to whatever app sat
+/// behind, activating it. That read as "the window slipped behind". Minimize
+/// and zoom had nothing to do here anyway: an `Accessory` app has no Dock icon
+/// to restore a miniaturized window from, and the window is fixed-size.
+#[cfg(target_os = "macos")]
+fn hide_native_window_buttons(window: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowButton};
+
+    let Ok(ptr) = window.ns_window() else {
+        return;
+    };
+    if ptr.is_null() {
+        return;
+    }
+    // Tauri hands back the `NSWindow` backing this webview window, and setup
+    // runs on the main thread, where AppKit views may be touched.
+    let ns_window: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+    for kind in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        if let Some(button) = ns_window.standardWindowButton(kind) {
+            button.setHidden(true);
+        }
+    }
+}
+
+/// Dismisses the popover the way the menu bar item does: the window goes away
+/// and UsageBar stops being the active app.
+///
+/// `hide()` on its own only orders the window out, leaving UsageBar frontmost
+/// with the menu bar and keyboard focus still its own, so the window the user
+/// came from never comes back forward. Hiding the application returns both.
+#[cfg(target_os = "macos")]
+pub(crate) fn hide_app() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    NSApplication::sharedApplication(mtm).hide(None);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -139,15 +192,10 @@ pub fn run() {
                 use window_vibrancy::{
                     apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
                 };
-                // Minimize and zoom have no meaning for a menu-bar popover (no
-                // Dock icon to restore a minimized window from), so both stay
-                // disabled — greyed out — leaving only the close button active,
-                // which hides the window. This override also stops the config
-                // from being re-enabled at runtime.
-                let _ = window.set_minimizable(false);
-                let _ = window.set_maximizable(false);
-                let _ = window.set_closable(true);
-                let _ = window.set_always_on_top(false);
+                // Minimize/zoom/closable are all set in tauri.conf.json, which
+                // applies them when the window is created. They are deliberately
+                // not re-set at runtime here.
+                hide_native_window_buttons(&window);
                 #[cfg(debug_assertions)]
                 if let Err(error) = apply_vibrancy(
                     &window,
@@ -261,9 +309,13 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Cmd+W and any programmatic close still route through here; the
+            // window is a popover, so it hides instead of being destroyed.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                #[cfg(target_os = "macos")]
+                hide_app();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -281,6 +333,7 @@ pub fn run() {
             commands::get_autostart,
             commands::set_autostart,
             commands::write_share_card,
+            commands::hide_window,
             commands::quit_app
         ])
         .run(tauri::generate_context!())

@@ -141,3 +141,14 @@ pub async fn quit_app(app: AppHandle) {
     manager.shutdown().await;
     app.exit(0);
 }
+
+/// Dismisses the popover from the UI: the window goes away and UsageBar stops
+/// being the active app, so focus returns to whatever the user was in.
+#[tauri::command]
+pub fn hide_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    #[cfg(target_os = "macos")]
+    crate::hide_app();
+}
