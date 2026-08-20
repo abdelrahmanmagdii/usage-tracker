@@ -80,6 +80,26 @@ export async function generateShareCard(bucket: RateLimitBucket): Promise<{
 
   const left = 128;
 
+  // Brand lockup: the two-bar UsageBar mark in its purple badge, sitting left
+  // of the wordmark. Same geometry as the popover badge and the menu-bar glyph.
+  const badgeX = 68;
+  const badgeY = 100;
+  traceRoundedRect(context, badgeX, badgeY, 44, 44, 14);
+  const badgeFill = context.createLinearGradient(badgeX, badgeY, badgeX + 44, badgeY + 44);
+  badgeFill.addColorStop(0, "#7e67f6");
+  badgeFill.addColorStop(1, "#4e68f4");
+  context.fillStyle = badgeFill;
+  context.fill();
+  context.strokeStyle = "rgba(255, 255, 255, 0.35)";
+  context.lineWidth = 1.5;
+  context.stroke();
+  context.fillStyle = "rgba(255, 255, 255, 0.97)";
+  traceRoundedRect(context, badgeX + 12, badgeY + 12, 8, 20, 4);
+  context.fill();
+  context.fillStyle = "#e8a081";
+  traceRoundedRect(context, badgeX + 24, badgeY + 20, 8, 12, 4);
+  context.fill();
+
   // Wordmark
   context.fillStyle = "rgba(245, 245, 247, 0.55)";
   context.font = "600 23px ui-monospace, SFMono-Regular, Menlo, monospace";

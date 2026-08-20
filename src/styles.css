@@ -113,8 +113,8 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); o
 .meter-mark { width: 38px; height: 38px; position: relative; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(255, 255, 255, .76); border-radius: 13px; background: linear-gradient(145deg, rgba(126, 103, 246, .96), rgba(78, 104, 244, .94)); box-shadow: 0 9px 21px rgba(82, 61, 190, .24), inset 0 1px 0 rgba(255, 255, 255, .46), inset 0 -1px 0 rgba(50, 36, 139, .18); }
 .meter-mark::after { content: ""; position: absolute; inset: 1px; border-radius: 11px; background: linear-gradient(150deg, rgba(255,255,255,.24), transparent 42%); pointer-events: none; }
 .meter-mark svg { position: relative; z-index: 1; width: 27px; height: 27px; overflow: visible; }
-.meter-mark__cloud { fill: rgba(255, 255, 255, .96); }
-.meter-mark__terminal { fill: none; stroke: #6552df; stroke-width: 2.15; stroke-linecap: round; stroke-linejoin: round; }
+.meter-mark__bar { fill: rgba(255, 255, 255, .97); }
+.meter-mark__bar--accent { fill: color-mix(in srgb, var(--claude) 74%, white); }
 .toolbar-divider { flex: none; width: 1px; height: 32px; margin: 0 11px; background: linear-gradient(transparent, rgba(88, 68, 127, .15) 25%, rgba(88, 68, 127, .15) 75%, transparent); }
 .status-summary { --tone: var(--accent); min-width: 0; flex: 1; display: flex; align-items: center; gap: 10px; }
 .status-summary.tone-warning { --tone: var(--warning); }
