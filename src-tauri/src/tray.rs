@@ -84,10 +84,16 @@ fn toggle_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
+            // Same dismissal as the close button: give the menu bar and the
+            // keyboard back to whatever the user was working in.
+            #[cfg(target_os = "macos")]
+            crate::hide_app();
         } else {
-            let _ = window.show();
+            // Activate first: dismissal hides the whole application, and a
+            // window ordered in while the app is hidden stays off-screen.
             #[cfg(target_os = "macos")]
             crate::activate_app();
+            let _ = window.show();
             let _ = window.set_focus();
         }
     }
@@ -603,9 +609,9 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         "show-onboarding" => {
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
                 #[cfg(target_os = "macos")]
                 crate::activate_app();
+                let _ = window.show();
                 let _ = window.set_focus();
             }
             let _ = app.emit("usagebar://show-onboarding", ());
@@ -672,8 +678,9 @@ pub fn setup(app: &App) -> tauri::Result<()> {
 /// has one to show. In the combined layout it stays created but hidden.
 pub fn ensure_claude_tray(app: &AppHandle) -> tauri::Result<()> {
     if app.tray_by_id(CLAUDE_TRAY_ID).is_none() {
+        let combined = app.state::<PrefsStore>().get().combined_tray;
         let menu = build_provider_menu(app, Provider::Claude, &[])?;
-        TrayIconBuilder::with_id(CLAUDE_TRAY_ID)
+        let tray = TrayIconBuilder::with_id(CLAUDE_TRAY_ID)
             .tooltip("Claude Code usage")
             .icon(claude_tray_icon())
             .icon_as_template(false)
@@ -681,6 +688,15 @@ pub fn ensure_claude_tray(app: &AppHandle) -> tauri::Result<()> {
             .show_menu_on_left_click(false)
             .on_tray_icon_event(on_left_click)
             .build(app)?;
+        // macOS puts the status item on screen the moment build() returns,
+        // and the render cache already claims this tray is hidden — every
+        // tick recorded that intent while the tray did not exist — so the
+        // cached set_visible would early-return and leave a stray Claude
+        // icon beside the combined one. Hide it directly; reality then
+        // matches what the cache has been saying all along.
+        if combined {
+            let _ = tray.set_visible(false);
+        }
     }
     app.state::<TrayMenuState>().invalidate();
     refresh_tray(app);
@@ -736,8 +752,10 @@ pub fn usagebar_tray_icon() -> Image<'static> {
     Image::new_owned(rgba, WIDTH, HEIGHT)
 }
 
-/// A compact Codex-purple version of the cloud/terminal mark. Retained for the
-/// popover brand mark and tests even though the tray now uses a combined glyph.
+/// The Codex provider's own menu-bar mark for the extended (two-icon) layout:
+/// the cloud/terminal glyph in Codex purple. The compact layout uses the
+/// combined two-bar glyph (`usagebar_tray_icon`) instead, which is also the
+/// app-wide brand mark.
 #[allow(dead_code)]
 pub fn codex_tray_icon() -> Image<'static> {
     const WIDTH: u32 = 22;
