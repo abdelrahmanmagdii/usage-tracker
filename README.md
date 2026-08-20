@@ -51,6 +51,15 @@ npm run tauri dev
 
 Click the meter icon in the macOS menu bar to toggle the popover. In development, the window also opens on launch for easier inspection.
 
+To put the current source on the menu bar for real — building alone only refreshes
+`src-tauri/target/release/bundle`, leaving the installed copy behind:
+
+```sh
+npm run app:install
+```
+
+That builds the app bundle, quits the running copy, replaces `/Applications/UsageBar.app`, and relaunches it.
+
 Useful checks:
 
 ```sh

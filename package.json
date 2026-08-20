@@ -9,7 +9,8 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run && node --test \"tools/tibo-watch/*.test.mjs\"",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "app:install": "npm run tauri build -- --bundles app && ./tools/install-app.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
