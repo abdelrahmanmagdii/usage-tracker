@@ -4,6 +4,9 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::claude::{ClaudeManager, ClaudeState};
 use crate::codex::process::{CodexManager, CodexState};
+use crate::cursor::CursorManager;
+use crate::opencode::OpenCodeManager;
+use crate::provider::ProviderState;
 
 #[tauri::command]
 pub async fn get_codex_state(manager: State<'_, CodexManager>) -> Result<CodexState, String> {
@@ -26,6 +29,26 @@ pub async fn refresh_claude(manager: State<'_, ClaudeManager>) -> Result<ClaudeS
 }
 
 #[tauri::command]
+pub async fn get_cursor_state(manager: State<'_, CursorManager>) -> Result<ProviderState, String> {
+    Ok(manager.snapshot().await)
+}
+
+#[tauri::command]
+pub async fn refresh_cursor(manager: State<'_, CursorManager>) -> Result<ProviderState, String> {
+    manager.refresh().await
+}
+
+#[tauri::command]
+pub async fn get_opencode_state(manager: State<'_, OpenCodeManager>) -> Result<ProviderState, String> {
+    Ok(manager.snapshot().await)
+}
+
+#[tauri::command]
+pub async fn refresh_opencode(manager: State<'_, OpenCodeManager>) -> Result<ProviderState, String> {
+    manager.refresh().await
+}
+
+#[tauri::command]
 pub fn get_app_prefs(prefs: State<'_, crate::prefs::PrefsStore>) -> crate::prefs::AppPrefs {
     prefs.get()
 }
@@ -35,6 +58,8 @@ pub fn get_app_prefs(prefs: State<'_, crate::prefs::PrefsStore>) -> crate::prefs
 pub struct TrayWindowOptions {
     pub codex: Vec<crate::tray::TrayWindow>,
     pub claude: Vec<crate::tray::TrayWindow>,
+    pub cursor: Vec<crate::tray::TrayWindow>,
+    pub opencode: Vec<crate::tray::TrayWindow>,
 }
 
 /// Windows each provider currently reports, for the in-app menu-bar picker.
@@ -42,27 +67,51 @@ pub struct TrayWindowOptions {
 pub async fn get_tray_windows(
     codex: State<'_, CodexManager>,
     claude: State<'_, ClaudeManager>,
+    cursor: State<'_, CursorManager>,
+    opencode: State<'_, OpenCodeManager>,
 ) -> Result<TrayWindowOptions, String> {
     let codex_state = codex.snapshot().await;
     let claude_state = claude.snapshot().await;
+    let cursor_state = cursor.snapshot().await;
+    let opencode_state = opencode.snapshot().await;
     Ok(TrayWindowOptions {
         codex: crate::tray::collect_windows(codex_state.rate_limits.as_ref()),
         claude: crate::tray::collect_windows(claude_state.rate_limits.as_ref()),
+        cursor: crate::tray::collect_windows(cursor_state.rate_limits.as_ref()),
+        opencode: crate::tray::collect_windows(opencode_state.rate_limits.as_ref()),
     })
 }
 
 #[tauri::command]
 pub fn set_tray_window(app: AppHandle, provider: String, window: String) -> Result<(), String> {
     match provider.as_str() {
-        "codex" => app
-            .state::<crate::prefs::PrefsStore>()
-            .update(|prefs| prefs.codex_tray_window = window),
-        "claude" => app
-            .state::<crate::prefs::PrefsStore>()
-            .update(|prefs| prefs.claude_tray_window = window),
+        crate::prefs::PROVIDER_CODEX
+        | crate::prefs::PROVIDER_CLAUDE
+        | crate::prefs::PROVIDER_CURSOR
+        | crate::prefs::PROVIDER_OPENCODE => {}
         other => return Err(format!("Unknown provider: {other}")),
-    };
+    }
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.set_tray_window(&provider, window));
     crate::tray::apply_preference_change(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_provider_visible(app: AppHandle, provider: String, visible: bool) -> Result<(), String> {
+    match provider.as_str() {
+        crate::prefs::PROVIDER_CODEX
+        | crate::prefs::PROVIDER_CLAUDE
+        | crate::prefs::PROVIDER_CURSOR
+        | crate::prefs::PROVIDER_OPENCODE => {}
+        other => return Err(format!("Unknown provider: {other}")),
+    }
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.set_visible(&provider, visible));
+    crate::tray::apply_preference_change(&app);
+    if visible {
+        crate::tray::refresh_all_providers(&app);
+    }
     Ok(())
 }
 

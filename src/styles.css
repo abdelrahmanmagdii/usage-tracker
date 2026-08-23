@@ -255,18 +255,32 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); o
 .ghost-button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; padding: 0 12px; border-radius: 11px; color: var(--text-tertiary); font-size: 11.5px; font-weight: 600; }
 .ghost-button:hover { color: var(--text); background: var(--fill-raised); }
 
-/* ── Claude Code ── */
-.claude-block { margin-top: 13px; padding-top: 2px; border-top: 1px solid rgba(255, 255, 255, .6); }
-.claude-label { margin: 10px 15px 0; }
-.claude-label svg { color: #d97757; }
-.claude-plan { margin-left: auto; padding: 2px 8px; border: 1px solid color-mix(in srgb, #d97757 30%, transparent); border-radius: 999px; color: #c05f3c; background: color-mix(in srgb, #d97757 9%, transparent); font: 640 8.5px/12px var(--font-ui); letter-spacing: .06em; }
-.claude-quota-list { padding-top: 9px; }
-.claude-quota-list .quota-section { --tone: #d97757; }
-.claude-quota-list .quota-section.tone-warning { --tone: var(--warning); }
-.claude-quota-list .quota-section.tone-danger { --tone: var(--danger); }
-.claude-note { margin: 9px 14px 2px; padding: 12px 13px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.claude-note p { margin: 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
-.claude-note .secondary-button { flex: none; }
+/* ── Extra tools (Claude, Cursor, OpenCode Go) ── */
+.provider-block { margin-top: 13px; padding-top: 2px; border-top: 1px solid rgba(255, 255, 255, .6); --provider-accent: #d97757; }
+.provider-block:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.provider-label { margin: 10px 15px 0; }
+.provider-label svg { color: var(--provider-accent); }
+.provider-plan {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--provider-accent) 30%, transparent);
+  border-radius: 999px;
+  color: var(--provider-accent);
+  background: color-mix(in srgb, var(--provider-accent) 9%, transparent);
+  font: 640 8.5px/12px var(--font-ui);
+  letter-spacing: .06em;
+  text-transform: capitalize;
+}
+.provider-quota-list { padding-top: 9px; }
+.provider-quota-list .quota-section { --tone: var(--provider-accent); }
+.provider-quota-list .quota-section.tone-warning { --tone: var(--warning); }
+.provider-quota-list .quota-section.tone-danger { --tone: var(--danger); }
+.provider-note { margin: 9px 14px 2px; padding: 12px 13px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.provider-note p { margin: 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
+.provider-note .secondary-button { flex: none; }
+.provider-block[data-provider="claude"] { --provider-accent: #d97757; }
+.provider-block[data-provider="cursor"] { --provider-accent: #0f9d8e; }
+.provider-block[data-provider="opencode"] { --provider-accent: #4f46e5; }
 
 /* ── Tibo Watch ── */
 .tibo-watch { margin: 11px 14px 13px; padding: 12px 13px; border: 1px solid rgba(255,255,255,.76); border-radius: 15px; background: linear-gradient(145deg, rgba(255,255,255,.59), rgba(243,238,255,.4)); box-shadow: inset 0 1px 0 rgba(255,255,255,.86), 0 10px 24px rgba(62,45,103,.06); }

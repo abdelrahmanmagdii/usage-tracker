@@ -5,11 +5,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILT="$ROOT/src-tauri/target/release/bundle/macos/UsageBar.app"
+TARGET="$ROOT/src-tauri/target"
+MACOS="$TARGET/release/bundle/macos/UsageBar.app"
+NOINDEX="$TARGET/release/bundle/macos.noindex/UsageBar.app"
 INSTALLED="/Applications/UsageBar.app"
 
-if [ ! -d "$BUILT" ]; then
-  echo "install-app: no build at $BUILT — run 'npm run tauri build -- --bundles app' first" >&2
+if [ -d "$MACOS" ]; then
+  BUILT="$MACOS"
+elif [ -d "$NOINDEX" ]; then
+  BUILT="$NOINDEX"
+else
+  echo "install-app: no build at $MACOS — run 'npm run tauri build -- --bundles app' first" >&2
   exit 1
 fi
 
@@ -23,5 +29,6 @@ fi
 
 rm -rf "$INSTALLED"
 cp -R "$BUILT" "$INSTALLED"
+"$ROOT/tools/hide-build-from-spotlight.sh"
 echo "Installed $(date -r "$INSTALLED/Contents/MacOS/usagebar" '+%b %e %H:%M') build to $INSTALLED"
 open "$INSTALLED"

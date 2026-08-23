@@ -1,16 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useCallback } from "react";
 import type { CodexBackendState } from "../types/codex";
-import { extractRateLimitBuckets } from "../lib/rateLimits";
+import { useProviderMeter } from "./useProviderMeter";
 
-const initialState: CodexBackendState = { connection: "starting" };
-
-function previewState(): CodexBackendState {
+function claudePreview(): CodexBackendState {
   const now = Date.now() / 1000;
   return {
     connection: "connected",
-    updatedAt: Math.floor(Date.now() / 1_000), // the backend reports seconds
+    updatedAt: Math.floor(Date.now() / 1_000),
     account: { type: "oauth", planType: "max" },
     rateLimits: {
       rateLimitsByLimitId: {
@@ -34,58 +30,83 @@ function previewState(): CodexBackendState {
   };
 }
 
-/** Mirrors useCodexMeter for the Claude Code provider; no local history yet. */
+function cursorPreview(): CodexBackendState {
+  const now = Date.now() / 1000;
+  return {
+    connection: "connected",
+    updatedAt: Math.floor(Date.now() / 1_000),
+    account: { type: "oauth", planType: "pro" },
+    rateLimits: {
+      rateLimitsByLimitId: {
+        plan: {
+          limitId: "plan",
+          windowLabel: "Monthly",
+          limitName: "Cursor plan",
+          primary: { usedPercent: 41, windowDurationMins: 43_200, resetsAt: now + 18 * 86_400 },
+        },
+        auto: {
+          limitId: "auto",
+          windowLabel: "Auto",
+          limitName: "Auto + Composer",
+          secondary: { usedPercent: 12, windowDurationMins: 43_200, resetsAt: now + 18 * 86_400 },
+        },
+      },
+    },
+  };
+}
+
+function opencodePreview(): CodexBackendState {
+  const now = Date.now() / 1000;
+  return {
+    connection: "connected",
+    updatedAt: Math.floor(Date.now() / 1_000),
+    account: { type: "api", planType: "go" },
+    rateLimits: {
+      rateLimitsByLimitId: {
+        rolling: {
+          limitId: "rolling",
+          primary: { usedPercent: 18, windowDurationMins: 300, resetsAt: now + 3.4 * 3_600 },
+        },
+        weekly: {
+          limitId: "weekly",
+          secondary: { usedPercent: 27, windowDurationMins: 10_080, resetsAt: now + 4 * 86_400 },
+        },
+        monthly: {
+          limitId: "monthly",
+          windowLabel: "Monthly",
+          secondary: { usedPercent: 11, windowDurationMins: 43_200, resetsAt: now + 20 * 86_400 },
+        },
+      },
+    },
+  };
+}
+
 export function useClaudeMeter() {
-  const [state, setState] = useState<CodexBackendState>(initialState);
-  const [refreshing, setRefreshing] = useState(false);
+  const preview = useCallback(claudePreview, []);
+  return useProviderMeter({
+    getCommand: "get_claude_state",
+    refreshCommand: "refresh_claude",
+    event: "claude://state",
+    preview,
+  });
+}
 
-  const refresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const next = await invoke<CodexBackendState>("refresh_claude");
-      setState(next);
-    } catch (error) {
-      setState((current) => ({
-        ...current,
-        connection: "error",
-        diagnostic: error instanceof Error ? error.message : String(error),
-      }));
-    } finally {
-      setRefreshing(false);
-    }
-  }, []);
+export function useCursorMeter() {
+  const preview = useCallback(cursorPreview, []);
+  return useProviderMeter({
+    getCommand: "get_cursor_state",
+    refreshCommand: "refresh_cursor",
+    event: "cursor://state",
+    preview,
+  });
+}
 
-  useEffect(() => {
-    let active = true;
-    if (!("__TAURI_INTERNALS__" in window)) {
-      if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview")) {
-        setState(previewState());
-      } else {
-        setState({ connection: "cli_not_found" });
-      }
-      return () => {
-        active = false;
-      };
-    }
-    void invoke<CodexBackendState>("get_claude_state")
-      .then((next) => active && setState(next))
-      .catch(() => undefined);
-    const unlistenPromise = listen<CodexBackendState>("claude://state", (event) => {
-      if (active) setState(event.payload);
-    });
-    return () => {
-      active = false;
-      void unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, []);
-
-  return useMemo(
-    () => ({
-      state,
-      buckets: extractRateLimitBuckets(state.rateLimits),
-      refreshing,
-      refresh,
-    }),
-    [state, refreshing, refresh],
-  );
+export function useOpenCodeMeter() {
+  const preview = useCallback(opencodePreview, []);
+  return useProviderMeter({
+    getCommand: "get_opencode_state",
+    refreshCommand: "refresh_opencode",
+    event: "opencode://state",
+    preview,
+  });
 }
