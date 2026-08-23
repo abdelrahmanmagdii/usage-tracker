@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronUp, Clock3, Power, RefreshCw, Settings2, Share2, ShieldCheck, Ticket } from "lucide-react";
+import { ChevronUp, Clock3, MousePointer2, Power, RefreshCw, Settings2, Share2, ShieldCheck, Sparkles, Terminal, Ticket } from "lucide-react";
 import { MeterMark } from "./components/MeterMark";
 import { meterTone } from "./components/EdgeMeter";
 import { QuotaSection } from "./components/QuotaSection";
@@ -12,10 +12,16 @@ import { TiboWatch } from "./components/TiboWatch";
 import { ShareModal } from "./components/ShareModal";
 import { ResetAlert } from "./components/ResetAlert";
 import { SettingsModal } from "./components/SettingsModal";
-import { ClaudeSection } from "./components/ClaudeSection";
+import { ProviderSection } from "./components/ProviderSection";
 import { Onboarding } from "./components/Onboarding";
 import { useCodexMeter } from "./hooks/useCodexMeter";
-import { useClaudeMeter } from "./hooks/useClaudeMeter";
+import { useClaudeMeter, useCursorMeter, useOpenCodeMeter } from "./hooks/useClaudeMeter";
+import {
+  DEFAULT_PREFS,
+  isVisible,
+  normalizePrefs,
+  type AppPrefs,
+} from "./lib/providers";
 import { useResetEvents } from "./features/tibo-watch/useResetEvents";
 import { upcomingReset } from "./features/tibo-watch/provider";
 import { notifyFreshResets } from "./features/tibo-watch/notifications";
@@ -35,6 +41,9 @@ function headerResetText(bucket: RateLimitBucket, now: number): string {
 export default function App() {
   const { state, buckets, resetCredits, usage, refreshing, refresh } = useCodexMeter();
   const claude = useClaudeMeter();
+  const cursor = useCursorMeter();
+  const opencode = useOpenCodeMeter();
+  const [prefs, setPrefs] = useState<AppPrefs>(DEFAULT_PREFS);
   const [now, setNow] = useState(Date.now());
   const [sharing, setSharing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -48,15 +57,23 @@ export default function App() {
       return;
     }
     let active = true;
-    void invoke<{ onboardingComplete: boolean }>("get_app_prefs")
-      .then((prefs) => active && setOnboarding(!prefs.onboardingComplete))
+    void invoke<AppPrefs>("get_app_prefs")
+      .then((next) => {
+        if (!active) return;
+        setPrefs(normalizePrefs(next));
+        setOnboarding(!next.onboardingComplete);
+      })
       .catch(() => undefined);
-    const unlisten = listen("usagebar://show-onboarding", () => {
+    const unlistenOnboarding = listen("usagebar://show-onboarding", () => {
       if (active) setOnboarding(true);
+    });
+    const unlistenPrefs = listen<AppPrefs>("usagebar://prefs", (event) => {
+      if (active) setPrefs(normalizePrefs(event.payload));
     });
     return () => {
       active = false;
-      void unlisten.then((off) => off());
+      void unlistenOnboarding.then((off) => off());
+      void unlistenPrefs.then((off) => off());
     };
   }, []);
 
@@ -103,11 +120,22 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [sharing, settingsOpen, onboarding]);
+  const showCodex = isVisible(prefs, "codex");
+  const showClaude = isVisible(prefs, "claude");
+  const showCursor = isVisible(prefs, "cursor");
+  const showOpenCode = isVisible(prefs, "opencode");
   const connected = state.connection === "connected";
-  const mostCooked = buckets.reduce<(typeof buckets)[number] | undefined>(
+  const visibleBuckets = [
+    ...(showCodex ? buckets : []),
+    ...(showClaude ? claude.buckets : []),
+    ...(showCursor ? cursor.buckets : []),
+    ...(showOpenCode ? opencode.buckets : []),
+  ];
+  const mostCooked = visibleBuckets.reduce<(typeof visibleBuckets)[number] | undefined>(
     (lowest, bucket) => !lowest || bucket.remainingPercent < lowest.remainingPercent ? bucket : lowest,
     undefined,
   );
+  const anyRefreshing = refreshing || claude.refreshing || cursor.refreshing || opencode.refreshing;
 
   return (
     <main className="app-shell" data-tauri-drag-region>
@@ -146,12 +174,12 @@ export default function App() {
           <div className="brand-row" data-tauri-drag-region>
             <MeterMark />
               <div data-tauri-drag-region>
-                <h1 data-tauri-drag-region>Codex</h1>
+                <h1 data-tauri-drag-region>UsageBar</h1>
                 <p data-tauri-drag-region>Usage meter</p>
             </div>
           </div>
           <span className="toolbar-divider" aria-hidden="true" />
-          {connected && mostCooked ? (
+          {mostCooked ? (
             <div
               className={`status-summary tone-${meterTone(mostCooked)}`}
               title={`${windowDurationLabel(mostCooked.windowDurationMins)} quota window`}
@@ -166,11 +194,11 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <div className="status-summary status-summary--connection" title="Codex App Server connection" data-tauri-drag-region>
+            <div className="status-summary status-summary--connection" title="UsageBar status" data-tauri-drag-region>
               <span className="connection-orb" aria-hidden="true" />
               <div className="status-copy" data-tauri-drag-region>
-                <span className="status-eyebrow" data-tauri-drag-region>Codex status</span>
-                <strong data-tauri-drag-region>{state.connection === "starting" ? "Connecting…" : "Offline"}</strong>
+                <span className="status-eyebrow" data-tauri-drag-region>Status</span>
+                <strong data-tauri-drag-region>{showCodex && state.connection === "starting" ? "Connecting…" : "Offline"}</strong>
               </div>
             </div>
           )}
@@ -178,9 +206,9 @@ export default function App() {
       </header>
 
       <div className="content-scroll">
-        {!connected ? (
+        {showCodex && !connected ? (
           <ConnectionStateView state={state} onRetry={() => void refresh()} />
-        ) : buckets.length ? (
+        ) : showCodex && buckets.length ? (
           <>
             <ResetAlert now={now} events={resetEvents} />
             <div className="quota-list">
@@ -192,15 +220,44 @@ export default function App() {
             {usage ? <UsageDetails usage={usage} /> : null}
             <TiboWatch now={now} events={resetEvents} />
           </>
-        ) : (
+        ) : showCodex ? (
           <div className="state-panel glass-tile" role="status">
             <ShieldCheck size={22} aria-hidden="true" />
             <h2>No rate-limit buckets returned</h2>
             <p>Codex is connected, but this account did not report a quota window.</p>
             <button className="secondary-button" onClick={() => void refresh()}>Refresh</button>
           </div>
-        )}
-        <ClaudeSection meter={claude} now={now} />
+        ) : null}
+        {showClaude ? (
+          <ProviderSection
+            id="claude"
+            label="Claude Code"
+            icon={<Sparkles size={14} aria-hidden="true" />}
+            meter={claude}
+            now={now}
+            signedOutHint="the stored Claude Code login has expired. UsageBar reads the login kept by the `claude` command-line tool, so it refreshes the next time that runs — the desktop app keeps a separate login."
+          />
+        ) : null}
+        {showCursor ? (
+          <ProviderSection
+            id="cursor"
+            label="Cursor"
+            icon={<MousePointer2 size={14} aria-hidden="true" />}
+            meter={cursor}
+            now={now}
+            signedOutHint="the stored Cursor login was rejected. Sign in through the Cursor app, then retry."
+          />
+        ) : null}
+        {showOpenCode ? (
+          <ProviderSection
+            id="opencode"
+            label="OpenCode Go"
+            icon={<Terminal size={14} aria-hidden="true" />}
+            meter={opencode}
+            now={now}
+            signedOutHint="the stored OpenCode Go key was rejected. Sign in again with `/connect` and choose OpenCode Go."
+          />
+        ) : null}
       </div>
 
       <footer className="app-footer">
@@ -210,14 +267,16 @@ export default function App() {
         <button
           className="icon-button"
           onClick={() => {
-            void refresh();
-            void claude.refresh();
+            if (showCodex) void refresh();
+            if (showClaude) void claude.refresh();
+            if (showCursor) void cursor.refresh();
+            if (showOpenCode) void opencode.refresh();
           }}
-          disabled={refreshing || claude.refreshing}
+          disabled={anyRefreshing}
           aria-label="Refresh usage data"
           title="Refresh"
         >
-          <RefreshCw size={17} className={refreshing || claude.refreshing ? "spinning" : ""} />
+          <RefreshCw size={17} className={anyRefreshing ? "spinning" : ""} />
         </button>
         <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Open settings" title="Settings">
           <Settings2 size={17} />
@@ -239,18 +298,18 @@ export default function App() {
       {onboarding ? (
         <Onboarding
           onClose={closeOnboarding}
-          codex={{
-            label: "Codex",
-            connected,
-            detail: connected
-              ? "Connected through the Codex app server"
-              : state.diagnostic ?? "Sign in with the codex CLI, then retry",
-            onRetry: () => void refresh(),
-          }}
-          claude={
-            claude.state.connection === "cli_not_found"
-              ? null
-              : {
+          providers={[
+            {
+              label: "Codex",
+              connected,
+              detail: connected
+                ? "Connected through the Codex app server"
+                : state.diagnostic ?? "Sign in with the codex CLI, then retry",
+              onRetry: () => void refresh(),
+            },
+            ...(claude.state.connection === "cli_not_found"
+              ? []
+              : [{
                   label: "Claude Code",
                   connected: claude.state.connection === "connected",
                   detail:
@@ -258,8 +317,30 @@ export default function App() {
                       ? "Reading the login kept by the claude command-line tool"
                       : claude.state.diagnostic ?? "Sign in with the claude command-line tool",
                   onRetry: () => void claude.refresh(),
-                }
-          }
+                }]),
+            ...(cursor.state.connection === "cli_not_found"
+              ? []
+              : [{
+                  label: "Cursor",
+                  connected: cursor.state.connection === "connected",
+                  detail:
+                    cursor.state.connection === "connected"
+                      ? "Reading the login kept by the Cursor app"
+                      : cursor.state.diagnostic ?? "Sign in through the Cursor app",
+                  onRetry: () => void cursor.refresh(),
+                }]),
+            ...(opencode.state.connection === "cli_not_found"
+              ? []
+              : [{
+                  label: "OpenCode Go",
+                  connected: opencode.state.connection === "connected",
+                  detail:
+                    opencode.state.connection === "connected"
+                      ? "Reading the OpenCode Go key from auth.json"
+                      : opencode.state.diagnostic ?? "Sign in with /connect and choose OpenCode Go",
+                  onRetry: () => void opencode.refresh(),
+                }]),
+          ]}
         />
       ) : null}
     </main>

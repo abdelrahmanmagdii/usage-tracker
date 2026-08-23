@@ -24,8 +24,7 @@ type ProviderStatus = {
 };
 
 type Props = {
-  codex: ProviderStatus;
-  claude: ProviderStatus | null;
+  providers: ProviderStatus[];
   onClose: () => void;
 };
 
@@ -42,7 +41,7 @@ function StepWelcome() {
       </div>
       <h2>Welcome to UsageBar</h2>
       <p>
-        It keeps your Codex and Claude Code usage in the menu bar, so you can
+        It keeps your coding-tool usage in the menu bar, so you can
         check it without running anything.
       </p>
       <ul className="onboard-list">
@@ -50,7 +49,7 @@ function StepWelcome() {
           <span className="onboard-bullet">%</span>
           <span>
             The number is <strong>how much you have left</strong>, the same as
-            the Codex and Claude Code apps show you.
+            the tools themselves show you.
           </span>
         </li>
         <li>
@@ -64,16 +63,16 @@ function StepWelcome() {
   );
 }
 
-function StepProviders({ codex, claude }: { codex: ProviderStatus; claude: ProviderStatus | null }) {
+function StepProviders({ providers }: { providers: ProviderStatus[] }) {
   return (
     <>
       <h2>Connections</h2>
       <p>
-        There is nothing to set up. UsageBar uses the logins Codex and Claude
-        Code already keep on this Mac.
+        There is nothing to set up. UsageBar uses the logins these tools already
+        keep on this Mac. You can hide any of them later in Settings.
       </p>
       <div className="onboard-providers">
-        {[codex, claude].filter((value): value is ProviderStatus => value !== null).map((provider) => (
+        {providers.map((provider) => (
           <div key={provider.label} className={`onboard-provider${provider.connected ? " is-ready" : ""}`}>
             <span className="onboard-provider-dot" aria-hidden="true" />
             <div>
@@ -93,10 +92,10 @@ function StepProviders({ codex, claude }: { codex: ProviderStatus; claude: Provi
       <div className="onboard-note">
         <KeyRound size={14} aria-hidden="true" />
         <p>
-          The first time it reads your Claude Code login, macOS will ask for
-          Keychain access. Pick <strong>Always Allow</strong> so it can keep
-          updating in the background. UsageBar only reads that token, and only
-          sends it to Anthropic to look up your usage.
+          The first time it reads a stored login, macOS may ask for Keychain
+          access. Pick <strong>Always Allow</strong> so it can keep updating in
+          the background. UsageBar only reads those tokens, and only sends them
+          to that tool’s own usage endpoint.
         </p>
       </div>
     </>
@@ -181,7 +180,7 @@ function StepSettings() {
             <Columns2 size={13} aria-hidden="true" />
           </span>
           <span>
-            <strong>Compact</strong> puts both providers under one menu-bar
+            <strong>Compact</strong> puts every visible tool under one menu-bar
             icon; <strong>Extended</strong> gives each its own. Compact is less
             likely to get hidden when the bar is full.
           </span>
@@ -200,7 +199,7 @@ function StepSettings() {
   );
 }
 
-export function Onboarding({ codex, claude, onClose }: Props) {
+export function Onboarding({ providers, onClose }: Props) {
   const [step, setStep] = useState(0);
   const last = step === STEP_COUNT - 1;
 
@@ -210,7 +209,7 @@ export function Onboarding({ codex, claude, onClose }: Props) {
         <div className="onboard-body">
           <div className="onboard-content">
             {step === 0 ? <StepWelcome /> : null}
-            {step === 1 ? <StepProviders codex={codex} claude={claude} /> : null}
+            {step === 1 ? <StepProviders providers={providers} /> : null}
             {step === 2 ? <StepAlerts /> : null}
             {step === 3 ? <StepSettings /> : null}
           </div>

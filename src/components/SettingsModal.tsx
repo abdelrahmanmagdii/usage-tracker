@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Check, Settings2, X } from "lucide-react";
+import {
+  AUTO_WINDOW,
+  DEFAULT_PREFS,
+  PROVIDER_CATALOG,
+  isVisible,
+  normalizePrefs,
+  trayWindow,
+  withTrayWindow,
+  withVisible,
+  type AppPrefs,
+  type ProviderId,
+} from "../lib/providers";
 
 type TrayWindow = {
   id: string;
@@ -9,22 +22,9 @@ type TrayWindow = {
   durationMins?: number | null;
 };
 
-type AppPrefs = {
-  usageAlerts: boolean;
-  codexTrayWindow: string;
-  claudeTrayWindow: string;
-  combinedTray: boolean;
-};
+type TrayWindows = Record<ProviderId, TrayWindow[]>;
 
-const AUTO = "auto";
-const DEFAULT_PREFS: AppPrefs = {
-  usageAlerts: true,
-  codexTrayWindow: AUTO,
-  claudeTrayWindow: AUTO,
-  combinedTray: true,
-};
-
-const PREVIEW_WINDOWS: Record<"codex" | "claude", TrayWindow[]> = {
+const PREVIEW_WINDOWS: TrayWindows = {
   codex: [
     { id: "codex:primary", label: "5-hour", usedPercent: 18 },
     { id: "codex:secondary", label: "Weekly", usedPercent: 36 },
@@ -33,6 +33,15 @@ const PREVIEW_WINDOWS: Record<"codex" | "claude", TrayWindow[]> = {
     { id: "session:primary", label: "5-hour", usedPercent: 8 },
     { id: "weekly-all:secondary", label: "Weekly", usedPercent: 57 },
     { id: "weekly-scoped-fable:secondary", label: "Fable", usedPercent: 92 },
+  ],
+  cursor: [
+    { id: "plan:primary", label: "Monthly", usedPercent: 41 },
+    { id: "auto:secondary", label: "Auto", usedPercent: 12 },
+  ],
+  opencode: [
+    { id: "rolling:primary", label: "5-hour", usedPercent: 18 },
+    { id: "weekly:secondary", label: "Weekly", usedPercent: 27 },
+    { id: "monthly:secondary", label: "Monthly", usedPercent: 11 },
   ],
 };
 
@@ -52,7 +61,7 @@ function WindowPicker({
   onSelect: (id: string) => void;
 }) {
   if (windows.length === 0) return null;
-  const options = [{ id: AUTO, label: "Most used", usedPercent: -1 }, ...windows];
+  const options = [{ id: AUTO_WINDOW, label: "Most used", usedPercent: -1 }, ...windows];
   return (
     <div className="setting-group">
       <span className="setting-label">{title}</span>
@@ -119,10 +128,11 @@ export function SettingsModal({
   onShowGuide: () => void;
 }) {
   const [prefs, setPrefs] = useState<AppPrefs>(DEFAULT_PREFS);
-  const [windows, setWindows] = useState<Record<"codex" | "claude", TrayWindow[]>>({
-    codex: [],
-    claude: [],
-  });
+  const [windows, setWindows] = useState<TrayWindows>(() =>
+    inTauri()
+      ? { codex: [], claude: [], cursor: [], opencode: [] }
+      : PREVIEW_WINDOWS,
+  );
   const [autostart, setAutostart] = useState(false);
 
   useEffect(() => {
@@ -130,20 +140,28 @@ export function SettingsModal({
       setWindows(PREVIEW_WINDOWS);
       return;
     }
-    void invoke<AppPrefs>("get_app_prefs").then(setPrefs).catch(() => undefined);
-    void invoke<Record<"codex" | "claude", TrayWindow[]>>("get_tray_windows")
+    void invoke<AppPrefs>("get_app_prefs").then((next) => setPrefs(normalizePrefs(next))).catch(() => undefined);
+    void invoke<TrayWindows>("get_tray_windows")
       .then(setWindows)
       .catch(() => undefined);
     void invoke<boolean>("get_autostart").then(setAutostart).catch(() => undefined);
+    const unlisten = listen<AppPrefs>("usagebar://prefs", (event) => setPrefs(normalizePrefs(event.payload)));
+    return () => {
+      void unlisten.then((off) => off());
+    };
   }, []);
 
-  const chooseWindow = useCallback((provider: "codex" | "claude", window: string) => {
-    setPrefs((current) => ({
-      ...current,
-      [provider === "codex" ? "codexTrayWindow" : "claudeTrayWindow"]: window,
-    }));
+  const chooseWindow = useCallback((provider: ProviderId, window: string) => {
+    setPrefs((current) => withTrayWindow(current, provider, window));
     if (inTauri()) void invoke("set_tray_window", { provider, window });
   }, []);
+
+  const setToolVisible = useCallback((provider: ProviderId, visible: boolean) => {
+    setPrefs((current) => withVisible(current, provider, visible));
+    if (inTauri()) void invoke("set_provider_visible", { provider, visible });
+  }, []);
+
+  const visibleCount = PROVIDER_CATALOG.filter((tool) => isVisible(prefs, tool.id)).length;
 
   return (
     <div
@@ -171,28 +189,51 @@ export function SettingsModal({
 
         <div className="settings-body">
           <p className="settings-intro">
-            Pick which limit each meter tracks. “Most used” follows whichever
-            one you are closest to using up. Percentages show how much is left.
+            Choose which tools to track. Hidden tools stay off the menu bar and
+            are not polled. Each visible meter can follow a specific quota
+            window, or whichever one you are closest to using up.
           </p>
-          <WindowPicker
-            title="Codex meter"
-            windows={windows.codex}
-            selected={prefs.codexTrayWindow}
-            onSelect={(id) => chooseWindow("codex", id)}
-          />
-          <WindowPicker
-            title="Claude Code meter"
-            windows={windows.claude}
-            selected={prefs.claudeTrayWindow}
-            onSelect={(id) => chooseWindow("claude", id)}
-          />
+
+          <div className="setting-group">
+            <span className="setting-label">Tools</span>
+            {PROVIDER_CATALOG.map((tool) => {
+              const on = isVisible(prefs, tool.id);
+              const found = windows[tool.id].length > 0;
+              const detail = on
+                ? found
+                  ? "Shown in the popover and menu bar."
+                  : "On — looking for a login on this Mac."
+                : "Hidden. Turn on to track this tool.";
+              return (
+                <Toggle
+                  key={tool.id}
+                  label={tool.label}
+                  detail={detail}
+                  checked={on}
+                  onChange={(next) => setToolVisible(tool.id, next)}
+                />
+              );
+            })}
+          </div>
+
+          {PROVIDER_CATALOG.map((tool) =>
+            isVisible(prefs, tool.id) ? (
+              <WindowPicker
+                key={`${tool.id}-windows`}
+                title={`${tool.label} meter`}
+                windows={windows[tool.id]}
+                selected={trayWindow(prefs, tool.id)}
+                onSelect={(id) => chooseWindow(tool.id, id)}
+              />
+            ) : null,
+          )}
 
           <div className="setting-group">
             <span className="setting-label">Menu bar</span>
             <div className="layout-choice" role="radiogroup" aria-label="Menu bar layout">
               {[
-                { value: true, name: "Compact", detail: "Both meters in one icon." },
-                { value: false, name: "Extended", detail: "One icon per provider." },
+                { value: true, name: "Compact", detail: "Every visible meter in one icon." },
+                { value: false, name: "Extended", detail: "One icon per tool." },
               ].map((option) => {
                 const active = prefs.combinedTray === option.value;
                 return (
@@ -214,7 +255,9 @@ export function SettingsModal({
               })}
             </div>
             <p className="setting-hint">
-              Compact is less likely to be hidden when the menu bar is crowded.
+              {visibleCount > 2
+                ? "With several tools on, Compact is much less likely to be hidden when the menu bar is crowded."
+                : "Compact is less likely to be hidden when the menu bar is crowded."}
             </p>
           </div>
 

@@ -9,7 +9,7 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run && node --test \"tools/tibo-watch/*.test.mjs\"",
     "test:watch": "vitest",
-    "tauri": "tauri",
+    "tauri": "./tools/tauri.sh",
     "app:install": "npm run tauri build -- --bundles app && ./tools/install-app.sh"
   },
   "dependencies": {

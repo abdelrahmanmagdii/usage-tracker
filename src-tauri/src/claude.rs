@@ -96,6 +96,14 @@ impl ClaudeManager {
     }
 
     pub async fn refresh(&self) -> Result<ClaudeState, String> {
+        if !self
+            .app
+            .state::<crate::prefs::PrefsStore>()
+            .get()
+            .is_visible(crate::prefs::PROVIDER_CLAUDE)
+        {
+            return Ok(self.snapshot().await);
+        }
         let _guard = self.refresh_lock.lock().await;
         let credentials = match load_credentials().await {
             CredentialRead::Found(credentials) => {
@@ -211,7 +219,6 @@ impl ClaudeManager {
         if let Some(alerts) = self.app.try_state::<crate::alerts::UsageAlerts>() {
             alerts.observe(&self.app, "Claude Code", &rate_limits).await;
         }
-        let _ = tray::ensure_claude_tray(&self.app);
         self.emit_state().await;
         Ok(self.snapshot().await)
     }

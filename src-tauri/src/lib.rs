@@ -2,11 +2,16 @@ mod alerts;
 mod claude;
 mod codex;
 mod commands;
+mod cursor;
+mod opencode;
 mod prefs;
+mod provider;
 mod tray;
 
 use claude::ClaudeManager;
 use codex::process::CodexManager;
+use cursor::CursorManager;
+use opencode::OpenCodeManager;
 use tauri::{Manager, WindowEvent};
 
 /// Meters refresh when their data is older than this.
@@ -185,6 +190,10 @@ pub fn run() {
             app.manage(manager.clone());
             let claude_manager = ClaudeManager::new(app.handle().clone());
             app.manage(claude_manager.clone());
+            let cursor_manager = CursorManager::new(app.handle().clone());
+            app.manage(cursor_manager.clone());
+            let opencode_manager = OpenCodeManager::new(app.handle().clone());
+            app.manage(opencode_manager.clone());
             tray::setup(app)?;
 
             #[cfg(target_os = "macos")]
@@ -240,6 +249,14 @@ pub fn run() {
             let claude_starter = claude_manager.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = claude_starter.refresh().await;
+            });
+            let cursor_starter = cursor_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = cursor_starter.refresh().await;
+            });
+            let opencode_starter = opencode_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = opencode_starter.refresh().await;
             });
 
             // Wall-clock staleness watchdogs instead of a plain sleep loop:
@@ -306,6 +323,52 @@ pub fn run() {
                     };
                 }
             });
+            let cursor_refresher = cursor_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut last_attempt = now_unix_seconds();
+                let mut failures: u32 = 1;
+                loop {
+                    interval.tick().await;
+                    let now = now_unix_seconds();
+                    let before = cursor_refresher.snapshot().await.updated_at;
+                    if !should_refresh(now, before, last_attempt, failures) {
+                        continue;
+                    }
+                    last_attempt = now;
+                    let _ = cursor_refresher.refresh().await;
+                    let after = cursor_refresher.snapshot().await.updated_at;
+                    failures = if after == before {
+                        failures.saturating_add(1)
+                    } else {
+                        0
+                    };
+                }
+            });
+            let opencode_refresher = opencode_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut last_attempt = now_unix_seconds();
+                let mut failures: u32 = 1;
+                loop {
+                    interval.tick().await;
+                    let now = now_unix_seconds();
+                    let before = opencode_refresher.snapshot().await.updated_at;
+                    if !should_refresh(now, before, last_attempt, failures) {
+                        continue;
+                    }
+                    last_attempt = now;
+                    let _ = opencode_refresher.refresh().await;
+                    let after = opencode_refresher.snapshot().await.updated_at;
+                    failures = if after == before {
+                        failures.saturating_add(1)
+                    } else {
+                        0
+                    };
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -323,11 +386,16 @@ pub fn run() {
             commands::refresh_codex,
             commands::get_claude_state,
             commands::refresh_claude,
+            commands::get_cursor_state,
+            commands::refresh_cursor,
+            commands::get_opencode_state,
+            commands::refresh_opencode,
             commands::set_reset_incoming,
             commands::get_app_prefs,
             commands::complete_onboarding,
             commands::get_tray_windows,
             commands::set_tray_window,
+            commands::set_provider_visible,
             commands::set_usage_alerts,
             commands::set_combined_tray,
             commands::get_autostart,
