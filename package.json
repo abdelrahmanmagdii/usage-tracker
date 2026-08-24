@@ -10,7 +10,8 @@
     "test": "vitest run && node --test \"tools/tibo-watch/*.test.mjs\"",
     "test:watch": "vitest",
     "tauri": "./tools/tauri.sh",
-    "app:install": "npm run tauri build -- --bundles app && ./tools/install-app.sh"
+    "app:install": "npm run tauri build -- --bundles app && ./tools/install-app.sh",
+    "mas:build": "bash ./tools/mas-build.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

@@ -22,6 +22,12 @@ Download the latest `.dmg` from [Releases](https://github.com/abdelrahmanmagdii/
 open it, and drag UsageBar to Applications. Builds are signed and notarized by
 Apple, so they open without a security warning.
 
+The [public site](https://abdelrahmanmagdii.github.io/usage-tracker/) is what
+LinkedIn and X unfurl, and it is the privacy/support URL for the Mac App Store
+listing. From the popover, **Share** copies a 16:9 quota card and opens X or
+LinkedIn with a caption. Store submission copy lives in
+[store/APP_STORE.md](store/APP_STORE.md).
+
 Or build it yourself:
 
 ```sh

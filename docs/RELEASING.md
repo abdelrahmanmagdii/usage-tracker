@@ -116,3 +116,30 @@ is the state where a downloaded copy opens without any Gatekeeper warning.
 - Notarization typically takes a few minutes. If Apple rejects a build, the
   workflow log contains the submission ID; `xcrun notarytool log <id>` explains
   why.
+
+## Mac App Store
+
+Direct GitHub releases stay Developer ID + notarized (this workflow). The store
+build is sandboxed and is **not** produced by `release.yml`.
+
+One-time in App Store Connect: create the Mac app with bundle ID
+`com.usagebar.app`, attach a Mac App Store Connect provisioning profile, and
+paste the fields in [store/APP_STORE.md](../store/APP_STORE.md). Privacy and
+support URLs are the GitHub Pages site (workflow `.github/workflows/pages.yml`).
+
+Then, with `APPLE_TEAM_ID` and the profile on disk:
+
+```bash
+export APPLE_TEAM_ID=XXXXXXXXXX
+export APPLE_MAS_PROFILE=/path/to/UsageBar.provisionprofile
+./tools/mas-build.sh
+```
+
+Upload the `.pkg` with Transporter or `altool`. Capture 1280×800 (16:10) shots
+from `store/screenshots/*.html`. The sandbox uses temporary home-path exceptions
+so Codex/Claude/Cursor/OpenCode can still be read; expect App Review questions
+and answer them from the review notes in `store/APP_STORE.md`.
+
+GitHub `.dmg` builds must keep using a **Developer ID Application** identity.
+Do not ship the MAS-sandboxed entitlements on the notarized download.
+

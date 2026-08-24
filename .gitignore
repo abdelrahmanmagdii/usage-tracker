@@ -4,6 +4,8 @@ dist/
 target/
 src-tauri/target/
 src-tauri/gen/
+src-tauri/Entitlements.mas.generated.plist
+src-tauri/embedded.provisionprofile
 
 # Local-only files — never publish
 .backups/

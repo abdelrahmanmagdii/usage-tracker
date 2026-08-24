@@ -5,6 +5,7 @@ mod commands;
 mod cursor;
 mod opencode;
 mod prefs;
+mod share;
 mod provider;
 mod tray;
 
@@ -401,6 +402,8 @@ pub fn run() {
             commands::get_autostart,
             commands::set_autostart,
             commands::write_share_card,
+            commands::open_url,
+            commands::present_share_sheet,
             commands::hide_window,
             commands::quit_app
         ])

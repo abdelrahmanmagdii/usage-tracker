@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy — UsageBar</title>
+  <meta name="description" content="UsageBar privacy policy. Quota is read on your Mac. We do not run a backend that receives your usage." />
+  <link rel="canonical" href="https://abdelrahmanmagdii.github.io/usage-tracker/privacy.html" />
+  <meta property="og:title" content="UsageBar privacy policy" />
+  <meta property="og:description" content="Local-first Mac menu bar app. No UsageBar account. No telemetry." />
+  <meta property="og:url" content="https://abdelrahmanmagdii.github.io/usage-tracker/privacy.html" />
+  <meta property="og:image" content="https://abdelrahmanmagdii.github.io/usage-tracker/og.png" />
+  <link rel="stylesheet" href="site.css" />
+</head>
+<body>
+  <header class="nav">
+    <a class="brand" href="./"><img src="mark.svg" width="28" height="28" alt="" /> UsageBar</a>
+    <nav><a href="./">Home</a><a href="support.html">Support</a></nav>
+  </header>
+  <main class="share-block">
+    <p class="kicker">Effective 24 August 2026</p>
+    <h1>Privacy policy</h1>
+    <p>UsageBar is a Mac menu bar app by Abdelrahman Amer. It does not create an account with us and does not send your quota, credentials, or file paths to a UsageBar server — there isn't one.</p>
+    <h2>What the app reads on your Mac</h2>
+    <p>To show meters, UsageBar talks to tools you already installed:</p>
+    <ul>
+      <li>Codex CLI over its local app server.</li>
+      <li>Claude Code credentials from macOS Keychain or <code>~/.claude</code>, then Anthropic's usage endpoint.</li>
+      <li>Cursor's local login database, then Cursor's usage API.</li>
+      <li>OpenCode Go's local <code>auth.json</code>, then OpenCode's usage API.</li>
+    </ul>
+    <p>Those third parties process usage according to their own policies. UsageBar does not get a copy.</p>
+    <h2>What is stored locally</h2>
+    <p>Preferences, a short quota history used to spot surprise resets, and a Tibo Watch cache live in this app's container / WebView storage on your Mac.</p>
+    <h2>Network</h2>
+    <p>The app fetches provider usage endpoints and a public JSON feed of reset announcements from GitHub. Share actions open X or LinkedIn in your browser; we do not upload the snapshot. You paste it.</p>
+    <h2>Children</h2>
+    <p>UsageBar is a developer utility. It is not directed at children under 13.</p>
+    <h2>Contact</h2>
+    <p>Questions: <a href="https://github.com/abdelrahmanmagdii/usage-tracker/issues">GitHub issues</a>.</p>
+  </main>
+</body>
+</html>

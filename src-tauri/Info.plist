@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © 2026 Abdelrahman Amer. All rights reserved.</string>
+  <key>NSUserNotificationUsageDescription</key>
+  <string>UsageBar notifies you when quota is running low, a window resets, or Tibo Watch sees a surprise reset.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>UsageBar talks to the Codex CLI, Keychain, and local developer tools already installed on this Mac so it can read quota. It never sends those credentials to us.</string>
+</dict>
+</plist>

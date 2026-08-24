@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=1200" />
+  <title>UsageBar</title>
+  <style>
+    html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: #0c0b10; color: #f3efe6; font-family: Georgia, serif; }
+    .wrap { display: grid; grid-template-columns: 1.2fr 0.8fr; height: 630px; padding: 56px 64px; }
+    .kicker { font: 600 13px/1 ui-sans-serif, system-ui; letter-spacing: .18em; text-transform: uppercase; color: #e39b7a; }
+    h1 { margin: 18px 0; font-size: 64px; line-height: .95; letter-spacing: -0.04em; }
+    p { font: 400 22px/1.4 ui-sans-serif, system-ui; color: #b7b1c4; max-width: 28ch; }
+    .mark { width: 220px; height: 220px; border-radius: 52px; background: linear-gradient(135deg, #7e67f6, #4e68f4); display: grid; place-items: center; justify-self: end; align-self: center; }
+    .bars { display: flex; gap: 22px; align-items: flex-end; height: 110px; }
+    .bars b { display: block; width: 42px; border-radius: 21px; background: #fff; height: 110px; }
+    .bars b:last-child { height: 64px; background: #e39b7a; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div>
+      <div class="kicker">Mac menu bar</div>
+      <h1>Quota,<br>on sight.</h1>
+      <p>UsageBar meters Codex, Claude, Cursor, and OpenCode locally. Share a clean 16:9 snapshot to X or LinkedIn.</p>
+    </div>
+    <div class="mark"><div class="bars"><b></b><b></b></div></div>
+  </div>
+</body>
+</html>

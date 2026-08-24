@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>UsageBar screenshot 1 — menu bar</title>
+  <style>
+    html, body { margin: 0; width: 1280px; height: 800px; background: #1b1730; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; color: #1b1428; }
+    .desktop { width: 1280px; height: 800px; background: radial-gradient(circle at 20% 10%, #5b4bb5, transparent 40%), radial-gradient(circle at 90% 80%, #31407a, #151221 55%); }
+    .bar { height: 28px; display: flex; align-items: center; padding: 0 14px; color: #f6f3ff; font-size: 13px; background: rgba(10,8,16,.45); }
+    .bar b { margin-left: auto; background: #111; color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+    .bar b i { display: inline-block; width: 5px; height: 10px; background: #fff; border-radius: 2px; margin-right: 2px; }
+    .bar b i + i { height: 6px; background: #e39b7a; }
+    .card {
+      position: absolute; top: 48px; right: 36px; width: 380px; padding: 18px;
+      border-radius: 22px; background: linear-gradient(160deg, #fbf8ff, #efe9fb);
+      box-shadow: 0 30px 80px rgba(0,0,0,.35);
+    }
+    h1 { margin: 0; font-size: 20px; }
+    .row { display: flex; justify-content: space-between; margin-top: 14px; padding: 12px; border-radius: 14px; background: #fff; }
+    .row strong { font-size: 22px; }
+    .caption { position: absolute; left: 48px; bottom: 48px; color: #f6f3ff; }
+    .caption p { margin: 0; font: 600 13px/1.3 ui-sans-serif; letter-spacing: .14em; text-transform: uppercase; opacity: .7; }
+    .caption h2 { margin: 8px 0 0; font-family: Georgia, serif; font-size: 42px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="desktop">
+    <div class="bar"> File Edit View Window Help <b><i></i><i></i> 63% · 8%</b></div>
+    <section class="card">
+      <h1>UsageBar</h1>
+      <div class="row"><span>Codex 5-hour</span><strong>63%</strong></div>
+      <div class="row"><span>Claude Fable</span><strong>8%</strong></div>
+      <div class="row"><span>Cursor monthly</span><strong>59%</strong></div>
+    </section>
+    <div class="caption">
+      <p>Mac App Store screenshot</p>
+      <h2>Quota in the menu bar.</h2>
+    </div>
+  </div>
+</body>
+</html>

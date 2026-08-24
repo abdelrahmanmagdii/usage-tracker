@@ -174,6 +174,16 @@ pub fn set_reset_incoming(
 }
 
 #[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    crate::share::open_url(&url)
+}
+
+#[tauri::command]
+pub fn present_share_sheet(app: AppHandle, png: Vec<u8>, caption: String) -> Result<(), String> {
+    crate::share::present_share_sheet(app, png, caption)
+}
+
+#[tauri::command]
 pub async fn write_share_card(path: String, bytes: Vec<u8>) -> Result<(), String> {
     let destination = PathBuf::from(path);
     if destination.extension().and_then(|value| value.to_str()) != Some("png") {
