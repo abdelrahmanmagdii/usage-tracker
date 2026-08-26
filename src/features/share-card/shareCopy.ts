@@ -1,8 +1,8 @@
 import type { RateLimitBucket } from "../../types/codex";
 import { formatCountdown, windowDurationLabel } from "../../lib/rateLimits";
 
-/** Public site LinkedIn and X unfurl. GitHub Pages after this branch lands on main. */
-export const SITE_URL = "https://abdelrahmanmagdii.github.io/usage-tracker";
+/** Public site LinkedIn and X unfurl. Trailing slash matches the Pages canonical URL. */
+export const SITE_URL = "https://abdelrahmanmagdii.github.io/usage-tracker/";
 export const REPO_URL = "https://github.com/abdelrahmanmagdii/usage-tracker";
 
 const X_LIMIT = 280;

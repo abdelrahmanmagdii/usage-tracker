@@ -2,7 +2,7 @@ name: Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, app-store-and-social]
     paths:
       - website/**
       - .github/workflows/pages.yml

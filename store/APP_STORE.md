@@ -31,13 +31,15 @@ Requires the matching CLI or app to be signed in on this Mac.
 
 quota,codex,claude,cursor,opencode,menubar,ratelimit,reset,usage,developer
 
-## What's New (1.0)
+## What's New (0.1.0)
 
-First Mac App Store release: menu bar meters, Tibo Watch reset radar, and share cards for X and LinkedIn.
+First release: menu bar meters for Codex, Claude, Cursor, and OpenCode Go, Tibo Watch reset radar, and share cards for X and LinkedIn.
 
 ## App Privacy
 
-Data Not Collected. The developer does not operate a collection endpoint. The app reads local CLIs and calls provider usage APIs on your behalf.
+UsageBar does not operate a backend and does not receive your quota. Declare **no data collected by the developer**.
+
+Claude, Cursor, and OpenCode meters send the login those tools already store to the matching vendor usage API (Anthropic, Cursor, OpenCode) so the meter can render. Codex stays on-device via the local app server. That is App Functionality for those vendors' products, not tracking by UsageBar. Align the nutrition labels with `website/privacy.html`.
 
 ## Review notes
 
@@ -47,9 +49,11 @@ It cannot invent quota without a signed-in provider:
 
 1. Install the Codex CLI and run `codex login`, and/or Claude Code CLI, Cursor, OpenCode Go.
 2. Allow Keychain access if macOS asks.
-3. To inspect Share without a live quota, the GitHub README demo GIF shows the card. Share copies a PNG and opens https://x.com/intent/tweet or LinkedIn share-offsite.
+3. To inspect Share without a live quota, the GitHub README demo GIF shows the card. Share copies a PNG (it stays on the clipboard) and opens https://x.com/intent/tweet or LinkedIn share-offsite. The user pastes the image; caption is a separate copy.
 
-Temporary sandbox exceptions let the app read `~/.claude`, Cursor's Application Support DB, OpenCode `auth.json`, and spawn the user-installed `codex` binary. We do not write those locations.
+Temporary sandbox exceptions let the app read `~/.claude`, Cursor's Application Support DB, OpenCode `auth.json`, and spawn the user-installed `codex` binary (Homebrew `/opt/homebrew/bin/codex` and `/usr/local/bin/codex`). Network opens for X/LinkedIn use `NSWorkspace`; `/usr/bin/open` is a fallback. We do not write those locations.
+
+Launch at Login uses a Launch Agent on the GitHub build. If that is blocked in the sandbox, reviewers can skip it — the app is fully usable without it. System Settings → Login Items can also add UsageBar.
 
 Encryption: ITSAppUsesNonExemptEncryption is false (HTTPS only).
 

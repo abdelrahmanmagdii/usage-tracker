@@ -21,10 +21,9 @@
   <array>
     <string>/opt/homebrew/bin/codex</string>
     <string>/usr/local/bin/codex</string>
-    <string>/opt/homebrew/bin/</string>
-    <string>/usr/local/bin/</string>
     <string>/usr/bin/security</string>
     <string>/usr/bin/sqlite3</string>
+    <string>/usr/bin/open</string>
     <string>/bin/zsh</string>
   </array>
   <key>com.apple.application-identifier</key>

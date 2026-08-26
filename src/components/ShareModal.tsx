@@ -107,9 +107,8 @@ export function ShareModal({ bucket, onClose }: { bucket: RateLimitBucket; onClo
   const postToLinkedIn = async () => {
     await copyImage();
     try {
-      await navigator.clipboard.writeText(caption);
       await invoke("open_url", { url: linkedInShareUrl() });
-      setMessage("Image and caption copied. Paste both into the LinkedIn post.");
+      setMessage("Image copied. Paste it into the LinkedIn post, then Copy caption if you want the text.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not open LinkedIn");
     }

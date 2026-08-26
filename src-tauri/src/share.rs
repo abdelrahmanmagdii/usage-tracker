@@ -6,6 +6,17 @@ pub fn open_url(url: &str) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("Only http(s) URLs can be opened".into());
     }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSString, NSURL};
+        if let Some(ns_url) = NSURL::URLWithString(&NSString::from_str(url)) {
+            let opened = NSWorkspace::sharedWorkspace().openURL(&ns_url);
+            if opened {
+                return Ok(());
+            }
+        }
+    }
     std::process::Command::new("/usr/bin/open")
         .arg(url)
         .status()
@@ -47,7 +58,7 @@ fn present_share_sheet_on_main(app: &AppHandle, png: Vec<u8>, caption: &str) -> 
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2_app_kit::{NSImage, NSSharingServicePicker, NSWindow};
-    use objc2_foundation::{NSArray, NSData, NSRectEdge};
+    use objc2_foundation::{NSArray, NSData, NSRectEdge, NSString};
 
     thread_local! {
         static SHARE_PICKER: RefCell<Option<Retained<NSSharingServicePicker>>> = const { RefCell::new(None) };
@@ -68,13 +79,14 @@ fn present_share_sheet_on_main(app: &AppHandle, png: Vec<u8>, caption: &str) -> 
     let data = NSData::with_bytes(&png);
     let image = NSImage::initWithData(NSImage::alloc(), &data)
         .ok_or("The share card PNG could not be decoded")?;
-    let object: Retained<AnyObject> = Retained::into_super(image).into();
-    let items = NSArray::from_retained_slice(&[object]);
+    let image_item: Retained<AnyObject> = Retained::into_super(image).into();
+    let caption_item: Retained<AnyObject> =
+        Retained::into_super(NSString::from_str(caption)).into();
+    let items = NSArray::from_retained_slice(&[image_item, caption_item]);
     let picker = unsafe { NSSharingServicePicker::initWithItems(NSSharingServicePicker::alloc(), &items) };
     SHARE_PICKER.with(|slot| {
         *slot.borrow_mut() = Some(picker.clone());
     });
-    let _ = caption;
     let bounds = view.bounds();
     picker.showRelativeToRect_ofView_preferredEdge(bounds, &view, NSRectEdge::MaxY);
     Ok(())
