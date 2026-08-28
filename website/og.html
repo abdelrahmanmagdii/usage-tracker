@@ -7,91 +7,50 @@
   <style>
     html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
     body {
-      color: #f2f0fa;
+      color: #221c3f;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
       background:
-        radial-gradient(900px 620px at 86% -12%, rgba(126, 103, 246, .3), transparent 62%),
-        radial-gradient(820px 620px at -12% 108%, rgba(64, 118, 255, .2), transparent 60%),
-        #0a0913;
+        radial-gradient(1100px 700px at 12% -8%, rgba(255, 255, 255, .9), transparent 55%),
+        radial-gradient(900px 700px at 100% 40%, rgba(124, 104, 240, .18), transparent 60%),
+        linear-gradient(170deg, #f6f4fc, #e3dcf5);
     }
-    body::before {
-      content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .5;
-      background-image: radial-gradient(rgba(255,255,255,.05) 1px, transparent 1.4px);
-      background-size: 26px 26px;
+    .wrap { display: grid; grid-template-columns: 1.08fr .92fr; height: 630px; padding: 0 64px; gap: 40px; align-items: center; }
+    .eyebrow {
+      margin: 0 0 16px; font-size: 15px; font-weight: 700;
+      letter-spacing: .18em; text-transform: uppercase; color: #6a5ae8;
     }
-    .bar {
-      height: 34px; display: flex; align-items: center; padding: 0 20px; gap: 10px;
-      background: rgba(255,255,255,.05); border-bottom: 1px solid rgba(255,255,255,.06);
-      font-size: 13.5px; font-weight: 700; letter-spacing: -.02em;
-    }
-    .bar b {
-      margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
-      font-family: ui-monospace, Menlo, monospace; font-size: 12px; font-weight: 600;
-      padding: 3px 10px; border-radius: 999px;
-      background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);
-    }
-    .bar b i { width: 4px; height: 11px; border-radius: 2px; background: #8f7ff5; box-shadow: 0 0 6px rgba(143,127,245,.8); }
-    .bar b i + i { height: 6px; background: #e08a63; }
-    .wrap { display: grid; grid-template-columns: 1.1fr .9fr; height: 596px; padding: 64px 72px; gap: 48px; align-items: center; }
-    .pill {
-      display: inline-block; margin: 0 0 20px; padding: 5px 12px; border-radius: 999px;
-      border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04);
-      color: rgba(226,222,245,.72); font-size: 12px; font-weight: 650;
-      letter-spacing: .05em; text-transform: uppercase;
-    }
-    h1 {
-      margin: 0 0 18px; font-size: 66px; font-weight: 750; letter-spacing: -.045em; line-height: 1.04;
-      background: linear-gradient(180deg, #fff 55%, #b7aee8);
-      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
-    }
-    p { margin: 0; font-size: 21px; line-height: 1.45; color: rgba(226,222,245,.72); max-width: 30ch; }
-    .chips { display: flex; gap: 8px; margin-top: 26px; }
+    h1 { margin: 0 0 18px; font-size: 78px; font-weight: 750; letter-spacing: -.035em; line-height: 1.02; color: #221c3f; }
+    p { margin: 0; font-size: 24px; line-height: 1.4; color: #4d4768; max-width: 20ch; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
     .chip {
-      display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px;
-      background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.07);
-      font-size: 12.5px; color: rgba(226,222,245,.72);
+      display: inline-flex; align-items: center; gap: 7px; padding: 6px 13px; border-radius: 999px;
+      background: rgba(255,255,255,.7); border: 1px solid rgba(70,55,130,.09);
+      box-shadow: 0 2px 8px rgba(88,68,160,.07);
+      font-size: 14px; font-weight: 550; color: #4d4768;
     }
     .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); }
-    .pop {
-      position: relative; padding: 22px; border-radius: 22px;
-      background: linear-gradient(160deg, rgba(38,34,58,.92), rgba(22,20,34,.92));
-      border: 1px solid rgba(255,255,255,.12);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 30px 80px rgba(0,0,0,.55);
-    }
-    .pop::after {
-      content: ""; position: absolute; top: -46px; right: -36px; width: 240px; height: 240px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(143,127,245,.3), transparent 65%);
-    }
-    .pop h2 { display: flex; justify-content: space-between; margin: 0 0 14px; font-size: 15px; font-weight: 700; color: rgba(226,222,245,.55); }
-    .row {
-      display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding: 13px 14px;
-      border-radius: 14px; background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.06);
-      font-size: 15px; font-weight: 600;
-    }
-    .row span { color: rgba(226,222,245,.72); }
-    .row strong { font-size: 22px; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+    .stage { display: flex; flex-direction: column; align-items: center; }
+    .stage img { display: block; }
+    .pill { width: 286px; filter: drop-shadow(0 10px 22px rgba(43,99,144,.35)); margin-bottom: 12px; }
+    .mock { width: 372px; filter: drop-shadow(0 32px 56px rgba(88,68,160,.32)); }
   </style>
 </head>
 <body>
-  <div class="bar">UsageBar <b><i></i><i></i>63% · 8%</b></div>
   <div class="wrap">
     <div>
-      <span class="pill">For macOS · menu bar</span>
-      <h1>Know what’s left<br />before it resets.</h1>
-      <p>Leftover Codex, Claude, Cursor, and OpenCode quota. In the Mac menu bar.</p>
+      <p class="eyebrow">Menu bar</p>
+      <h1>Every limit,<br />one glance.</h1>
+      <p>Four coding tools, live percentages, one menu bar icon.</p>
       <div class="chips">
-        <span class="chip" style="--dot:#4ec9a4">Codex</span>
-        <span class="chip" style="--dot:#e08a63">Claude Code</span>
-        <span class="chip" style="--dot:#c9c2f2">Cursor</span>
-        <span class="chip" style="--dot:#6fa8f8">OpenCode Go</span>
+        <span class="chip" style="--dot:#6356e8">Codex</span>
+        <span class="chip" style="--dot:#c9703a">Claude Code</span>
+        <span class="chip" style="--dot:#2f9e77">Cursor</span>
+        <span class="chip" style="--dot:#6f5ff0">OpenCode Go</span>
       </div>
     </div>
-    <div class="pop">
-      <h2>UsageBar</h2>
-      <div class="row"><span>Codex · 5-hour</span><strong>63%</strong></div>
-      <div class="row"><span>Claude · Fable</span><strong>8%</strong></div>
-      <div class="row"><span>Cursor · Monthly</span><strong>59%</strong></div>
-      <div class="row"><span>OpenCode · 5-hour</span><strong>82%</strong></div>
+    <div class="stage">
+      <img class="pill" src="screens/menubar-pill.png" alt="" />
+      <img class="mock" src="screens/popover-codex.png" alt="" />
     </div>
   </div>
 </body>
