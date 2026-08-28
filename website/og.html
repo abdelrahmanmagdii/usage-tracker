@@ -31,8 +31,19 @@
     .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); }
     .stage { display: flex; flex-direction: column; align-items: center; }
     .stage img { display: block; }
-    .pill { width: 286px; filter: drop-shadow(0 10px 22px rgba(43,99,144,.35)); margin-bottom: 12px; }
-    .mock { width: 372px; filter: drop-shadow(0 32px 56px rgba(88,68,160,.32)); }
+    .pill {
+      display: inline-flex; align-items: center; gap: 10px; padding: 11px 24px; border-radius: 13px;
+      background: linear-gradient(180deg, #4080b6, #2b6390); color: #fff;
+      font-family: ui-monospace, Menlo, monospace; font-size: 20px; font-weight: 600;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.28), 0 14px 28px rgba(43,99,144,.35);
+      margin-bottom: -24px;
+    }
+    .pill i { display: block; width: 5px; border-radius: 2px; background: #e08a63; }
+    .pill i:nth-child(1) { height: 19px; }
+    .pill i:nth-child(2) { height: 12px; background: #8f7ff5; }
+    .pill i:nth-child(3) { height: 15px; background: #4ec9a4; }
+    .pill i:nth-child(4) { height: 9px; background: #b8c4d8; }
+    .mock { width: 396px; filter: drop-shadow(0 32px 56px rgba(88,68,160,.28)); }
   </style>
 </head>
 <body>
@@ -49,7 +60,7 @@
       </div>
     </div>
     <div class="stage">
-      <img class="pill" src="screens/menubar-pill.png" alt="" />
+      <div class="pill"><i></i><i></i><i></i><i></i>97% · 57% · 83% · 30%</div>
       <img class="mock" src="screens/popover-codex.png" alt="" />
     </div>
   </div>
