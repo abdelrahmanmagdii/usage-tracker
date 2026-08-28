@@ -31,19 +31,24 @@
     .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); }
     .stage { display: flex; flex-direction: column; align-items: center; }
     .stage img { display: block; }
-    .pill {
-      display: inline-flex; align-items: center; gap: 10px; padding: 11px 24px; border-radius: 13px;
-      background: linear-gradient(180deg, #4080b6, #2b6390); color: #fff;
-      font-family: ui-monospace, Menlo, monospace; font-size: 20px; font-weight: 600;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.28), 0 14px 28px rgba(43,99,144,.35);
-      margin-bottom: -24px;
+    .menubar {
+      display: flex; align-items: center; justify-content: flex-end; gap: 14px;
+      width: 396px; padding: 8px 14px; border-radius: 0 0 14px 14px;
+      background: rgba(255,255,255,.55); border: 1px solid rgba(70,55,130,.1); border-top: none;
+      box-shadow: 0 10px 24px rgba(88,68,160,.14);
+      color: #221c3f; font-family: ui-monospace, Menlo, monospace; font-size: 13px; font-weight: 600;
     }
-    .pill i { display: block; width: 5px; border-radius: 2px; background: #e08a63; }
-    .pill i:nth-child(1) { height: 19px; }
-    .pill i:nth-child(2) { height: 12px; background: #8f7ff5; }
-    .pill i:nth-child(3) { height: 15px; background: #4ec9a4; }
-    .pill i:nth-child(4) { height: 9px; background: #b8c4d8; }
-    .mock { width: 396px; filter: drop-shadow(0 32px 56px rgba(88,68,160,.28)); }
+    .menubar .mb-item {
+      display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 7px;
+      background: rgba(97,86,232,.1); border: 1px solid rgba(97,86,232,.22);
+    }
+    .menubar .mb-item i { display: block; width: 4px; border-radius: 2px; background: #6356e8; }
+    .menubar .mb-item i:nth-child(1) { height: 11px; }
+    .menubar .mb-item i:nth-child(2) { height: 7px; background: #c9703a; }
+    .menubar .mb-item i:nth-child(3) { height: 9px; background: #2f9e77; }
+    .menubar .mb-item i:nth-child(4) { height: 5px; background: #6f5ff0; }
+    .menubar .mb-clock { color: #4d4768; font-weight: 550; }
+    .mock { width: 396px; margin-top: 16px; filter: drop-shadow(0 32px 56px rgba(88,68,160,.28)); }
   </style>
 </head>
 <body>
@@ -60,7 +65,10 @@
       </div>
     </div>
     <div class="stage">
-      <div class="pill"><i></i><i></i><i></i><i></i>97% · 57% · 83% · 30%</div>
+      <div class="menubar">
+        <span class="mb-item"><i></i><i></i><i></i><i></i>97 · 57 · 83 · 30</span>
+        <span class="mb-clock">Fri 9:41 AM</span>
+      </div>
       <img class="mock" src="screens/popover-codex.png" alt="" />
     </div>
   </div>
