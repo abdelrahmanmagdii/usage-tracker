@@ -59,4 +59,4 @@ Demo account: we cannot issue OpenAI/Anthropic/Cursor credentials. Review on a M
 
 ## Screenshots
 
-Capture `store/screenshots/*.html` at 1280×800 (16:10) and upload the 1280×800 Mac size in App Store Connect. Optional 2560×1600 retina.
+Upload the 1280×800 PNGs in `store/screenshots/` (Mac size in App Store Connect). They are the real popover, laid out on a 16:10 canvas. Optional 2560×1600 retina if you recapture later.

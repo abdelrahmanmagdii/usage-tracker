@@ -3,8 +3,12 @@
   "bundle": {
     "targets": ["app"],
     "macOS": {
-      "minimumSystemVersion": "11.0",
-      "entitlements": "Entitlements.mas.generated.plist"
+      "minimumSystemVersion": "12.0",
+      "bundleVersion": "2",
+      "entitlements": "Entitlements.mas.generated.plist",
+      "files": {
+        "embedded.provisionprofile": "embedded.provisionprofile"
+      }
     }
   }
 }
