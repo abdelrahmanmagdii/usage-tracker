@@ -50,6 +50,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns"
     ],
+    "category": "DeveloperTool",
+    "copyright": "Copyright © 2026 Abdelrahman Amer. All rights reserved.",
+    "shortDescription": "Codex, Claude, Cursor, and OpenCode quotas in the Mac menu bar.",
+    "longDescription": "UsageBar sits in the Mac menu bar and shows remaining Codex, Claude Code, Cursor, and OpenCode quota plus when each window resets. Usage stays on this Mac. Share a 16:9 snapshot to X or LinkedIn without email, tokens, or file paths.",
     "macOS": {
       "minimumSystemVersion": "10.15"
     }

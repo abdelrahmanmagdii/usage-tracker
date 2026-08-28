@@ -15,7 +15,7 @@ export default defineConfig({
     watch: { ignored: ["**/src-tauri/**"] },
   },
   test: {
-    environment: "jsdom",
+    environment: "node",
     // tools/ holds the node:test suite for the Tibo Watch scraper (node --test).
     exclude: ["tools/**", "node_modules/**", "src-tauri/**"],
   },

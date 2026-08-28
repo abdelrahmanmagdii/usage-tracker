@@ -1,10 +1,10 @@
 # UsageBar
 
-**Codex and Claude Code quota windows and reset times, at a glance.**
+**Codex, Claude, Cursor, and OpenCode quota windows and reset times, at a glance.**
 
-UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding quota windows, how much remains, and exactly when each window resets. Codex data comes from your existing Codex login through the official Codex App Server—no OpenAI API key and no credential scraping. If Claude Code is installed, a second meter shows its 5-hour and weekly windows too.
+UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding quota windows, how much remains, and exactly when each window resets. Codex data comes from your existing Codex login through the official Codex App Server—no OpenAI API key and no credential scraping. If Claude Code, Cursor, or OpenCode Go is signed in on this Mac, those meters show up too.
 
-The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset countdown for each provider — how much you have left, matching what the Codex and Claude Code apps show, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
+The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset countdown for each provider — how much you have left, matching what the official apps show, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
 
 ![UsageBar showing an announced reset before it lands](docs/usagebar-demo.gif)
 
@@ -14,13 +14,20 @@ The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset c
 
 *Demo and screenshots use preview data.*
 
-By default both providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude) — the **Compact** layout, which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **Extended** (one icon per provider), choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — and toggle **Usage Alerts** (notifications at 80% / 95% used and on a fresh window) and **Launch at Login**.
+By default visible providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude) — the **Compact** layout, which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **Extended** (one icon per provider), choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — and toggle **Usage Alerts** (notifications at 80% / 95% used and on a fresh window) and **Launch at Login**.
 
 ## Install
 
-Download the latest `.dmg` from [Releases](https://github.com/abdelrahmanmagdii/usage-tracker/releases),
-open it, and drag UsageBar to Applications. Builds are signed and notarized by
-Apple, so they open without a security warning.
+When a GitHub release is published, download the `.dmg` from
+[Releases](https://github.com/abdelrahmanmagdii/usage-tracker/releases),
+open it, and drag UsageBar to Applications. Signed releases are notarized by
+Apple, so they open without a security warning. Until then, build from source below.
+
+The [public site](https://abdelrahmanmagdii.github.io/usage-tracker/) is what
+LinkedIn and X unfurl, and it is the privacy/support URL for the Mac App Store
+listing. From the popover, **Share** copies a 16:9 quota card and opens X or
+LinkedIn with a caption. Store submission copy lives in
+[store/APP_STORE.md](store/APP_STORE.md).
 
 Or build it yourself:
 
@@ -38,8 +45,8 @@ Maintainers: see [docs/RELEASING.md](docs/RELEASING.md) for how signed releases 
 ## Requirements
 
 - macOS 10.15 or newer
-- A working, authenticated `codex` CLI
-- Optional: a signed-in Claude Code install for the Claude meter
+- A working, authenticated `codex` CLI for the Codex meter
+- Optional: signed-in Claude Code, Cursor, and/or OpenCode Go for those meters
 - Node.js 20+ and Rust for development
 
 ## Run locally
@@ -154,6 +161,6 @@ Run the scraper yourself with `node tools/tibo-watch/check.mjs` (`--dry-run` to 
 - Richer local history trends and reset correlation
 - Selectable share-card themes
 - Local Claude usage history and trends
-- A combined single-tray mode for tight menu bars, and a Gemini CLI provider
+- A Gemini CLI provider
 
 UsageBar is an independent community project and is not an official OpenAI product.
