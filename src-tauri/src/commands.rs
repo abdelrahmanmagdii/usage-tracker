@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use tauri::{AppHandle, Manager, State};
 
 use crate::claude::{ClaudeManager, ClaudeState};
@@ -171,27 +169,6 @@ pub fn set_reset_incoming(
     tauri::async_runtime::spawn(async move {
         manager.update_tray().await;
     });
-}
-
-#[tauri::command]
-pub fn open_url(url: String) -> Result<(), String> {
-    crate::share::open_url(&url)
-}
-
-#[tauri::command]
-pub fn present_share_sheet(app: AppHandle, png: Vec<u8>, caption: String) -> Result<(), String> {
-    crate::share::present_share_sheet(app, png, caption)
-}
-
-#[tauri::command]
-pub async fn write_share_card(path: String, bytes: Vec<u8>) -> Result<(), String> {
-    let destination = PathBuf::from(path);
-    if destination.extension().and_then(|value| value.to_str()) != Some("png") {
-        return Err("Share cards must be saved as PNG files".into());
-    }
-    tokio::fs::write(destination, bytes)
-        .await
-        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

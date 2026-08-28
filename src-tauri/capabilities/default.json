@@ -6,8 +6,6 @@
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
-    "dialog:default",
-    "notification:default",
-    "clipboard-manager:allow-write-image"
+    "notification:default"
   ]
 }

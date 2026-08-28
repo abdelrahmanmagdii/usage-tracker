@@ -232,6 +232,31 @@ h1 {
   background: linear-gradient(90deg, var(--accent), #4e73f8);
 }
 .track.low b { background: var(--claude); }
+.pop-footer {
+  display: grid;
+  grid-template-columns: 1fr 32px 32px;
+  gap: 7px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(91, 72, 132, 0.08);
+}
+.pop-settings {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 650;
+  background: linear-gradient(145deg, #7765ee, #526ff3);
+}
+.pop-icon {
+  height: 32px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+}
 
 .notes {
   display: grid;

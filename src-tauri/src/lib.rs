@@ -5,7 +5,6 @@ mod commands;
 mod cursor;
 mod opencode;
 mod prefs;
-mod share;
 mod provider;
 mod tray;
 
@@ -162,8 +161,6 @@ pub(crate) fn hide_app() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -401,9 +398,6 @@ pub fn run() {
             commands::set_combined_tray,
             commands::get_autostart,
             commands::set_autostart,
-            commands::write_share_card,
-            commands::open_url,
-            commands::present_share_sheet,
             commands::hide_window,
             commands::quit_app
         ])

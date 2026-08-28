@@ -6,8 +6,6 @@
   <true/>
   <key>com.apple.security.network.client</key>
   <true/>
-  <key>com.apple.security.files.user-selected.read-write</key>
-  <true/>
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
   <key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
@@ -23,11 +21,10 @@
     <string>/usr/local/bin/codex</string>
     <string>/usr/bin/security</string>
     <string>/usr/bin/sqlite3</string>
-    <string>/usr/bin/open</string>
     <string>/bin/zsh</string>
   </array>
   <key>com.apple.application-identifier</key>
-  <string>TEAMID.com.usagebar.app</string>
+  <string>TEAMID.com.abdelrahmanamer.usagebar</string>
   <key>com.apple.developer.team-identifier</key>
   <string>TEAMID</string>
 </dict>

@@ -2,14 +2,13 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronUp, Clock3, MousePointer2, Power, RefreshCw, Settings2, Share2, ShieldCheck, Sparkles, Terminal, Ticket } from "lucide-react";
+import { ChevronUp, Clock3, MousePointer2, Power, RefreshCw, Settings2, ShieldCheck, Sparkles, Terminal, Ticket } from "lucide-react";
 import { MeterMark } from "./components/MeterMark";
 import { meterTone } from "./components/EdgeMeter";
 import { QuotaSection } from "./components/QuotaSection";
 import { ConnectionStateView } from "./components/ConnectionState";
 import { UsageDetails } from "./components/UsageDetails";
 import { TiboWatch } from "./components/TiboWatch";
-import { ShareModal } from "./components/ShareModal";
 import { ResetAlert } from "./components/ResetAlert";
 import { SettingsModal } from "./components/SettingsModal";
 import { ProviderSection } from "./components/ProviderSection";
@@ -45,7 +44,6 @@ export default function App() {
   const opencode = useOpenCodeMeter();
   const [prefs, setPrefs] = useState<AppPrefs>(DEFAULT_PREFS);
   const [now, setNow] = useState(Date.now());
-  const [sharing, setSharing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
   const resetEvents = useResetEvents();
@@ -97,15 +95,11 @@ export default function App() {
     void invoke("set_reset_incoming", { until });
   }, [resetEvents]);
 
-  // Esc unwinds the topmost layer first — share card, settings, onboarding —
-  // and only then dismisses the popover itself, like any macOS popover.
+  // Esc unwinds the topmost layer first — settings, onboarding — and only
+  // then dismisses the popover itself, like any macOS popover.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (sharing) {
-        setSharing(false);
-        return;
-      }
       if (settingsOpen) {
         setSettingsOpen(false);
         return;
@@ -119,7 +113,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sharing, settingsOpen, onboarding]);
+  }, [settingsOpen, onboarding]);
   const showCodex = isVisible(prefs, "codex");
   const showClaude = isVisible(prefs, "claude");
   const showCursor = isVisible(prefs, "cursor");
@@ -261,8 +255,8 @@ export default function App() {
       </div>
 
       <footer className="app-footer">
-        <button className="footer-action share-action" disabled={!mostCooked} onClick={() => setSharing(true)}>
-          <Share2 size={16} aria-hidden="true" /> Share
+        <button className="footer-action" onClick={() => setSettingsOpen(true)}>
+          <Settings2 size={16} aria-hidden="true" /> Settings
         </button>
         <button
           className="icon-button"
@@ -278,14 +272,10 @@ export default function App() {
         >
           <RefreshCw size={17} className={anyRefreshing ? "spinning" : ""} />
         </button>
-        <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Open settings" title="Settings">
-          <Settings2 size={17} />
-        </button>
         <button className="icon-button danger-hover" onClick={() => void invoke("quit_app")} aria-label="Quit UsageBar" title="Quit">
           <Power size={17} />
         </button>
       </footer>
-      {sharing && mostCooked ? <ShareModal bucket={mostCooked} onClose={() => setSharing(false)} /> : null}
       {settingsOpen ? (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}

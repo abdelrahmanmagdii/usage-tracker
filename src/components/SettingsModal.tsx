@@ -170,7 +170,7 @@ export function SettingsModal({
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <section
-        className="share-modal settings-modal"
+        className="sheet-modal settings-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
