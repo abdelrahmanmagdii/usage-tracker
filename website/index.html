@@ -4,81 +4,90 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>UsageBar — Codex, Claude, Cursor &amp; OpenCode quotas in the Mac menu bar</title>
-  <meta name="description" content="A local-first Mac menu bar meter for Codex, Claude Code, Cursor, and OpenCode Go. See remaining quota and reset time without shipping usage off your Mac." />
+  <meta name="description" content="A small Mac menu bar app for leftover Codex, Claude, Cursor, and OpenCode quota, plus when each window resets. Same numbers as the official apps. I don't run a server." />
   <link rel="canonical" href="https://abdelrahmanmagdii.github.io/usage-tracker/" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="UsageBar" />
-  <meta property="og:title" content="UsageBar — quota in the Mac menu bar" />
-  <meta property="og:description" content="See Codex, Claude, Cursor, and OpenCode quota left, and when it resets. Local-first. Built for posting a clean snapshot to X or LinkedIn." />
+  <meta property="og:title" content="UsageBar — leftover quota in the Mac menu bar" />
+  <meta property="og:description" content="Codex, Claude, Cursor, and OpenCode. Remaining percent and reset countdown. Nothing is sent to me." />
   <meta property="og:url" content="https://abdelrahmanmagdii.github.io/usage-tracker/" />
   <meta property="og:image" content="https://abdelrahmanmagdii.github.io/usage-tracker/og.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="UsageBar — quota in the Mac menu bar" />
-  <meta name="twitter:description" content="Local-first Mac menu bar meters for Codex, Claude, Cursor, and OpenCode. Share a 16:9 snapshot, keep credentials on-device." />
+  <meta name="twitter:title" content="UsageBar — leftover quota in the Mac menu bar" />
+  <meta name="twitter:description" content="Codex, Claude, Cursor, and OpenCode. Remaining percent and reset countdown. Nothing is sent to me." />
   <meta name="twitter:image" content="https://abdelrahmanmagdii.github.io/usage-tracker/og.png" />
   <link rel="icon" href="mark.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="site.css" />
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
-  <header class="nav">
+  <header class="menubar">
     <a class="brand" href="./">
-      <img src="mark.svg" width="28" height="28" alt="" />
+      <img src="mark.svg" width="16" height="16" alt="" />
       UsageBar
     </a>
     <nav>
-      <a href="#share">Share</a>
+      <a href="https://github.com/abdelrahmanmagdii/usage-tracker">GitHub</a>
       <a href="privacy.html">Privacy</a>
       <a href="support.html">Support</a>
-      <a href="https://github.com/abdelrahmanmagdii/usage-tracker">GitHub</a>
     </nav>
+    <span class="spacer"></span>
+    <span class="meter" aria-hidden="true"><i></i><i></i> 63% · 8%</span>
   </header>
   <main id="main">
     <section class="hero">
-      <p class="kicker">Mac menu bar · local first</p>
-      <h1>Your quota,<br />always in the menu bar.</h1>
-      <p class="lede">UsageBar watches Codex, Claude Code, Cursor, and OpenCode Go on this Mac. Remaining percent and reset countdown, matching the official apps. Nothing is sent to us.</p>
-      <div class="cta-row">
-        <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Download for Mac</a>
-        <span class="btn ghost" aria-disabled="true">Coming to the Mac App Store</span>
+      <div>
+        <h1>63% · 8%</h1>
+        <p class="lede">
+          Codex and Claude on one icon so macOS is less likely to hide it.
+          Cursor and OpenCode show up too if they’re signed in on this Mac.
+          Remaining percent and reset countdown — same numbers the official apps show.
+        </p>
+        <div class="cta-row">
+          <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Get the .dmg</a>
+          <span class="btn ghost">App Store later</span>
+        </div>
+        <p class="fine">macOS 10.15+. Signed and notarized. I don’t run a UsageBar server, so your quota never lands on one.</p>
       </div>
-      <p class="fine">Requires macOS 10.15+. App Store build needs macOS 11. Signed GitHub builds are notarized.</p>
-      <div class="menubar" aria-hidden="true">
-        <span class="apple"></span>
-        <span class="app-name">UsageBar</span>
-        <span class="spacer"></span>
-        <span class="pill"><i></i><i class="short"></i> 63% · 8%</span>
-        <span class="clock">Tue 4:12</span>
-      </div>
+      <aside class="popover" aria-label="Example popover">
+        <h2>UsageBar</h2>
+        <div class="row">
+          <span>Codex 5-hour</span><strong>63%</strong>
+          <div class="track" aria-hidden="true"><b style="width:63%"></b></div>
+        </div>
+        <div class="row">
+          <span>Claude Fable</span><strong>8%</strong>
+          <div class="track low" aria-hidden="true"><b style="width:8%"></b></div>
+        </div>
+        <div class="row">
+          <span>Cursor monthly</span><strong>59%</strong>
+          <div class="track" aria-hidden="true"><b style="width:59%"></b></div>
+        </div>
+        <div class="row">
+          <span>OpenCode 5-hour</span><strong>82%</strong>
+          <div class="track" aria-hidden="true"><b style="width:82%"></b></div>
+        </div>
+      </aside>
     </section>
-    <section class="grid">
+    <section class="notes">
       <article>
-        <h2>Four meters. One strip.</h2>
-        <p>Compact mode keeps a single icon so macOS is less likely to hide it on a notched menu bar. Extended mode splits Codex, Claude, Cursor, and OpenCode.</p>
+        <h2>One icon, or four</h2>
+        <p>Compact is the default (<code>63% · 8%</code>). Extended splits each provider into its own meter. Pin 5-hour, weekly, or a model cap like Fable in Settings.</p>
       </article>
       <article>
-        <h2>Resets, not vibes.</h2>
-        <p>Each tile names the window on display — 5-hour, weekly, or a model cap like Fable — and counts down to the real reset the provider reports.</p>
+        <h2>The reset the app reports</h2>
+        <p>Each tile names the window it’s following and counts down to that reset. Not a guess. Tooltip says which window you’re looking at.</p>
       </article>
       <article>
-        <h2>Share without leaking.</h2>
-        <p>The 1200×675 card is percentage, window, and countdown. Post it to X or LinkedIn from the popover. Email, tokens, and paths never leave the machine.</p>
+        <h2>Share is a PNG you paste</h2>
+        <p>Share copies a 16:9 card (percent, window, countdown) and opens X or LinkedIn. Paste the image yourself. Email, tokens, and paths stay on the Mac.</p>
       </article>
-    </section>
-    <section class="share-block" id="share">
-      <h2>Made to unfurl on LinkedIn and X</h2>
-      <p>This page carries Open Graph and Twitter Card tags, so a link preview shows the UsageBar mark and a one-line pitch. Inside the app, Share copies the snapshot and opens a compose window with a caption you can edit.</p>
-      <ol>
-        <li>Click <strong>Share</strong> on the lowest remaining window.</li>
-        <li>Pick <strong>Post on X</strong> or <strong>LinkedIn</strong> — the PNG stays on the clipboard so you can paste it. Copy caption separately if you want the text too.</li>
-        <li>Paste the image onto the post. LinkedIn also uses this page as the link card.</li>
-      </ol>
     </section>
   </main>
   <footer>
-    <p>© 2026 Abdelrahman Amer. Independent project, not affiliated with OpenAI, Anthropic, Cursor, or OpenCode.</p>
+    <p>© 2026 Abdelrahman Amer. Independent project. Not affiliated with OpenAI, Anthropic, Cursor, or OpenCode.</p>
     <p><a href="privacy.html">Privacy</a> · <a href="support.html">Support</a> · <a href="https://github.com/abdelrahmanmagdii/usage-tracker">Source</a></p>
   </footer>
 </body>

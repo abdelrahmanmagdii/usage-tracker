@@ -5,25 +5,46 @@
   <meta name="viewport" content="width=1200" />
   <title>UsageBar</title>
   <style>
-    html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: #0c0b10; color: #f3efe6; font-family: Georgia, serif; }
-    .wrap { display: grid; grid-template-columns: 1.2fr 0.8fr; height: 630px; padding: 56px 64px; }
-    .kicker { font: 600 13px/1 ui-sans-serif, system-ui; letter-spacing: .18em; text-transform: uppercase; color: #e39b7a; }
-    h1 { margin: 18px 0; font-size: 64px; line-height: .95; letter-spacing: -0.04em; }
-    p { font: 400 22px/1.4 ui-sans-serif, system-ui; color: #b7b1c4; max-width: 28ch; }
-    .mark { width: 220px; height: 220px; border-radius: 52px; background: linear-gradient(135deg, #7e67f6, #4e68f4); display: grid; place-items: center; justify-self: end; align-self: center; }
-    .bars { display: flex; gap: 22px; align-items: flex-end; height: 110px; }
-    .bars b { display: block; width: 42px; border-radius: 21px; background: #fff; height: 110px; }
-    .bars b:last-child { height: 64px; background: #e39b7a; }
+    html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+    body {
+      color: #17131f;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      background:
+        radial-gradient(circle at 88% 8%, rgba(125, 104, 246, .45), transparent 36%),
+        radial-gradient(circle at 10% 90%, rgba(80, 115, 248, .28), transparent 42%),
+        linear-gradient(165deg, #c9c3dc, #b7b0d4);
+    }
+    .bar {
+      height: 28px; display: flex; align-items: center; padding: 0 18px; gap: 10px;
+      background: rgba(255,255,255,.52); font-size: 13px; font-weight: 600;
+    }
+    .bar b { margin-left: auto; background: #111; color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+    .wrap { display: grid; grid-template-columns: 1.15fr .85fr; height: 602px; padding: 56px 64px; gap: 40px; align-items: center; }
+    h1 { margin: 0 0 16px; font-size: 84px; letter-spacing: -0.06em; line-height: .9; font-variant-numeric: tabular-nums; }
+    p { margin: 0; font-size: 22px; line-height: 1.35; color: rgba(35,29,49,.72); max-width: 18ch; }
+    .pop {
+      padding: 22px; border-radius: 22px;
+      background: linear-gradient(152deg, rgba(253,251,255,.94), rgba(232,236,255,.84));
+      border: 1px solid rgba(255,255,255,.8);
+      box-shadow: 0 28px 70px rgba(54,38,94,.22);
+    }
+    .row { display: flex; justify-content: space-between; margin-top: 10px; padding: 12px; border-radius: 14px; background: rgba(255,255,255,.65); font-size: 15px; }
+    .row strong { font-size: 22px; letter-spacing: -0.04em; }
   </style>
 </head>
 <body>
+  <div class="bar">UsageBar <b>63% · 8%</b></div>
   <div class="wrap">
     <div>
-      <div class="kicker">Mac menu bar</div>
-      <h1>Quota,<br>on sight.</h1>
-      <p>UsageBar meters Codex, Claude, Cursor, and OpenCode locally. Share a clean 16:9 snapshot to X or LinkedIn.</p>
+      <h1>63% · 8%</h1>
+      <p>Leftover Codex, Claude, Cursor, and OpenCode quota. In the Mac menu bar.</p>
     </div>
-    <div class="mark"><div class="bars"><b></b><b></b></div></div>
+    <div class="pop">
+      <div style="font-weight:650">UsageBar</div>
+      <div class="row"><span>Codex 5-hour</span><strong>63%</strong></div>
+      <div class="row"><span>Claude Fable</span><strong>8%</strong></div>
+      <div class="row"><span>Cursor monthly</span><strong>59%</strong></div>
+    </div>
   </div>
 </body>
 </html>

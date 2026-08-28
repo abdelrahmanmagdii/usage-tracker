@@ -4,31 +4,41 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Support — UsageBar</title>
-  <meta name="description" content="Help for UsageBar, the Mac menu bar quota meter." />
+  <meta name="description" content="Install UsageBar and get meters showing." />
   <link rel="canonical" href="https://abdelrahmanmagdii.github.io/usage-tracker/support.html" />
+  <link rel="icon" href="mark.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="site.css" />
 </head>
 <body>
-  <header class="nav">
-    <a class="brand" href="./"><img src="mark.svg" width="28" height="28" alt="" /> UsageBar</a>
-    <nav><a href="./">Home</a><a href="privacy.html">Privacy</a></nav>
+  <header class="menubar">
+    <a class="brand" href="./">
+      <img src="mark.svg" width="16" height="16" alt="" />
+      UsageBar
+    </a>
+    <nav>
+      <a href="./">Home</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="https://github.com/abdelrahmanmagdii/usage-tracker">GitHub</a>
+    </nav>
+    <span class="spacer"></span>
+    <span class="meter" aria-hidden="true"><i></i><i></i> 63% · 8%</span>
   </header>
-  <main class="share-block">
+  <main class="page">
     <p class="kicker">Support</p>
-    <h1>Get UsageBar working</h1>
+    <h1>If it isn’t showing up</h1>
     <h2>Install</h2>
-    <p>Mac App Store: the listing is in review / not live yet. Until then, download the notarized <code>.dmg</code> from <a href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Releases</a> and drag UsageBar to Applications. If a release is not up yet, build from source on GitHub.</p>
+    <p>App Store listing isn’t live. Download the notarized <code>.dmg</code> from <a href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Releases</a>, drag UsageBar to Applications. No release yet? Build from source.</p>
     <h2>A meter is missing</h2>
     <ul>
-      <li>Codex: install and sign in with the official <code>codex</code> CLI, then click Refresh.</li>
-      <li>Claude: sign in with the <code>claude</code> CLI (not only the desktop app). Allow Keychain access once.</li>
-      <li>Cursor: sign in through the Cursor app.</li>
-      <li>OpenCode: run <code>/connect</code> and choose OpenCode Go.</li>
+      <li>Codex: official <code>codex</code> CLI, signed in, then Refresh.</li>
+      <li>Claude: <code>claude</code> CLI (the desktop app alone isn’t enough). Allow Keychain once.</li>
+      <li>Cursor: signed in through the Cursor app.</li>
+      <li>OpenCode: <code>/connect</code>, pick OpenCode Go.</li>
     </ul>
-    <h2>Share to X or LinkedIn</h2>
-    <p>Open the popover → Share. Post on X or LinkedIn copies the 16:9 card and opens compose. Paste the image. macOS share sheet is there if the X or LinkedIn apps are installed.</p>
+    <h2>Share</h2>
+    <p>Popover → Share. Post on X or LinkedIn copies the card and opens compose. Paste the image. Caption is a separate copy if you want the text. macOS share sheet is there if those apps are installed.</p>
     <h2>Contact</h2>
-    <p>File a GitHub issue with macOS version, which provider, and whether you installed from the App Store or GitHub: <a href="https://github.com/abdelrahmanmagdii/usage-tracker/issues">github.com/abdelrahmanmagdii/usage-tracker/issues</a>.</p>
+    <p>Open a GitHub issue with macOS version, which provider, and GitHub vs App Store: <a href="https://github.com/abdelrahmanmagdii/usage-tracker/issues">github.com/abdelrahmanmagdii/usage-tracker/issues</a>.</p>
   </main>
 </body>
 </html>
