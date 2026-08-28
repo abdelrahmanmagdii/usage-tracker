@@ -7,43 +7,91 @@
   <style>
     html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
     body {
-      color: #17131f;
+      color: #f2f0fa;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
       background:
-        radial-gradient(circle at 88% 8%, rgba(125, 104, 246, .45), transparent 36%),
-        radial-gradient(circle at 10% 90%, rgba(80, 115, 248, .28), transparent 42%),
-        linear-gradient(165deg, #c9c3dc, #b7b0d4);
+        radial-gradient(900px 620px at 86% -12%, rgba(126, 103, 246, .3), transparent 62%),
+        radial-gradient(820px 620px at -12% 108%, rgba(64, 118, 255, .2), transparent 60%),
+        #0a0913;
+    }
+    body::before {
+      content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .5;
+      background-image: radial-gradient(rgba(255,255,255,.05) 1px, transparent 1.4px);
+      background-size: 26px 26px;
     }
     .bar {
-      height: 28px; display: flex; align-items: center; padding: 0 18px; gap: 10px;
-      background: rgba(255,255,255,.52); font-size: 13px; font-weight: 600;
+      height: 34px; display: flex; align-items: center; padding: 0 20px; gap: 10px;
+      background: rgba(255,255,255,.05); border-bottom: 1px solid rgba(255,255,255,.06);
+      font-size: 13.5px; font-weight: 700; letter-spacing: -.02em;
     }
-    .bar b { margin-left: auto; background: #111; color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
-    .wrap { display: grid; grid-template-columns: 1.15fr .85fr; height: 602px; padding: 56px 64px; gap: 40px; align-items: center; }
-    h1 { margin: 0 0 16px; font-size: 84px; letter-spacing: -0.06em; line-height: .9; font-variant-numeric: tabular-nums; }
-    p { margin: 0; font-size: 22px; line-height: 1.35; color: rgba(35,29,49,.72); max-width: 18ch; }
+    .bar b {
+      margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+      font-family: ui-monospace, Menlo, monospace; font-size: 12px; font-weight: 600;
+      padding: 3px 10px; border-radius: 999px;
+      background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);
+    }
+    .bar b i { width: 4px; height: 11px; border-radius: 2px; background: #8f7ff5; box-shadow: 0 0 6px rgba(143,127,245,.8); }
+    .bar b i + i { height: 6px; background: #e08a63; }
+    .wrap { display: grid; grid-template-columns: 1.1fr .9fr; height: 596px; padding: 64px 72px; gap: 48px; align-items: center; }
+    .pill {
+      display: inline-block; margin: 0 0 20px; padding: 5px 12px; border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04);
+      color: rgba(226,222,245,.72); font-size: 12px; font-weight: 650;
+      letter-spacing: .05em; text-transform: uppercase;
+    }
+    h1 {
+      margin: 0 0 18px; font-size: 66px; font-weight: 750; letter-spacing: -.045em; line-height: 1.04;
+      background: linear-gradient(180deg, #fff 55%, #b7aee8);
+      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    p { margin: 0; font-size: 21px; line-height: 1.45; color: rgba(226,222,245,.72); max-width: 30ch; }
+    .chips { display: flex; gap: 8px; margin-top: 26px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px;
+      background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.07);
+      font-size: 12.5px; color: rgba(226,222,245,.72);
+    }
+    .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); }
     .pop {
-      padding: 22px; border-radius: 22px;
-      background: linear-gradient(152deg, rgba(253,251,255,.94), rgba(232,236,255,.84));
-      border: 1px solid rgba(255,255,255,.8);
-      box-shadow: 0 28px 70px rgba(54,38,94,.22);
+      position: relative; padding: 22px; border-radius: 22px;
+      background: linear-gradient(160deg, rgba(38,34,58,.92), rgba(22,20,34,.92));
+      border: 1px solid rgba(255,255,255,.12);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 30px 80px rgba(0,0,0,.55);
     }
-    .row { display: flex; justify-content: space-between; margin-top: 10px; padding: 12px; border-radius: 14px; background: rgba(255,255,255,.65); font-size: 15px; }
-    .row strong { font-size: 22px; letter-spacing: -0.04em; }
+    .pop::after {
+      content: ""; position: absolute; top: -46px; right: -36px; width: 240px; height: 240px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(143,127,245,.3), transparent 65%);
+    }
+    .pop h2 { display: flex; justify-content: space-between; margin: 0 0 14px; font-size: 15px; font-weight: 700; color: rgba(226,222,245,.55); }
+    .row {
+      display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding: 13px 14px;
+      border-radius: 14px; background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.06);
+      font-size: 15px; font-weight: 600;
+    }
+    .row span { color: rgba(226,222,245,.72); }
+    .row strong { font-size: 22px; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
-  <div class="bar">UsageBar <b>63% · 8%</b></div>
+  <div class="bar">UsageBar <b><i></i><i></i>63% · 8%</b></div>
   <div class="wrap">
     <div>
-      <h1>63% · 8%</h1>
+      <span class="pill">For macOS · menu bar</span>
+      <h1>Know what’s left<br />before it resets.</h1>
       <p>Leftover Codex, Claude, Cursor, and OpenCode quota. In the Mac menu bar.</p>
+      <div class="chips">
+        <span class="chip" style="--dot:#4ec9a4">Codex</span>
+        <span class="chip" style="--dot:#e08a63">Claude Code</span>
+        <span class="chip" style="--dot:#c9c2f2">Cursor</span>
+        <span class="chip" style="--dot:#6fa8f8">OpenCode Go</span>
+      </div>
     </div>
     <div class="pop">
-      <div style="font-weight:650">UsageBar</div>
-      <div class="row"><span>Codex 5-hour</span><strong>63%</strong></div>
-      <div class="row"><span>Claude Fable</span><strong>8%</strong></div>
-      <div class="row"><span>Cursor monthly</span><strong>59%</strong></div>
+      <h2>UsageBar</h2>
+      <div class="row"><span>Codex · 5-hour</span><strong>63%</strong></div>
+      <div class="row"><span>Claude · Fable</span><strong>8%</strong></div>
+      <div class="row"><span>Cursor · Monthly</span><strong>59%</strong></div>
+      <div class="row"><span>OpenCode · 5-hour</span><strong>82%</strong></div>
     </div>
   </div>
 </body>
