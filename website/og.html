@@ -7,56 +7,28 @@
   <style>
     html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
     body {
-      color: #221c3f;
+      color: #1d1d1f;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-      background:
-        radial-gradient(1100px 700px at 12% -8%, rgba(255, 255, 255, .9), transparent 55%),
-        radial-gradient(900px 700px at 100% 40%, rgba(124, 104, 240, .18), transparent 60%),
-        linear-gradient(170deg, #f6f4fc, #e3dcf5);
+      background: #ffffff;
     }
-    .wrap { display: grid; grid-template-columns: 1.08fr .92fr; height: 630px; padding: 0 64px; gap: 40px; align-items: center; }
-    .eyebrow {
-      margin: 0 0 16px; font-size: 15px; font-weight: 700;
-      letter-spacing: .18em; text-transform: uppercase; color: #6a5ae8;
-    }
-    h1 { margin: 0 0 18px; font-size: 78px; font-weight: 750; letter-spacing: -.035em; line-height: 1.02; color: #221c3f; }
-    p { margin: 0; font-size: 24px; line-height: 1.4; color: #4d4768; max-width: 20ch; }
-    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
-    .chip {
-      display: inline-flex; align-items: center; gap: 7px; padding: 6px 13px; border-radius: 999px;
-      background: rgba(255,255,255,.7); border: 1px solid rgba(70,55,130,.09);
-      box-shadow: 0 2px 8px rgba(88,68,160,.07);
-      font-size: 14px; font-weight: 550; color: #4d4768;
-    }
-    .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); }
-    .stage { display: flex; flex-direction: column; align-items: center; }
-    .stage img { display: block; }
-    .menubar {
-      display: flex; align-items: center; justify-content: flex-end; gap: 14px;
-      width: 396px; padding: 8px 14px; border-radius: 0 0 14px 14px;
-      background: rgba(255,255,255,.55); border: 1px solid rgba(70,55,130,.1); border-top: none;
-      box-shadow: 0 10px 24px rgba(88,68,160,.14);
-      color: #221c3f; font-family: ui-monospace, Menlo, monospace; font-size: 13px; font-weight: 600;
-    }
-    .menubar .mb-item {
-      display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 7px;
-      background: rgba(97,86,232,.1); border: 1px solid rgba(97,86,232,.22);
-    }
-    .menubar .mb-item i { display: block; width: 4px; border-radius: 2px; background: #6356e8; }
-    .menubar .mb-item i:nth-child(1) { height: 11px; }
-    .menubar .mb-item i:nth-child(2) { height: 7px; background: #c9703a; }
-    .menubar .mb-item i:nth-child(3) { height: 9px; background: #2f9e77; }
-    .menubar .mb-item i:nth-child(4) { height: 5px; background: #6f5ff0; }
-    .menubar .mb-clock { color: #4d4768; font-weight: 550; }
-    .mock { width: 396px; margin-top: 16px; filter: drop-shadow(0 32px 56px rgba(88,68,160,.28)); }
+    .wrap { display: grid; grid-template-columns: 1.1fr .9fr; height: 630px; padding: 0 72px; gap: 56px; align-items: center; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; font-size: 19px; font-weight: 650; letter-spacing: -.01em; }
+    .brand img { border-radius: 6px; }
+    h1 { margin: 0 0 18px; max-width: 11em; font-size: 58px; font-weight: 700; letter-spacing: -.032em; line-height: 1.08; }
+    p { margin: 0; font-size: 22px; line-height: 1.45; color: #4b4b52; max-width: 24ch; }
+    .chips { display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 28px; }
+    .chip { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 550; color: #4b4b52; }
+    .chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--dot); }
+    .stage { display: flex; justify-content: center; }
+    .stage img { display: block; width: 370px; filter: drop-shadow(0 20px 44px rgba(0,0,0,.16)); }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div>
-      <p class="eyebrow">Menu bar</p>
-      <h1>Every limit,<br />one glance.</h1>
-      <p>Four coding tools, live percentages, one menu bar icon.</p>
+      <div class="brand"><img src="mark.svg" width="30" height="30" alt="" />UsageBar</div>
+      <h1>Your AI coding quota, in the menu bar.</h1>
+      <p>Codex, Claude Code, Cursor, and OpenCode Go. Remaining percent and reset times, same as the official apps.</p>
       <div class="chips">
         <span class="chip" style="--dot:#6356e8">Codex</span>
         <span class="chip" style="--dot:#c9703a">Claude Code</span>
@@ -65,11 +37,7 @@
       </div>
     </div>
     <div class="stage">
-      <div class="menubar">
-        <span class="mb-item"><i></i><i></i><i></i><i></i>97 · 57 · 83 · 30</span>
-        <span class="mb-clock">Fri 9:41 AM</span>
-      </div>
-      <img class="mock" src="screens/popover-codex.png" alt="" />
+      <img src="screens/popover-codex.png" alt="" />
     </div>
   </div>
 </body>

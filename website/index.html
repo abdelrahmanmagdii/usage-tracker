@@ -35,102 +35,158 @@
         <a href="support.html">Support</a>
       </nav>
       <span class="spacer"></span>
-      <span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i>97 · 57 · 83 · 30</span>
+      <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Download</a>
     </div>
   </header>
   <main id="main">
     <section class="hero">
       <div>
-        <p class="eyebrow">Menu bar</p>
-        <h1>Every limit,<br />one glance.</h1>
+        <h1>Your AI coding quota, in&nbsp;the&nbsp;menu&nbsp;bar.</h1>
         <p class="lede">
-          Four coding tools, live percentages, one menu bar icon.
-          Codex and Claude by default — Cursor and OpenCode show up too
-          if they’re signed in on this Mac. Same numbers the official apps show.
+          UsageBar is a small macOS app that shows how much Codex, Claude Code,
+          Cursor, and OpenCode Go quota you have left — and when each limit
+          resets. Same numbers the official apps show.
         </p>
-        <div class="providers">
-          <span class="chip codex">Codex</span>
-          <span class="chip claude">Claude Code</span>
-          <span class="chip cursor">Cursor</span>
-          <span class="chip opencode">OpenCode Go</span>
-        </div>
+        <ul class="providers">
+          <li class="codex">Codex</li>
+          <li class="claude">Claude Code</li>
+          <li class="cursor">Cursor</li>
+          <li class="opencode">OpenCode Go</li>
+        </ul>
         <div class="cta-row">
-          <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Get the .dmg</a>
-          <span class="btn store">Mac App Store <em>pending review</em></span>
+          <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Download for Mac</a>
+          <a class="btn secondary" href="https://github.com/abdelrahmanmagdii/usage-tracker">View on GitHub</a>
         </div>
-        <p class="fine">macOS 10.15+. Signed and notarized. No UsageBar server — your quota never lands on one.</p>
+        <p class="fine">macOS 10.15 or later · Signed and notarized · No account, no server, no telemetry</p>
       </div>
-      <div class="stage" aria-hidden="true">
-        <div class="menubar">
-          <span class="mb-item"><i></i><i></i><i></i><i></i>97 · 57 · 83 · 30</span>
-          <span class="mb-clock">Fri 9:41 AM</span>
+      <div class="shot">
+        <img src="screens/popover-codex.png" alt="UsageBar popover showing Codex 5-hour and weekly quota windows" width="980" height="1324" />
+      </div>
+    </section>
+
+    <section class="section band">
+      <div class="inner">
+        <div class="section-head">
+          <h2>What it does</h2>
         </div>
-        <img class="mock" src="screens/popover-codex.png" alt="UsageBar popover showing Codex 5-hour and weekly quota windows" width="980" height="1324" />
+        <ul class="features">
+          <li>
+            <h3>Same numbers as the official apps</h3>
+            <p>Reads each provider’s own usage endpoint, so the percentages match what Codex, Claude Code, Cursor, and OpenCode report.</p>
+          </li>
+          <li>
+            <h3>Every window that matters</h3>
+            <p>5-hour, weekly, and monthly limits, plus per-model caps — each with the exact time it resets.</p>
+          </li>
+          <li>
+            <h3>Compact or extended</h3>
+            <p>One menu bar item with every meter, or one icon per tool. Compact survives a crowded menu bar.</p>
+          </li>
+          <li>
+            <h3>Alerts before you run out</h3>
+            <p>Notifications at 80% and 95% of a limit, and again when it resets.</p>
+          </li>
+          <li>
+            <h3>Track only what you use</h3>
+            <p>Hidden tools leave the menu bar and are never polled.</p>
+          </li>
+          <li>
+            <h3>Private by design</h3>
+            <p>Credentials stay on your Mac. There is no UsageBar server; nothing is sent to the developer.</p>
+          </li>
+        </ul>
       </div>
     </section>
 
-    <section class="feature claude">
-      <div class="copy">
-        <p class="eyebrow">Claude Code</p>
-        <h2>5-hour, weekly,<br />per-model</h2>
-        <p>Track each quota window separately, with the exact time your next reset lands — including model caps like Fable. The tooltip always names the window you’re looking at.</p>
+    <section class="section">
+      <div class="section-head">
+        <h2>Screenshots</h2>
+        <p>The popover and settings, as shipped.</p>
       </div>
-      <div class="shot"><div class="frame"><img src="screens/popover-claude.png" alt="UsageBar popover showing Claude Code 5-hour, weekly, and Fable quota windows" width="980" height="1324" loading="lazy" /></div></div>
+      <ul class="shots">
+        <li>
+          <figure>
+            <img src="screens/popover-codex.png" alt="UsageBar popover showing Codex 5-hour and weekly quota windows" width="980" height="1324" loading="lazy" />
+            <figcaption><strong>Codex</strong> — 5-hour and weekly windows</figcaption>
+          </figure>
+        </li>
+        <li>
+          <figure>
+            <img src="screens/popover-claude.png" alt="UsageBar popover showing Claude Code 5-hour, weekly, and Fable quota windows" width="980" height="1324" loading="lazy" />
+            <figcaption><strong>Claude Code</strong> — 5-hour, weekly, and per-model caps</figcaption>
+          </figure>
+        </li>
+        <li>
+          <figure>
+            <img src="screens/popover-cursor.png" alt="UsageBar popover showing Cursor monthly plan, Auto, and API meters" width="980" height="1324" loading="lazy" />
+            <figcaption><strong>Cursor</strong> — plan, Auto, and API usage</figcaption>
+          </figure>
+        </li>
+        <li>
+          <figure>
+            <img src="screens/popover-opencode.png" alt="UsageBar popover showing OpenCode Go 5-hour, weekly, and monthly meters" width="980" height="1324" loading="lazy" />
+            <figcaption><strong>OpenCode Go</strong> — 5-hour, weekly, and monthly</figcaption>
+          </figure>
+        </li>
+        <li>
+          <figure>
+            <img src="screens/settings-tools.png" alt="UsageBar settings sheet with toggles for Codex, Claude Code, Cursor, and OpenCode Go" width="980" height="1324" loading="lazy" />
+            <figcaption><strong>Settings</strong> — choose which tools to track</figcaption>
+          </figure>
+        </li>
+        <li>
+          <figure>
+            <img src="screens/settings-layout.png" alt="UsageBar settings sheet with compact and extended menu bar layout options" width="980" height="1324" loading="lazy" />
+            <figcaption><strong>Settings</strong> — layout, alerts, launch at login</figcaption>
+          </figure>
+        </li>
+      </ul>
     </section>
 
-    <section class="feature cursor">
-      <div class="copy">
-        <p class="eyebrow">Cursor</p>
-        <h2>Plan, Auto and API</h2>
-        <p>Monthly plan usage, Auto and Composer, and API spend, side by side. Whatever Cursor reports, one glance covers it.</p>
+    <section class="section band">
+      <div class="inner">
+        <div class="section-head">
+          <h2>How it works</h2>
+        </div>
+        <ol class="steps">
+          <li>
+            <h3>Reads local credentials</h3>
+            <p>Uses the sessions the tools already keep on your Mac: Codex’s app server, Claude Code’s Keychain item, Cursor’s login database, OpenCode’s <code>auth.json</code>.</p>
+          </li>
+          <li>
+            <h3>Polls the provider APIs</h3>
+            <p>Fetches usage on an interval and when you click. Each provider handles that traffic under its own policies.</p>
+          </li>
+          <li>
+            <h3>Stays out of the way</h3>
+            <p>No UsageBar server, account, or telemetry. Quit the app and nothing keeps running.</p>
+          </li>
+        </ol>
       </div>
-      <div class="shot"><div class="frame"><img src="screens/popover-cursor.png" alt="UsageBar popover showing Cursor monthly plan, Auto, and API meters" width="980" height="1324" loading="lazy" /></div></div>
     </section>
 
-    <section class="feature opencode">
-      <div class="copy">
-        <p class="eyebrow">OpenCode Go</p>
-        <h2>Same meters,<br />every tool</h2>
-        <p>Add a tool and it shows up in the same layout you already read at a glance. Hide the ones you don’t use.</p>
+    <section class="section">
+      <div class="section-head">
+        <h2>Download</h2>
       </div>
-      <div class="shot"><div class="frame"><img src="screens/popover-opencode.png" alt="UsageBar popover showing OpenCode Go 5-hour, weekly, and monthly meters" width="980" height="1324" loading="lazy" /></div></div>
-    </section>
-
-    <section class="feature">
-      <div class="copy">
-        <p class="eyebrow">Settings</p>
-        <h2>Choose what<br />to track</h2>
-        <p>Hidden tools stay off the menu bar and are never polled. Each meter can follow the window you care about — most used, 5-hour, weekly, or monthly.</p>
+      <div class="platforms">
+        <article class="platform">
+          <header>
+            <h3>Direct download</h3>
+            <span class="status live">Available</span>
+          </header>
+          <p>Signed and notarized <code>.dmg</code> from GitHub Releases. Drag UsageBar to Applications. macOS 10.15 or newer.</p>
+          <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Download the .dmg</a>
+        </article>
+        <article class="platform">
+          <header>
+            <h3>Mac App Store</h3>
+            <span class="status review">In review</span>
+          </header>
+          <p>The same app, sandboxed for the store. Currently with Apple review — this page will link the listing when it ships.</p>
+          <span class="btn disabled">Coming soon <em>pending review</em></span>
+        </article>
       </div>
-      <div class="shot"><div class="frame"><img src="screens/settings-tools.png" alt="UsageBar settings sheet with toggles for Codex, Claude Code, Cursor, and OpenCode Go" width="980" height="1324" loading="lazy" /></div></div>
-    </section>
-
-    <section class="feature">
-      <div class="copy">
-        <p class="eyebrow">Settings</p>
-        <h2>Compact or<br />extended</h2>
-        <p>Fit every meter in one icon, and get alerts at 80%, 95%, and on every reset. Launch at login, and a setup guide when a tool is missing.</p>
-      </div>
-      <div class="shot"><div class="frame"><img src="screens/settings-layout.png" alt="UsageBar settings sheet with compact and extended menu bar layout options" width="980" height="1324" loading="lazy" /></div></div>
-    </section>
-
-    <section class="platforms">
-      <article class="platform">
-        <header>
-          <h2>Direct download</h2>
-          <span class="status live">Available</span>
-        </header>
-        <p>Grab the signed, notarized <code>.dmg</code> from GitHub Releases and drag UsageBar to Applications. macOS 10.15 or newer.</p>
-        <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Download the .dmg</a>
-      </article>
-      <article class="platform">
-        <header>
-          <h2>Mac App Store</h2>
-          <span class="status review">In review</span>
-        </header>
-        <p>The same app, sandboxed for the store. It’s with Apple review now and should be live very soon — this page links to the listing the day it ships.</p>
-        <span class="btn store">Coming soon <em>pending review</em></span>
-      </article>
     </section>
   </main>
   <footer>
