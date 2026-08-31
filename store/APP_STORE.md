@@ -31,7 +31,7 @@ quota,codex,claude,cursor,opencode,menubar,ratelimit,reset,usage,developer
 
 ## What's New (0.1.0)
 
-First release: menu bar meters for Codex, Claude, Cursor, and OpenCode Go, plus Tibo Watch reset radar.
+First release: menu bar meters for Codex, Claude, Cursor, and OpenCode Go, plus Tibo Watch reset radar. Claude Code is read from the CLI credentials file so macOS does not show a Keychain permission sheet.
 
 ## App Privacy
 
@@ -52,7 +52,7 @@ Record on a physical Mac, latest macOS, QuickTime Player → File → New Screen
 3. Click each provider row if more than one is visible (Codex, Claude, Cursor, OpenCode).
 4. Click the wide **Settings** button. Show Tools (hide/show a provider), then Layout (compact vs extended).
 5. Close Settings. Click **Refresh**. Right-click the menu bar icon and show Quit (do not have to quit).
-6. If macOS shows Keychain (“Claude Code-credentials”) or notification permission, leave those prompts in the clip.
+6. If macOS shows a notification permission prompt, leave it in the clip.
 
 Skip anything the app does not have: UsageBar account, IAP, subscriptions, UGC, ATT, camera, location, contacts.
 
@@ -74,7 +74,7 @@ No UsageBar account, registration, login, or account deletion.
 No in-app purchases or subscriptions.
 No user-generated content, reporting, or blocking.
 No location, contacts, camera, microphone, or App Tracking Transparency prompts.
-macOS may show a Keychain prompt the first time the Claude meter reads the existing "Claude Code-credentials" item, and a notification prompt if alerts are enabled. Those system prompts are included when they appear.
+macOS should not show a Keychain sheet for Claude Code. Notification permission may still appear if alerts are enabled; leave that prompt in the clip when it appears.
 
 2. DEVICES AND OS TESTED BEFORE SUBMITTING
 - [MODEL from About This Mac], Apple silicon, macOS 26.3 (physical device)
@@ -92,7 +92,7 @@ b) Have at least one signed-in tool on the same Mac: Codex CLI (`codex login`), 
 c) Click the menu bar meters. Hidden tools are not polled. Onboarding copy explains how to sign in if a meter is missing.
 d) Settings (wide footer button): which tools to show, which quota window each meter follows, compact vs extended, alerts, launch at login.
 
-Sandbox: read-only temporary exceptions for ~/.claude, ~/.codex, ~/.local/share/opencode, ~/Library/Application Support/Cursor, and spawning the user-installed Codex binary at /opt/homebrew/bin/codex and /usr/local/bin/codex. UsageBar does not write those locations.
+Sandbox: read-only temporary exceptions for ~/.claude, ~/.local/share/opencode, ~/Library/Application Support/Cursor, and the user-installed Codex CLI at /opt/homebrew/bin/codex and /usr/local/bin/codex. Keychain and SQLite use public APIs. UsageBar does not write those locations.
 Launch at Login may be unavailable in the App Store sandbox; the app is fully usable without it. System Settings → Login Items can add UsageBar.
 
 5. EXTERNAL SERVICES
@@ -119,6 +119,24 @@ Thank you for the review. UsageBar is a Mac menu bar extra with no Dock icon —
 I have attached a screen recording from a physical Mac that starts at launch and walks through the popover and Settings. Answers to items 1–7 are in this reply and in App Review Information → Notes.
 
 There is no UsageBar account or demo login. Live meters need at least one of Codex, Claude Code, Cursor, or OpenCode already signed in on the Mac. The recording shows that signed-in state. The app is free, with no IAP, UGC, or ATT.
+```
+
+## Temporary exception entitlements (Guideline 2.4.5)
+
+Apple lists each path as a repeated key. Build **0.1.0 (4)** dropped `/usr/bin/security`, `/usr/bin/sqlite3`, `/bin/zsh`, and unused `~/.codex`. Keychain is never prompted. Remaining exceptions are read-only. Paste this with the new binary:
+
+```
+The remaining temporary exceptions are required for a menu-bar developer tool that displays quota from CLIs and IDEs the user already installed. All are read-only. UsageBar does not write, delete, or execute user documents.
+
+home-relative-path.read-only:
+- ~/.claude/ — fallback Claude Code credentials file if Keychain has no item. Keychain itself uses Security.framework (no /usr/bin/security).
+- ~/.local/share/opencode/ — OpenCode Go auth.json so the OpenCode meter can call OpenCode’s own usage API.
+- ~/Library/Application Support/Cursor/ — Cursor’s state.vscdb. The token is read in-process with SQLite (no /usr/bin/sqlite3).
+
+absolute-path.read-only:
+- /opt/homebrew/bin/codex and /usr/local/bin/codex — spawn the user-installed Codex CLI as `codex app-server --stdio`. Codex quota never leaves this Mac. A sandboxed GUI app cannot see Homebrew on PATH, so these two locations are the supported install paths.
+
+No shell, no Keychain CLI, no sqlite3 binary.
 ```
 
 ## Screenshots

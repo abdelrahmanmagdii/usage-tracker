@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::{process::Command, sync::{Mutex, RwLock}};
+use tokio::sync::{Mutex, RwLock};
 
 use crate::codex::process::ConnectionState;
 use crate::provider::{
@@ -198,32 +198,52 @@ async fn load_access_token() -> CredentialRead {
             return CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display()))
         }
     }
-    // `immutable=1` lets the read succeed while Cursor has the DB open (WAL).
-    let uri = format!("file:{}?mode=ro&immutable=1", path.display());
-    let output = Command::new("/usr/bin/sqlite3")
-        .args([
-            "-noheader",
-            "-batch",
-            &uri,
-            "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1;",
-        ])
-        .output()
-        .await;
-    let output = match output {
-        Ok(output) => output,
+    match tokio::task::spawn_blocking(move || read_cursor_token(&path)).await {
+        Ok(read) => read,
         Err(error) => {
-            return CredentialRead::Unavailable(format!("sqlite3 failed to run: {error}"))
+            CredentialRead::Unavailable(format!("Cursor login lookup was cancelled: {error}"))
+        }
+    }
+}
+
+fn sqlite_readonly_uri(path: &std::path::Path) -> String {
+    let encoded = path
+        .to_string_lossy()
+        .replace('%', "%25")
+        .replace('#', "%23")
+        .replace('?', "%3F")
+        .replace(' ', "%20");
+    format!("file:{encoded}?mode=ro&immutable=1")
+}
+
+fn read_cursor_token(path: &std::path::Path) -> CredentialRead {
+    // `immutable=1` lets the read succeed while Cursor has the DB open (WAL).
+    let uri = sqlite_readonly_uri(path);
+    let conn = match rusqlite::Connection::open_with_flags(
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ) {
+        Ok(conn) => conn,
+        Err(error) => {
+            return CredentialRead::Unavailable(format!(
+                "Cursor's login database could not be opened ({error})"
+            ))
         }
     };
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return CredentialRead::Unavailable(format!(
-            "Cursor's login database could not be read ({stderr})"
-        ));
-    }
-    match parse_stored_token(&String::from_utf8_lossy(&output.stdout)) {
-        Some(token) => CredentialRead::Found(token),
-        None => CredentialRead::Absent,
+    let value: Result<String, rusqlite::Error> = conn.query_row(
+        "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1",
+        [],
+        |row| row.get(0),
+    );
+    match value {
+        Ok(raw) => match parse_stored_token(&raw) {
+            Some(token) => CredentialRead::Found(token),
+            None => CredentialRead::Absent,
+        },
+        Err(rusqlite::Error::QueryReturnedNoRows) => CredentialRead::Absent,
+        Err(error) => CredentialRead::Unavailable(format!(
+            "Cursor's login database could not be read ({error})"
+        )),
     }
 }
 
@@ -353,6 +373,15 @@ mod tests {
         assert_eq!(parse_stored_token("\"abc.def.ghi\"\n").as_deref(), Some("abc.def.ghi"));
         assert_eq!(parse_stored_token("abc.def.ghi").as_deref(), Some("abc.def.ghi"));
         assert!(parse_stored_token("   ").is_none());
+    }
+
+    #[test]
+    fn encodes_spaces_in_the_sqlite_uri() {
+        let path = std::path::Path::new("/Users/me/Library/Application Support/Cursor/state.vscdb");
+        assert_eq!(
+            sqlite_readonly_uri(path),
+            "file:/Users/me/Library/Application%20Support/Cursor/state.vscdb?mode=ro&immutable=1"
+        );
     }
 
     #[test]

@@ -82,7 +82,7 @@ Background freshness is defended three ways: the process opts out of App Nap (ma
 
 ### Claude Code
 
-Claude Code has no local app-server equivalent, so the Claude meter reads the OAuth session that Claude Code itself maintains — the macOS Keychain item `Claude Code-credentials` first, then the `~/.claude/.credentials.json` fallback — and asks Anthropic's own usage endpoint (the same one behind Claude Code's `/usage` screen) for the current 5-hour, weekly, and model-scoped windows. Access is strictly read-only: the token is never refreshed, rewritten, or sent anywhere except `api.anthropic.com`, so this app can never invalidate your Claude Code session. macOS will ask once whether to allow the Keychain read; choose "Always Allow" to keep background refresh silent.
+Claude Code has no local app-server equivalent, so the Claude meter reads the OAuth session that Claude Code itself maintains — `~/.claude/.credentials.json` first, then the macOS Keychain item `Claude Code-credentials` only if that file is missing or expired, without showing a Keychain prompt — and asks Anthropic's own usage endpoint (the same one behind Claude Code's `/usage` screen) for the current 5-hour, weekly, and model-scoped windows. Access is strictly read-only: the token is never refreshed, rewritten, or sent anywhere except `api.anthropic.com`, so this app can never invalidate your Claude Code session.
 
 If no Claude Code login exists on the Mac, the Claude tray icon and popover section stay hidden entirely.
 
@@ -105,7 +105,7 @@ Private usage stays on this Mac. UsageBar does not read Codex credential files, 
 
 **About the Claude Code token, specifically.** The Claude meter is the only part of the app that touches a credential, so here is exactly what it does — the entire implementation is one auditable file, [`src-tauri/src/claude.rs`](src-tauri/src/claude.rs):
 
-- It **reads** the OAuth token Claude Code already stores (Keychain item `Claude Code-credentials`, or `~/.claude/.credentials.json`). macOS shows its standard permission prompt on first read; choose "Always Allow" to keep background refresh silent.
+- It **reads** the OAuth token Claude Code already stores (`~/.claude/.credentials.json`, or the Keychain item `Claude Code-credentials` if the file is missing or expired). Background refreshes never show a Keychain permission sheet.
 - The token is sent to **exactly one place**: `https://api.anthropic.com/api/oauth/usage`, Anthropic's own endpoint — the same one Claude Code's `/usage` screen calls. It is never logged, never shown in the UI, and never sent anywhere else.
 - The token is **never written, refreshed, or rotated**. Refreshing a token from a second app is how third-party trackers accidentally log people out of Claude Code; this app deliberately does not do it. If the session expires, the meter simply asks you to open Claude Code once.
 - No Claude usage data leaves the Mac. There is no telemetry anywhere in this app.

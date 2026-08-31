@@ -92,10 +92,9 @@ function StepProviders({ providers }: { providers: ProviderStatus[] }) {
       <div className="onboard-note">
         <KeyRound size={14} aria-hidden="true" />
         <p>
-          The first time it reads a stored login, macOS may ask for Keychain
-          access. Pick <strong>Always Allow</strong> so it can keep updating in
-          the background. UsageBar only reads those tokens, and only sends them
-          to that tool’s own usage endpoint.
+          Claude Code comes from the login the <code>claude</code> CLI already
+          keeps on this Mac. UsageBar only reads it, and only sends it to
+          Anthropic’s own usage endpoint — never to us.
         </p>
       </div>
     </>

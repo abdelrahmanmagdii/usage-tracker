@@ -1,6 +1,6 @@
 [package]
 name = "usagebar"
-version = "0.1.0"
+version = "0.1.1"
 description = "Codex, Claude, Cursor, and OpenCode quota windows and reset times, in the Mac menu bar."
 authors = ["UsageBar contributors"]
 edition = "2021"
@@ -27,6 +27,8 @@ which = "8"
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSScreen", "NSWindow", "NSApplication", "NSResponder", "NSButton", "NSControl", "NSView"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
+rusqlite = { version = "0.32", default-features = false }
+security-framework = "3"
 window-vibrancy = "0.6"
 
 [profile.release]

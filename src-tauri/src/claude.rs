@@ -1,14 +1,17 @@
 //! Claude Code usage provider.
 //!
+//! Claude Code usage provider.
+//!
 //! Claude Code has no local app-server equivalent, so this module reads the
-//! OAuth session that Claude Code itself maintains (macOS Keychain first, the
-//! `~/.claude/.credentials.json` fallback second) and asks Anthropic's own
-//! usage endpoint for the same rate-limit windows the `/usage` screen shows.
-//! Access is strictly read-only: the token is never refreshed or rewritten, so
-//! Claude Code's session can never be invalidated by this app.
+//! OAuth session that Claude Code itself maintains (`~/.claude/.credentials.json`
+//! first, then the macOS Keychain item if that file is missing or expired) and
+//! asks Anthropic's own usage endpoint for the same rate-limit windows the
+//! `/usage` screen shows. Access is strictly read-only: the token is never
+//! refreshed or rewritten, so Claude Code's session can never be invalidated
+//! by this app. Keychain lookups never show a system prompt — a background
+//! meter must not pop "UsageBar wants to see Claude Code credentials".
 
 use std::{
-    process::Stdio,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc,
@@ -20,7 +23,6 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
-    process::Command,
     sync::{Mutex, RwLock},
     time::Duration,
 };
@@ -31,12 +33,11 @@ use crate::tray::{self};
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
-/// Exit status `security(1)` reports for errSecItemNotFound (-25300 truncated to
-/// a shell exit code). It is the ONLY status that proves the login is absent;
-/// every other failure — locked keychain, denied or auto-dismissed access
-/// prompt, a subprocess killed mid-lookup — says nothing about whether Claude
-/// Code is signed in, and used to be misread as "Claude Code is not installed".
-const KEYCHAIN_ITEM_NOT_FOUND: i32 = 44;
+/// `errSecItemNotFound` (-25300). It is the ONLY status that proves the login
+/// is absent; every other failure — locked keychain, denied or dismissed
+/// access prompt, a cancelled lookup — says nothing about whether Claude Code
+/// is signed in, and used to be misread as "Claude Code is not installed".
+const KEYCHAIN_ITEM_NOT_FOUND: i32 = -25300;
 /// Consecutive empty reads required before the menu-bar meter disappears, once
 /// it has shown a number at least once.
 const ABSENT_READS_BEFORE_HIDING: u32 = 2;
@@ -272,13 +273,21 @@ enum CredentialRead {
     Unavailable(String),
 }
 
-/// Reads Claude Code's stored OAuth session without ever modifying it. Both
-/// stores are consulted and the freshest usable token wins, because either one
-/// can lag behind the other depending on how Claude Code was last used.
+/// Reads Claude Code's stored OAuth session without ever modifying it. The
+/// credentials file is enough for a working CLI install and never prompts. The
+/// Keychain copy is only consulted when that file is missing or expired, and
+/// even then the lookup is silent — macOS must not ask for Keychain access on
+/// a refresh timer.
 async fn load_credentials() -> CredentialRead {
-    let keychain = load_from_keychain().await;
     let file = load_from_file().await;
-    combine_reads(keychain, file, now_unix_millis())
+    let now_ms = now_unix_millis();
+    if let CredentialRead::Found(credentials) = &file {
+        if !credentials.is_expired(now_ms) {
+            return file;
+        }
+    }
+    let keychain = load_from_keychain().await;
+    combine_reads(keychain, file, now_ms)
 }
 
 /// Merges the two stores. A usable login from either one wins; failing that, a
@@ -324,44 +333,52 @@ fn hides_tray(has_shown_usage: bool, consecutive_absent_reads: u32) -> bool {
     !has_shown_usage || consecutive_absent_reads >= ABSENT_READS_BEFORE_HIDING
 }
 
-/// Classifies a failing `security find-generic-password` run. Only
-/// errSecItemNotFound means the login is absent.
-fn classify_keychain_exit(code: Option<i32>) -> CredentialRead {
-    match code {
-        Some(KEYCHAIN_ITEM_NOT_FOUND) => CredentialRead::Absent,
-        // Locked keychain (36/51), a denied or dismissed access prompt (128),
-        // or anything else the tool reports: the lookup failed, so the meter
-        // must keep whatever it was already showing.
-        Some(code) => CredentialRead::Unavailable(format!(
-            "The Claude Code login could not be read from the keychain (security exited {code})"
-        )),
-        // No exit code at all means the subprocess was signalled, e.g. killed
-        // while another app held the keychain.
-        None => CredentialRead::Unavailable(
-            "The keychain lookup for the Claude Code login was interrupted".to_owned(),
-        ),
+/// Classifies a failing Security.framework lookup. Only errSecItemNotFound
+/// means the login is absent.
+fn classify_keychain_status(code: i32) -> CredentialRead {
+    if code == KEYCHAIN_ITEM_NOT_FOUND {
+        return CredentialRead::Absent;
+    }
+    // Locked keychain, a denied or dismissed access prompt, or anything else:
+    // the lookup failed, so the meter must keep whatever it was already showing.
+    CredentialRead::Unavailable(format!(
+        "The Claude Code login could not be read from the keychain (status {code})"
+    ))
+}
+
+fn read_keychain_password() -> CredentialRead {
+    use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
+    use security_framework::os::macos::keychain::SecKeychain;
+    // Suppress the "wants to use your confidential information stored in
+    // Claude Code-credentials" sheet. If the user already chose Always Allow,
+    // the read still succeeds; otherwise we fall through to the file.
+    let _no_prompt = SecKeychain::disable_user_interaction().ok();
+    let mut opts = ItemSearchOptions::new();
+    opts.class(ItemClass::generic_password())
+        .service(KEYCHAIN_SERVICE)
+        .load_data(true)
+        .skip_authenticated_items(true);
+    match opts.search() {
+        Ok(results) => {
+            for result in results {
+                let SearchResult::Data(bytes) = result else {
+                    continue;
+                };
+                return match parse_credentials(&String::from_utf8_lossy(&bytes)) {
+                    Some(credentials) => CredentialRead::Found(credentials),
+                    None => CredentialRead::Absent,
+                };
+            }
+            CredentialRead::Absent
+        }
+        Err(error) => classify_keychain_status(error.code()),
     }
 }
 
 async fn load_from_keychain() -> CredentialRead {
-    let output = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
-        .stdin(Stdio::null())
-        .output()
-        .await;
-    let output = match output {
-        Ok(output) => output,
-        Err(error) => {
-            return CredentialRead::Unavailable(format!("Keychain lookup failed to run: {error}"))
-        }
-    };
-    if !output.status.success() {
-        return classify_keychain_exit(output.status.code());
-    }
-    match parse_credentials(&String::from_utf8_lossy(&output.stdout)) {
-        Some(credentials) => CredentialRead::Found(credentials),
-        // The item is readable but carries no usable token: signed out.
-        None => CredentialRead::Absent,
+    match tokio::task::spawn_blocking(read_keychain_password).await {
+        Ok(read) => read,
+        Err(error) => CredentialRead::Unavailable(format!("Keychain lookup was cancelled: {error}")),
     }
 }
 
@@ -714,24 +731,20 @@ mod tests {
 
     #[test]
     fn only_err_sec_item_not_found_means_the_login_is_absent() {
-        // 44 is errSecItemNotFound: Claude Code really has no keychain item.
+        // -25300 is errSecItemNotFound: Claude Code really has no keychain item.
         assert!(matches!(
-            classify_keychain_exit(Some(44)),
+            classify_keychain_status(-25300),
             CredentialRead::Absent
         ));
-        // A locked keychain (36), a denied prompt (51), a dismissed one (128)
-        // and a signalled subprocess are all unknowns, never absence.
-        for code in [36, 51, 128, 1] {
-            let read = classify_keychain_exit(Some(code));
+        // A denied prompt (-128), auth failure, and a locked keychain are all
+        // unknowns, never absence.
+        for code in [-128, -25293, -25308] {
+            let read = classify_keychain_status(code);
             let CredentialRead::Unavailable(reason) = read else {
-                panic!("exit {code} must not be read as a missing login");
+                panic!("status {code} must not be read as a missing login");
             };
             assert!(reason.contains(&code.to_string()));
         }
-        assert!(matches!(
-            classify_keychain_exit(None),
-            CredentialRead::Unavailable(_)
-        ));
     }
 
     #[test]

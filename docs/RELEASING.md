@@ -136,9 +136,10 @@ export APPLE_MAS_PROFILE=/path/to/UsageBar.provisionprofile
 ```
 
 Upload the `.pkg` with Transporter or `altool`. Capture 1280×800 (16:10) shots
-from `store/screenshots/*.html`. The sandbox uses temporary home-path exceptions
-so Codex/Claude/Cursor/OpenCode can still be read; expect App Review questions
-and answer them from the review notes in `store/APP_STORE.md`.
+from `store/screenshots/*.html`. The sandbox uses a few read-only temporary
+exceptions so Claude/Cursor/OpenCode files and the Homebrew Codex binary can
+still be read; Keychain and SQLite use public APIs. Answer App Review from
+`store/APP_STORE.md`.
 
 GitHub `.dmg` builds must keep using a **Developer ID Application** identity.
 Do not ship the MAS-sandboxed entitlements on the notarized download.
