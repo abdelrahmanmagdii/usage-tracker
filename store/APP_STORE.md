@@ -1,4 +1,11 @@
-# App Store Connect copy
+# App Store Connect copy (not submitting)
+
+UsageBar is **not** going on the Mac App Store. Guideline 2.4.5(i): Apple will
+not grant `temporary-exception.files.home-relative-path.read-only`, which the
+sandboxed build needs to read Claude/Cursor/OpenCode state. Distribution is the
+Developer ID GitHub `.dmg` only.
+
+Leave this file for history. Do not upload a new `.pkg` unless that decision changes.
 
 Paste these fields when creating the Mac app **UsageBar** (`com.abdelrahmanamer.usagebar`). Privacy URL and support URL must stay live (GitHub Pages on `main`).
 

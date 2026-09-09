@@ -117,30 +117,12 @@ is the state where a downloaded copy opens without any Gatekeeper warning.
   workflow log contains the submission ID; `xcrun notarytool log <id>` explains
   why.
 
-## Mac App Store
+## Mac App Store (not pursuing)
 
-Direct GitHub releases stay Developer ID + notarized (this workflow). The store
-build is sandboxed and is **not** produced by `release.yml`.
+GitHub Releases are the distribution path (Developer ID + notarized
+`release.yml`). Apple will not grant the sandbox temporary exceptions the
+store binary needs to read other tools’ logins (Guideline 2.4.5(i)).
 
-One-time in App Store Connect: create the Mac app with bundle ID
-`com.usagebar.app`, attach a Mac App Store Connect provisioning profile, and
-paste the fields in [store/APP_STORE.md](../store/APP_STORE.md). Privacy and
-support URLs are the GitHub Pages site (workflow `.github/workflows/pages.yml`).
-
-Then, with `APPLE_TEAM_ID` and the profile on disk:
-
-```bash
-export APPLE_TEAM_ID=XXXXXXXXXX
-export APPLE_MAS_PROFILE=/path/to/UsageBar.provisionprofile
-./tools/mas-build.sh
-```
-
-Upload the `.pkg` with Transporter or `altool`. Capture 1280×800 (16:10) shots
-from `store/screenshots/*.html`. The sandbox uses a few read-only temporary
-exceptions so Claude/Cursor/OpenCode files and the Homebrew Codex binary can
-still be read; Keychain and SQLite use public APIs. Answer App Review from
-`store/APP_STORE.md`.
-
-GitHub `.dmg` builds must keep using a **Developer ID Application** identity.
-Do not ship the MAS-sandboxed entitlements on the notarized download.
+`./tools/mas-build.sh` and `store/APP_STORE.md` remain in the repo in case that
+changes. Do not ship MAS-sandboxed entitlements on the notarized `.dmg`.
 

@@ -24,8 +24,8 @@ open it, and drag UsageBar to Applications. Signed releases are notarized by
 Apple, so they open without a security warning. Until then, build from source below.
 
 The [public site](https://abdelrahmanmagdii.github.io/usage-tracker/) is the
-privacy/support URL for the Mac App Store listing. Store submission copy lives in
-[store/APP_STORE.md](store/APP_STORE.md).
+privacy and support URL. Distribution is the notarized GitHub `.dmg` only —
+not the Mac App Store.
 
 Or build it yourself:
 
