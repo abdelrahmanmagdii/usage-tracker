@@ -1,15 +1,10 @@
 //! Claude Code usage provider.
 //!
-//! Claude Code usage provider.
-//!
-//! Claude Code has no local app-server equivalent, so this module reads the
-//! OAuth session that Claude Code itself maintains (`~/.claude/.credentials.json`
-//! first, then the macOS Keychain item if that file is missing or expired) and
-//! asks Anthropic's own usage endpoint for the same rate-limit windows the
-//! `/usage` screen shows. Access is strictly read-only: the token is never
-//! refreshed or rewritten, so Claude Code's session can never be invalidated
-//! by this app. Keychain lookups never show a system prompt — a background
-//! meter must not pop "UsageBar wants to see Claude Code credentials".
+//! Reads the OAuth session Claude Code already keeps (`~/.claude/.credentials.json`
+//! and Keychain item `Claude Code-credentials`) and asks Anthropic's usage
+//! endpoint for the same windows as `/usage`. Read-only: the token is never
+//! refreshed or rewritten. Background polls never show a Keychain sheet; Retry
+//! may prompt once if the file is stale and Always Allow has not been granted.
 
 use std::{
     sync::{
@@ -97,6 +92,16 @@ impl ClaudeManager {
     }
 
     pub async fn refresh(&self) -> Result<ClaudeState, String> {
+        self.refresh_with_prompt(false).await
+    }
+
+    /// User-initiated refresh (Retry). May show a Keychain sheet once if the
+    /// CLI file is stale and macOS has not already granted Always Allow.
+    pub async fn refresh_from_user(&self) -> Result<ClaudeState, String> {
+        self.refresh_with_prompt(true).await
+    }
+
+    async fn refresh_with_prompt(&self, allow_keychain_prompt: bool) -> Result<ClaudeState, String> {
         if !self
             .app
             .state::<crate::prefs::PrefsStore>()
@@ -106,7 +111,7 @@ impl ClaudeManager {
             return Ok(self.snapshot().await);
         }
         let _guard = self.refresh_lock.lock().await;
-        let credentials = match load_credentials().await {
+        let credentials = match load_credentials(allow_keychain_prompt).await {
             CredentialRead::Found(credentials) => {
                 self.absent_reads.store(0, Ordering::Relaxed);
                 credentials
@@ -274,20 +279,13 @@ enum CredentialRead {
 }
 
 /// Reads Claude Code's stored OAuth session without ever modifying it. The
-/// credentials file is enough for a working CLI install and never prompts. The
-/// Keychain copy is only consulted when that file is missing or expired, and
-/// even then the lookup is silent — macOS must not ask for Keychain access on
-/// a refresh timer.
-async fn load_credentials() -> CredentialRead {
+/// credentials file and Keychain are both consulted; a fresh token in either
+/// store wins. Background refreshes never show a Keychain sheet. A user Retry
+/// may prompt once if the file is stale and Always Allow has not been granted.
+async fn load_credentials(allow_keychain_prompt: bool) -> CredentialRead {
     let file = load_from_file().await;
-    let now_ms = now_unix_millis();
-    if let CredentialRead::Found(credentials) = &file {
-        if !credentials.is_expired(now_ms) {
-            return file;
-        }
-    }
-    let keychain = load_from_keychain().await;
-    combine_reads(keychain, file, now_ms)
+    let keychain = load_from_keychain(allow_keychain_prompt).await;
+    combine_reads(keychain, file, now_unix_millis())
 }
 
 /// Merges the two stores. A usable login from either one wins; failing that, a
@@ -346,18 +344,23 @@ fn classify_keychain_status(code: i32) -> CredentialRead {
     ))
 }
 
-fn read_keychain_password() -> CredentialRead {
+fn read_keychain_password(allow_prompt: bool) -> CredentialRead {
     use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
     use security_framework::os::macos::keychain::SecKeychain;
-    // Suppress the "wants to use your confidential information stored in
-    // Claude Code-credentials" sheet. If the user already chose Always Allow,
-    // the read still succeeds; otherwise we fall through to the file.
-    let _no_prompt = SecKeychain::disable_user_interaction().ok();
+    // Background polls must not pop the "Claude Code credentials" sheet.
+    // Retry/user refresh leaves interaction on so Always Allow can be granted.
+    let _no_prompt = if allow_prompt {
+        None
+    } else {
+        SecKeychain::disable_user_interaction().ok()
+    };
     let mut opts = ItemSearchOptions::new();
     opts.class(ItemClass::generic_password())
         .service(KEYCHAIN_SERVICE)
-        .load_data(true)
-        .skip_authenticated_items(true);
+        .load_data(true);
+    if !allow_prompt {
+        opts.skip_authenticated_items(true);
+    }
     match opts.search() {
         Ok(results) => {
             for result in results {
@@ -375,8 +378,8 @@ fn read_keychain_password() -> CredentialRead {
     }
 }
 
-async fn load_from_keychain() -> CredentialRead {
-    match tokio::task::spawn_blocking(read_keychain_password).await {
+async fn load_from_keychain(allow_prompt: bool) -> CredentialRead {
+    match tokio::task::spawn_blocking(move || read_keychain_password(allow_prompt)).await {
         Ok(read) => read,
         Err(error) => CredentialRead::Unavailable(format!("Keychain lookup was cancelled: {error}")),
     }

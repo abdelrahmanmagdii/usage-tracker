@@ -23,7 +23,7 @@ pub async fn get_claude_state(manager: State<'_, ClaudeManager>) -> Result<Claud
 
 #[tauri::command]
 pub async fn refresh_claude(manager: State<'_, ClaudeManager>) -> Result<ClaudeState, String> {
-    manager.refresh().await
+    manager.refresh_from_user().await
 }
 
 #[tauri::command]

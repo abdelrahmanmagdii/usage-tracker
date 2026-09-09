@@ -229,7 +229,7 @@ export default function App() {
             icon={<Sparkles size={14} aria-hidden="true" />}
             meter={claude}
             now={now}
-            signedOutHint="the stored Claude Code login has expired. UsageBar reads the login kept by the `claude` command-line tool, so it refreshes the next time that runs — the desktop app keeps a separate login."
+            signedOutHint="the stored Claude Code login is stale. Click Refresh — macOS may ask once to read the Keychain item Claude Code already keeps. Always Allow stops that sheet. The desktop Claude app uses a different login than the `claude` CLI."
           />
         ) : null}
         {showCursor ? (
