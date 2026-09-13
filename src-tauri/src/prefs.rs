@@ -12,6 +12,7 @@ pub const PROVIDER_CODEX: &str = "codex";
 pub const PROVIDER_CLAUDE: &str = "claude";
 pub const PROVIDER_CURSOR: &str = "cursor";
 pub const PROVIDER_OPENCODE: &str = "opencode";
+pub const PROVIDER_DEVIN: &str = "devin";
 
 fn bool_true() -> bool {
     true

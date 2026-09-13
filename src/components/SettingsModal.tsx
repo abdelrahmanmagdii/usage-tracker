@@ -43,6 +43,10 @@ const PREVIEW_WINDOWS: TrayWindows = {
     { id: "weekly:secondary", label: "Weekly", usedPercent: 27 },
     { id: "monthly:secondary", label: "Monthly", usedPercent: 11 },
   ],
+  devin: [
+    { id: "daily:primary", label: "Daily", usedPercent: 28 },
+    { id: "weekly:secondary", label: "Weekly", usedPercent: 55 },
+  ],
 };
 
 function inTauri(): boolean {
@@ -130,7 +134,7 @@ export function SettingsModal({
   const [prefs, setPrefs] = useState<AppPrefs>(DEFAULT_PREFS);
   const [windows, setWindows] = useState<TrayWindows>(() =>
     inTauri()
-      ? { codex: [], claude: [], cursor: [], opencode: [] }
+      ? { codex: [], claude: [], cursor: [], opencode: [], devin: [] }
       : PREVIEW_WINDOWS,
   );
   const [autostart, setAutostart] = useState(false);

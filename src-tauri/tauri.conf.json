@@ -52,8 +52,8 @@
     ],
     "category": "DeveloperTool",
     "copyright": "Copyright © 2026 Abdelrahman Amer. All rights reserved.",
-    "shortDescription": "Codex, Claude, Cursor, and OpenCode quotas in the Mac menu bar.",
-    "longDescription": "UsageBar sits in the Mac menu bar and shows remaining Codex, Claude Code, Cursor, and OpenCode quota plus when each window resets. Usage stays on this Mac.",
+    "shortDescription": "Codex, Claude, Cursor, OpenCode, and Devin quotas in the Mac menu bar.",
+    "longDescription": "UsageBar sits in the Mac menu bar and shows remaining Codex, Claude Code, Cursor, OpenCode, and Devin quota plus when each window resets. Usage stays on this Mac.",
     "macOS": {
       "minimumSystemVersion": "10.15"
     }

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronUp, Clock3, MousePointer2, Power, RefreshCw, Settings2, ShieldCheck, Sparkles, Terminal, Ticket } from "lucide-react";
+import { ChevronUp, Clock3, Diamond, MousePointer2, Power, RefreshCw, Settings2, ShieldCheck, Sparkles, Terminal, Ticket } from "lucide-react";
 import { MeterMark } from "./components/MeterMark";
 import { meterTone } from "./components/EdgeMeter";
 import { QuotaSection } from "./components/QuotaSection";
@@ -14,7 +14,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { ProviderSection } from "./components/ProviderSection";
 import { Onboarding } from "./components/Onboarding";
 import { useCodexMeter } from "./hooks/useCodexMeter";
-import { useClaudeMeter, useCursorMeter, useOpenCodeMeter } from "./hooks/useClaudeMeter";
+import { useClaudeMeter, useCursorMeter, useDevinMeter, useOpenCodeMeter } from "./hooks/useClaudeMeter";
 import {
   DEFAULT_PREFS,
   isVisible,
@@ -42,6 +42,7 @@ export default function App() {
   const claude = useClaudeMeter();
   const cursor = useCursorMeter();
   const opencode = useOpenCodeMeter();
+  const devin = useDevinMeter();
   const [prefs, setPrefs] = useState<AppPrefs>(DEFAULT_PREFS);
   const [now, setNow] = useState(Date.now());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -118,18 +119,20 @@ export default function App() {
   const showClaude = isVisible(prefs, "claude");
   const showCursor = isVisible(prefs, "cursor");
   const showOpenCode = isVisible(prefs, "opencode");
+  const showDevin = isVisible(prefs, "devin");
   const connected = state.connection === "connected";
   const visibleBuckets = [
     ...(showCodex ? buckets : []),
     ...(showClaude ? claude.buckets : []),
     ...(showCursor ? cursor.buckets : []),
     ...(showOpenCode ? opencode.buckets : []),
+    ...(showDevin ? devin.buckets : []),
   ];
   const mostCooked = visibleBuckets.reduce<(typeof visibleBuckets)[number] | undefined>(
     (lowest, bucket) => !lowest || bucket.remainingPercent < lowest.remainingPercent ? bucket : lowest,
     undefined,
   );
-  const anyRefreshing = refreshing || claude.refreshing || cursor.refreshing || opencode.refreshing;
+  const anyRefreshing = refreshing || claude.refreshing || cursor.refreshing || opencode.refreshing || devin.refreshing;
 
   return (
     <main className="app-shell" data-tauri-drag-region>
@@ -252,6 +255,16 @@ export default function App() {
             signedOutHint="the stored OpenCode Go key was rejected. Sign in again with `/connect` and choose OpenCode Go."
           />
         ) : null}
+        {showDevin ? (
+          <ProviderSection
+            id="devin"
+            label="Devin"
+            icon={<Diamond size={14} aria-hidden="true" />}
+            meter={devin}
+            now={now}
+            signedOutHint="the stored Devin CLI login was rejected. Sign in again with `devin auth login`."
+          />
+        ) : null}
       </div>
 
       <footer className="app-footer">
@@ -265,6 +278,7 @@ export default function App() {
             if (showClaude) void claude.refresh();
             if (showCursor) void cursor.refresh();
             if (showOpenCode) void opencode.refresh();
+            if (showDevin) void devin.refresh();
           }}
           disabled={anyRefreshing}
           aria-label="Refresh usage data"
@@ -329,6 +343,17 @@ export default function App() {
                       ? "Reading the OpenCode Go key from auth.json"
                       : opencode.state.diagnostic ?? "Sign in with /connect and choose OpenCode Go",
                   onRetry: () => void opencode.refresh(),
+                }]),
+            ...(devin.state.connection === "cli_not_found"
+              ? []
+              : [{
+                  label: "Devin",
+                  connected: devin.state.connection === "connected",
+                  detail:
+                    devin.state.connection === "connected"
+                      ? "Reading the login kept by the Devin CLI"
+                      : devin.state.diagnostic ?? "Sign in with `devin auth login`",
+                  onRetry: () => void devin.refresh(),
                 }]),
           ]}
         />

@@ -18,6 +18,7 @@ describe("rate-limit helpers", () => {
 
   it("labels known and generic window durations", () => {
     expect(windowDurationLabel(300)).toBe("5-hour");
+    expect(windowDurationLabel(1_440)).toBe("Daily");
     expect(windowDurationLabel(10_080)).toBe("Weekly");
     expect(windowDurationLabel(2_880)).toBe("2-day");
     expect(windowDurationLabel(45)).toBe("45-minute");

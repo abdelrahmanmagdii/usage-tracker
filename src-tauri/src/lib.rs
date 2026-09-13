@@ -3,6 +3,7 @@ mod claude;
 mod codex;
 mod commands;
 mod cursor;
+mod devin;
 mod opencode;
 mod prefs;
 mod provider;
@@ -11,6 +12,7 @@ mod tray;
 use claude::ClaudeManager;
 use codex::process::CodexManager;
 use cursor::CursorManager;
+use devin::DevinManager;
 use opencode::OpenCodeManager;
 use tauri::{Manager, WindowEvent};
 
@@ -192,6 +194,8 @@ pub fn run() {
             app.manage(cursor_manager.clone());
             let opencode_manager = OpenCodeManager::new(app.handle().clone());
             app.manage(opencode_manager.clone());
+            let devin_manager = DevinManager::new(app.handle().clone());
+            app.manage(devin_manager.clone());
             tray::setup(app)?;
 
             #[cfg(target_os = "macos")]
@@ -255,6 +259,10 @@ pub fn run() {
             let opencode_starter = opencode_manager.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = opencode_starter.refresh().await;
+            });
+            let devin_starter = devin_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = devin_starter.refresh().await;
             });
 
             // Wall-clock staleness watchdogs instead of a plain sleep loop:
@@ -367,6 +375,29 @@ pub fn run() {
                     };
                 }
             });
+            let devin_refresher = devin_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut last_attempt = now_unix_seconds();
+                let mut failures: u32 = 1;
+                loop {
+                    interval.tick().await;
+                    let now = now_unix_seconds();
+                    let before = devin_refresher.snapshot().await.updated_at;
+                    if !should_refresh(now, before, last_attempt, failures) {
+                        continue;
+                    }
+                    last_attempt = now;
+                    let _ = devin_refresher.refresh().await;
+                    let after = devin_refresher.snapshot().await.updated_at;
+                    failures = if after == before {
+                        failures.saturating_add(1)
+                    } else {
+                        0
+                    };
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -388,6 +419,8 @@ pub fn run() {
             commands::refresh_cursor,
             commands::get_opencode_state,
             commands::refresh_opencode,
+            commands::get_devin_state,
+            commands::refresh_devin,
             commands::set_reset_incoming,
             commands::get_app_prefs,
             commands::complete_onboarding,

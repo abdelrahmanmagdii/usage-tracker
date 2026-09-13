@@ -13,6 +13,7 @@
   --claude: #c9703a;
   --cursor: #2f9e77;
   --opencode: #6f5ff0;
+  --devin: #c47a22;
   --amber: #a3641f;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -195,6 +196,7 @@ h1 {
 .providers li.claude { --dot: var(--claude); }
 .providers li.cursor { --dot: var(--cursor); }
 .providers li.opencode { --dot: var(--opencode); }
+.providers li.devin { --dot: var(--devin); }
 
 .cta-row {
   display: flex;

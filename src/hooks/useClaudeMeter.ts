@@ -81,6 +81,31 @@ function opencodePreview(): CodexBackendState {
   };
 }
 
+function devinPreview(): CodexBackendState {
+  const now = Date.now() / 1000;
+  return {
+    connection: "connected",
+    updatedAt: Math.floor(Date.now() / 1_000),
+    account: { type: "api", planType: "Pro" },
+    rateLimits: {
+      rateLimitsByLimitId: {
+        daily: {
+          limitId: "daily",
+          windowLabel: "Daily",
+          limitName: "Devin plan",
+          primary: { usedPercent: 28, windowDurationMins: 1_440, resetsAt: now + 11 * 3_600 },
+        },
+        weekly: {
+          limitId: "weekly",
+          windowLabel: "Weekly",
+          limitName: "Devin plan",
+          secondary: { usedPercent: 55, windowDurationMins: 10_080, resetsAt: now + 4 * 86_400 },
+        },
+      },
+    },
+  };
+}
+
 export function useClaudeMeter() {
   const preview = useCallback(claudePreview, []);
   return useProviderMeter({
@@ -107,6 +132,16 @@ export function useOpenCodeMeter() {
     getCommand: "get_opencode_state",
     refreshCommand: "refresh_opencode",
     event: "opencode://state",
+    preview,
+  });
+}
+
+export function useDevinMeter() {
+  const preview = useCallback(devinPreview, []);
+  return useProviderMeter({
+    getCommand: "get_devin_state",
+    refreshCommand: "refresh_devin",
+    event: "devin://state",
     preview,
   });
 }

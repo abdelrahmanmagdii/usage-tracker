@@ -12,6 +12,7 @@
   <array>
     <string>/.claude/</string>
     <string>/.local/share/opencode/</string>
+    <string>/.local/share/devin/</string>
     <string>/Library/Application Support/Cursor/</string>
   </array>
   <key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>

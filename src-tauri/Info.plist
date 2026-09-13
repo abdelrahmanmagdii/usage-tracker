@@ -11,6 +11,6 @@
   <key>NSUserNotificationUsageDescription</key>
   <string>UsageBar notifies you when quota is running low, a window resets, or Tibo Watch sees a surprise reset.</string>
   <key>NSAppleEventsUsageDescription</key>
-  <string>UsageBar talks to the Codex CLI, Keychain, and local developer tools already installed on this Mac so it can read quota. It never sends those credentials to us.</string>
+  <string>UsageBar talks to the Codex, Claude, Cursor, OpenCode, and Devin CLIs and local developer tools already installed on this Mac so it can read quota. It never sends those credentials to us.</string>
 </dict>
 </plist>
