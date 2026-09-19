@@ -18,10 +18,10 @@ By default visible providers share **one** menu-bar icon (`63% · 8%`, Codex · 
 
 ## Install
 
-When a GitHub release is published, download the `.dmg` from
+Download the `.dmg` from
 [Releases](https://github.com/abdelrahmanmagdii/usage-tracker/releases),
 open it, and drag UsageBar to Applications. Signed releases are notarized by
-Apple, so they open without a security warning. Until then, build from source below.
+Apple, so they open without a security warning. Or build from source below.
 
 The [public site](https://abdelrahmanmagdii.github.io/usage-tracker/) is the
 privacy and support URL. Distribution is the notarized GitHub `.dmg` only —
