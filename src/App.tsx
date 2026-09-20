@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -25,6 +25,7 @@ import { useResetEvents } from "./features/tibo-watch/useResetEvents";
 import { upcomingReset } from "./features/tibo-watch/provider";
 import { notifyFreshResets } from "./features/tibo-watch/notifications";
 import { formatCountdown, windowDurationLabel } from "./lib/rateLimits";
+import { previewPrefs, previewResetEvent } from "./lib/preview";
 import type { RateLimitBucket } from "./types/codex";
 
 function headerResetText(bucket: RateLimitBucket, now: number): string {
@@ -43,11 +44,23 @@ export default function App() {
   const cursor = useCursorMeter();
   const opencode = useOpenCodeMeter();
   const devin = useDevinMeter();
-  const [prefs, setPrefs] = useState<AppPrefs>(DEFAULT_PREFS);
+  const [prefs, setPrefs] = useState<AppPrefs>(
+    () => previewPrefs(window.location.search) ?? DEFAULT_PREFS,
+  );
   const [now, setNow] = useState(Date.now());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
-  const resetEvents = useResetEvents();
+  const liveResetEvents = useResetEvents();
+  const resetEvents = useMemo(() => {
+    const preview = previewResetEvent(Date.now(), window.location.search);
+    return preview ? [preview, ...liveResetEvents] : liveResetEvents;
+  }, [liveResetEvents]);
+
+  useEffect(() => {
+    if (previewPrefs(window.location.search)) {
+      document.documentElement.dataset.preview = "";
+    }
+  }, []);
 
   // First run shows the walkthrough; the tray's Setup Guide item reopens it.
   useEffect(() => {
