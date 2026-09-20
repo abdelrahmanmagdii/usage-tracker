@@ -16,6 +16,18 @@ The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset c
 
 By default visible providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude) — the **Compact** layout, which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **Extended** (one icon per provider), choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — and toggle **Usage Alerts** (notifications at 80% / 95% used and on a fresh window) and **Launch at Login**.
 
+## Compared with CodexBar and similar apps
+
+[CodexBar](https://github.com/steipete/CodexBar) and other menu-bar quota apps are excellent — especially if you want a very wide provider set, merge-icons modes, Stream Deck hooks, or a bundled CLI for scripts.
+
+**UsageBar’s wedge** is narrower and opinionated:
+
+- **Multi-CLI including Devin** — Codex, Claude Code, Cursor, OpenCode, and Devin as first-class meters in one menubar
+- **Local / read-only CLI logins** — reuses credentials those tools already keep on your Mac; never writes, refreshes, or ships them to a UsageBar server
+- **Notarized universal `.dmg`** — drag to Applications; signed releases open without a Gatekeeper fight
+
+If you need dozens of providers or deeper dashboards, look at CodexBar (or similar). If you mainly care about the AI coding CLIs above — especially **Devin** — with a small on-device meter, UsageBar is built for that. No shade either way; different tools for different desks.
+
 ## Install
 
 Download the `.dmg` from
