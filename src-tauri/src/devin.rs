@@ -68,7 +68,11 @@ impl DevinManager {
                 return Ok(self.snapshot().await);
             }
             CredentialRead::Unavailable(message) => {
-                if self.snapshot().await.updated_at.is_none() {
+                let snapshot = self.snapshot().await;
+                if !crate::provider::keep_last_meter(
+                    snapshot.connection,
+                    snapshot.updated_at.is_some(),
+                ) {
                     self.set_connection(
                         ConnectionState::CliNotFound,
                         Some("No Devin CLI login was found on this Mac".into()),
@@ -115,7 +119,10 @@ impl DevinManager {
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             self.set_connection(
                 ConnectionState::NotAuthenticated,
-                Some("Devin rejected the stored CLI login. Sign in again with `devin auth login`.".into()),
+                Some(
+                    "Devin rejected the stored CLI login. Sign in again with `devin auth login`."
+                        .into(),
+                ),
             )
             .await;
             return Ok(self.snapshot().await);
@@ -167,8 +174,12 @@ impl DevinManager {
     async fn set_connection(&self, connection: ConnectionState, diagnostic: Option<String>) {
         {
             let mut state = self.state.write().await;
-            state.connection = connection;
-            state.diagnostic = diagnostic;
+            if connection == ConnectionState::CliNotFound {
+                crate::provider::conceal_provider(&mut state, diagnostic);
+            } else {
+                state.connection = connection;
+                state.diagnostic = diagnostic;
+            }
         }
         self.emit_state().await;
     }
@@ -322,11 +333,8 @@ fn normalize_usage(raw: &Value) -> Option<NormalizedUsage> {
     let user_status = field(raw, &["userStatus", "user_status"]).unwrap_or(raw);
     let plan_status = field(user_status, &["planStatus", "plan_status"]).unwrap_or(user_status);
     let plan_info = field(plan_status, &["planInfo", "plan_info"]);
-    let hide_daily = bool_value(field_in(
-        plan_info,
-        &["hideDailyQuota", "hide_daily_quota"],
-    ))
-    .unwrap_or(false);
+    let hide_daily =
+        bool_value(field_in(plan_info, &["hideDailyQuota", "hide_daily_quota"])).unwrap_or(false);
 
     let daily_remaining = finite_f64(field(
         plan_status,
@@ -365,7 +373,11 @@ fn normalize_usage(raw: &Value) -> Option<NormalizedUsage> {
         }
     }
     if let Some(remaining) = weekly_remaining {
-        let kind = if entries.is_empty() { "primary" } else { "secondary" };
+        let kind = if entries.is_empty() {
+            "primary"
+        } else {
+            "secondary"
+        };
         entries.push(limit_entry(
             "weekly",
             "Weekly",
@@ -420,7 +432,10 @@ fn limit_entry(
     if used >= 100.0 {
         snapshot.insert("rateLimitReachedType".into(), Value::from("limit_reached"));
     }
-    snapshot.insert(kind.into(), window_snapshot(used, Some(duration), resets_at));
+    snapshot.insert(
+        kind.into(),
+        window_snapshot(used, Some(duration), resets_at),
+    );
     (id.to_owned(), Value::Object(snapshot))
 }
 
@@ -475,7 +490,9 @@ mod tests {
             "bare-key"
         );
         assert_eq!(
-            parse_cli_auth("windsurf_api_key = \"esc\\\"aped\"").unwrap().api_key,
+            parse_cli_auth("windsurf_api_key = \"esc\\\"aped\"")
+                .unwrap()
+                .api_key,
             "esc\"aped"
         );
         assert!(parse_cli_auth("windsurf_api_key = \"http://insecure.example\"").is_some());

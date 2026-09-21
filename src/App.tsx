@@ -12,12 +12,14 @@ import { TiboWatch } from "./components/TiboWatch";
 import { ResetAlert } from "./components/ResetAlert";
 import { SettingsModal } from "./components/SettingsModal";
 import { ProviderSection } from "./components/ProviderSection";
+import { MissingProviders } from "./components/MissingProviders";
 import { Onboarding } from "./components/Onboarding";
 import { useCodexMeter } from "./hooks/useCodexMeter";
 import { useClaudeMeter, useCursorMeter, useDevinMeter, useOpenCodeMeter, useAntigravityMeter } from "./hooks/useClaudeMeter";
 import {
   DEFAULT_PREFS,
   isVisible,
+  missingProviders,
   normalizePrefs,
   type AppPrefs,
 } from "./lib/providers";
@@ -291,6 +293,16 @@ export default function App() {
             signedOutHint="open the Antigravity app and sign in there. UsageBar reads quota from the running app."
           />
         ) : null}
+        <MissingProviders
+          items={missingProviders(prefs, {
+            codex: state,
+            claude: claude.state,
+            cursor: cursor.state,
+            opencode: opencode.state,
+            devin: devin.state,
+            antigravity: antigravity.state,
+          })}
+        />
       </div>
 
       <footer className="app-footer">
