@@ -1,4 +1,4 @@
-import { AlertCircle, Binary, PlugZap } from "lucide-react";
+import { AlertCircle, PlugZap } from "lucide-react";
 import type { CodexBackendState } from "../types/codex";
 
 export function ConnectionStateView({
@@ -8,6 +8,8 @@ export function ConnectionStateView({
   state: CodexBackendState;
   onRetry: () => void;
 }) {
+  if (state.connection === "cli_not_found") return null;
+
   if (state.connection === "starting") {
     return (
       <div className="state-panel glass-tile" role="status">
@@ -18,19 +20,12 @@ export function ConnectionStateView({
     );
   }
 
-  const cliMissing = state.connection === "cli_not_found";
   const loggedOut = state.connection === "not_authenticated";
-  const Icon = cliMissing ? Binary : loggedOut ? PlugZap : AlertCircle;
-  const title = cliMissing
-    ? "Codex CLI not found"
-    : loggedOut
-      ? "Codex sign-in required"
-      : "App Server unavailable";
-  const message = cliMissing
-    ? "Install the official Codex CLI and make sure the codex command is available in your shell."
-    : loggedOut
-      ? "Sign in through Codex first. UsageBar uses that existing session—never an API key."
-      : state.diagnostic || "UsageBar lost its local connection. Your data stays on this Mac.";
+  const Icon = loggedOut ? PlugZap : AlertCircle;
+  const title = loggedOut ? "Codex sign-in required" : "App Server unavailable";
+  const message = loggedOut
+    ? "Sign in through Codex first. UsageBar uses that existing session—never an API key."
+    : state.diagnostic || "UsageBar lost its local connection. Your data stays on this Mac.";
 
   return (
     <div className="state-panel glass-tile" role="alert">

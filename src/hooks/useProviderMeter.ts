@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { CodexBackendState } from "../types/codex";
 import { extractRateLimitBuckets } from "../lib/rateLimits";
+import { stateAfterRefreshFailure } from "../lib/providers";
 
 const initialState: CodexBackendState = { connection: "starting" };
 
@@ -26,11 +27,7 @@ export function useProviderMeter({
       const next = await invoke<CodexBackendState>(refreshCommand);
       setState(next);
     } catch (error) {
-      setState((current) => ({
-        ...current,
-        connection: "error",
-        diagnostic: error instanceof Error ? error.message : String(error),
-      }));
+      setState((current) => stateAfterRefreshFailure(current, error));
     } finally {
       setRefreshing(false);
     }

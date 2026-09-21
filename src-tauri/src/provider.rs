@@ -10,6 +10,16 @@ use tokio::time::Duration;
 
 use crate::codex::process::ConnectionState;
 
+/// A Security.framework status that means this Mac has no usable login.
+///
+/// `-25300` is `errSecItemNotFound`.
+/// `-128` is `errSecUserCanceled`. A background poll disables the keychain
+/// sheet, and macOS reports that disabled sheet as a cancel.
+/// `-25308` is `errSecInteractionNotAllowed`.
+pub fn keychain_login_absent(code: i32) -> bool {
+    matches!(code, -25300 | -128 | -25308)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderState {

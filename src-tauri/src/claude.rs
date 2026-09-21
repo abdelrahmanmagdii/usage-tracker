@@ -130,13 +130,19 @@ impl ClaudeManager {
                 // Claude Code rewrites its keychain item and credentials file
                 // when it rotates its own OAuth token, so a single empty read
                 // right after a working session is far more likely a write race
-                // than a sign-out. Keep the meter and let the next read decide.
-                let message = "Claude Code's stored login could not be read".to_owned();
-                self.set_connection(ConnectionState::Error, Some(message.clone()))
-                    .await;
-                return Err(message);
+                // than a sign-out. Keep the last numbers. Do not show an error.
+                return Ok(self.snapshot().await);
             }
             CredentialRead::Unavailable(message) => {
+                let has_shown_usage = self.snapshot().await.updated_at.is_some();
+                if !has_shown_usage {
+                    self.set_connection(
+                        ConnectionState::CliNotFound,
+                        Some("No Claude Code login was found on this Mac".into()),
+                    )
+                    .await;
+                    return Ok(self.snapshot().await);
+                }
                 // A store that could not be read proves nothing about whether
                 // Claude Code is installed, so the meter keeps its last known
                 // numbers and stays in the menu bar instead of vanishing.
@@ -331,14 +337,13 @@ fn hides_tray(has_shown_usage: bool, consecutive_absent_reads: u32) -> bool {
     !has_shown_usage || consecutive_absent_reads >= ABSENT_READS_BEFORE_HIDING
 }
 
-/// Classifies a failing Security.framework lookup. Only errSecItemNotFound
-/// means the login is absent.
+/// Classifies a failing Security.framework lookup.
+/// Item-not-found and a suppressed or cancelled prompt mean no usable login.
+/// Those cases hide the meter. A locked keychain stays an unknown.
 fn classify_keychain_status(code: i32) -> CredentialRead {
-    if code == KEYCHAIN_ITEM_NOT_FOUND {
+    if crate::provider::keychain_login_absent(code) || code == KEYCHAIN_ITEM_NOT_FOUND {
         return CredentialRead::Absent;
     }
-    // Locked keychain, a denied or dismissed access prompt, or anything else:
-    // the lookup failed, so the meter must keep whatever it was already showing.
     CredentialRead::Unavailable(format!(
         "The Claude Code login could not be read from the keychain (status {code})"
     ))
@@ -733,21 +738,20 @@ mod tests {
     }
 
     #[test]
-    fn only_err_sec_item_not_found_means_the_login_is_absent() {
-        // -25300 is errSecItemNotFound: Claude Code really has no keychain item.
-        assert!(matches!(
-            classify_keychain_status(-25300),
-            CredentialRead::Absent
-        ));
-        // A denied prompt (-128), auth failure, and a locked keychain are all
-        // unknowns, never absence.
-        for code in [-128, -25293, -25308] {
-            let read = classify_keychain_status(code);
-            let CredentialRead::Unavailable(reason) = read else {
-                panic!("status {code} must not be read as a missing login");
-            };
-            assert!(reason.contains(&code.to_string()));
+    fn a_missing_or_suppressed_keychain_login_is_absent() {
+        // -25300 item not found, -128 cancelled/suppressed prompt,
+        // -25308 interaction not allowed: the user has no usable login.
+        for code in [-25300, -128, -25308] {
+            assert!(
+                matches!(classify_keychain_status(code), CredentialRead::Absent),
+                "status {code} must hide the meter"
+            );
         }
+        // Auth failure is not "this tool is missing".
+        assert!(matches!(
+            classify_keychain_status(-25293),
+            CredentialRead::Unavailable(_)
+        ));
     }
 
     #[test]

@@ -76,3 +76,16 @@ export function withTrayWindow(prefs: AppPrefs, id: ProviderId, window: string):
 export function isPresent(state: CodexBackendState): boolean {
   return state.connection !== "cli_not_found" && state.connection !== "starting";
 }
+
+/** A tool the user does not have must stay hidden. A refresh failure is not a new meter. */
+export function stateAfterRefreshFailure(current: CodexBackendState, error: unknown): CodexBackendState {
+  const hasShownUsage = current.updatedAt != null || current.rateLimits != null;
+  if (!hasShownUsage || current.connection === "cli_not_found" || current.connection === "starting") {
+    return { connection: "cli_not_found" };
+  }
+  return {
+    ...current,
+    connection: "error",
+    diagnostic: error instanceof Error ? error.message : String(error),
+  };
+}

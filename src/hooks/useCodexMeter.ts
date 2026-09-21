@@ -8,6 +8,7 @@ import {
   extractUsage,
 } from "../lib/rateLimits";
 import { observeBuckets } from "../lib/history";
+import { stateAfterRefreshFailure } from "../lib/providers";
 
 const initialState: CodexBackendState = { connection: "starting" };
 
@@ -60,11 +61,7 @@ export function useCodexMeter({ observeHistory = true }: { observeHistory?: bool
       const next = await invoke<CodexBackendState>("refresh_codex");
       applyState(next);
     } catch (error) {
-      setState((current) => ({
-        ...current,
-        connection: "error",
-        diagnostic: error instanceof Error ? error.message : String(error),
-      }));
+      setState((current) => stateAfterRefreshFailure(current, error));
     } finally {
       setRefreshing(false);
     }

@@ -137,9 +137,9 @@ Private usage stays on this Mac. UsageBar does not read Codex credential files, 
 - Cursor — [`src-tauri/src/cursor.rs`](src-tauri/src/cursor.rs): reads the local login database and sends the token only to `api2.cursor.sh`.
 - OpenCode Go — [`src-tauri/src/opencode.rs`](src-tauri/src/opencode.rs): reads `auth.json` and sends the key only to `opencode.ai`.
 - Devin CLI — [`src-tauri/src/devin.rs`](src-tauri/src/devin.rs): reads `~/.local/share/devin/credentials.toml` and sends the key only to the API server the CLI itself uses (typically `server.codeium.com`).
-- Antigravity — [`src-tauri/src/antigravity.rs`](src-tauri/src/antigravity.rs): reads Keychain item `gemini` / `antigravity` (or `~/.gemini/antigravity-cli/antigravity-oauth-token`) and sends the token only to Google Cloud Code (`daily-cloudcode-pa.googleapis.com`). A stale access token is exchanged in memory with `oauth2.googleapis.com`; the new token is never written back.
+- Antigravity — [`src-tauri/src/antigravity.rs`](src-tauri/src/antigravity.rs): reads quota from the running Antigravity app on this Mac. If the app is closed, it can send a still-valid access token from Keychain item `gemini` / `antigravity` (or `~/.gemini/antigravity-cli/antigravity-oauth-token`) only to Google Cloud Code (`daily-cloudcode-pa.googleapis.com`). It does not refresh that token.
 
-In every case the credential is **never written or rotated**, never shown in the UI, and never sent to a UsageBar server. If a session expires, the meter asks you to sign in through that tool again. Antigravity is the one exception that refreshes an access token in memory, because Google tokens expire in about an hour.
+In every case the credential is **never written or rotated**, never shown in the UI, and never sent to a UsageBar server. If a session expires, the meter asks you to sign in through that tool again.
 
 Heads-up: several of these usage endpoints are unofficial (they are what the tools themselves use, not documented public APIs), so a vendor change could break a meter until this app is updated. Parsers are defensive and degrade to hiding the section rather than misreporting.
 

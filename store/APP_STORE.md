@@ -109,7 +109,7 @@ UsageBar does not operate a backend. Quota is never sent to the developer.
 - Cursor: local login database to https://api2.cursor.sh
 - OpenCode Go: local auth.json to https://opencode.ai/zen/go/v1/usage
 - Devin CLI: local credentials.toml to the CLI's API server (typically https://server.codeium.com)
-- Antigravity: existing OAuth token to https://daily-cloudcode-pa.googleapis.com (and https://oauth2.googleapis.com when the access token is stale)
+- Antigravity: quota from the running Antigravity app on this Mac. If the app is closed, a still-valid OAuth token goes only to https://daily-cloudcode-pa.googleapis.com. UsageBar does not refresh that token.
 - Tibo Watch (optional reset radar): public JSON at https://raw.githubusercontent.com/abdelrahmanmagdii/usage-tracker/main/data/resets.json
 No payment processor. No UsageBar authentication. HTTPS only; ITSAppUsesNonExemptEncryption is false.
 

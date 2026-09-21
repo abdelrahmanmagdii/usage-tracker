@@ -104,9 +104,9 @@ impl CodexManager {
         let cli = match find_codex_cli().await {
             Ok(cli) => cli,
             Err(message) => {
-                self.set_connection(ConnectionState::CliNotFound, Some(message.clone()))
+                self.set_connection(ConnectionState::CliNotFound, Some(message))
                     .await;
-                return Err(message);
+                return Ok(self.snapshot().await);
             }
         };
 

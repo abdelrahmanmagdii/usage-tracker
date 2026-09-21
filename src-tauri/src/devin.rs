@@ -68,6 +68,14 @@ impl DevinManager {
                 return Ok(self.snapshot().await);
             }
             CredentialRead::Unavailable(message) => {
+                if self.snapshot().await.updated_at.is_none() {
+                    self.set_connection(
+                        ConnectionState::CliNotFound,
+                        Some("No Devin CLI login was found on this Mac".into()),
+                    )
+                    .await;
+                    return Ok(self.snapshot().await);
+                }
                 self.set_connection(ConnectionState::Error, Some(message.clone()))
                     .await;
                 return Err(message);

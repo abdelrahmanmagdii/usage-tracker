@@ -7,14 +7,11 @@
 //! When nothing is running, it falls back to a still-valid access token
 //! Antigravity already keeps (Keychain item `gemini` / `antigravity`, then
 //! `~/.gemini/antigravity-cli/antigravity-oauth-token`) and asks Cloud Code
-//! for the same windows. UsageBar does not refresh or write that token. If it
-//! has expired, open the Antigravity app. Background polls never show a
-//! Keychain sheet; Retry may prompt once.
+//! for the same windows. UsageBar does not refresh or write that token. No
+//! running app and no usable token means the meter stays hidden. A missing
+//! tool is not an error. Background polls never show a Keychain sheet.
 
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
 use base64::Engine;
 use serde_json::{json, Map, Value};
@@ -31,14 +28,9 @@ use crate::tray;
 const QUOTA_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 const LOCAL_STATUS_RPC: &str = "exa.language_server_pb.LanguageServerService/GetUserStatus";
 const LOCAL_QUOTA_RPC: &str = "exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
-const OPEN_APP: &str = "Open the Antigravity app and sign in. UsageBar reads quota from the running app.";
 const KEYCHAIN_SERVICE: &str = "gemini";
 const KEYCHAIN_ACCOUNT: &str = "antigravity";
 const KEYRING_BASE64_PREFIX: &[u8] = b"go-keyring-base64:";
-/// `errSecItemNotFound` (-25300). It is the only status that proves the login
-/// is absent.
-const KEYCHAIN_ITEM_NOT_FOUND: i32 = -25300;
-const ABSENT_READS_BEFORE_HIDING: u32 = 2;
 const FIVE_HOUR_MINS: f64 = 300.0;
 const WEEKLY_MINS: f64 = 10_080.0;
 /// Refresh a minute before expiry so a poll does not race the token out.
@@ -51,7 +43,6 @@ pub struct AntigravityManager {
     client: reqwest::Client,
     refresh_lock: Arc<Mutex<()>>,
     token_cache: Arc<Mutex<Option<CachedAccessToken>>>,
-    absent_reads: Arc<AtomicU32>,
 }
 
 #[derive(Clone)]
@@ -68,7 +59,6 @@ impl AntigravityManager {
             client: http_client(),
             refresh_lock: Arc::new(Mutex::new(())),
             token_cache: Arc::new(Mutex::new(None)),
-            absent_reads: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -97,46 +87,24 @@ impl AntigravityManager {
 
         let _guard = self.refresh_lock.lock().await;
         if let Some(local) = fetch_local_usage(&self.client).await {
-            self.absent_reads.store(0, Ordering::Relaxed);
             self.publish(&local.plan, local.payload).await?;
             return Ok(self.snapshot().await);
         }
 
+        // The app and the CLI are closed. A missing or unreadable login is
+        // absence, not a status error. Users do not have to run every tool.
         let token = match load_credentials(allow_keychain_prompt).await {
-            CredentialRead::Found(token) => {
-                self.absent_reads.store(0, Ordering::Relaxed);
-                token
-            }
-            CredentialRead::Absent => {
-                let reads = self.absent_reads.fetch_add(1, Ordering::Relaxed) + 1;
-                let has_shown_usage = self.snapshot().await.updated_at.is_some();
-                if hides_tray(has_shown_usage, reads) {
-                    *self.token_cache.lock().await = None;
-                    self.set_connection(
-                        ConnectionState::CliNotFound,
-                        Some(OPEN_APP.into()),
-                    )
-                    .await;
-                    return Ok(self.snapshot().await);
-                }
-                let message = "Antigravity's stored login could not be read".to_owned();
-                self.set_connection(ConnectionState::Error, Some(message.clone()))
-                    .await;
-                return Err(message);
-            }
-            CredentialRead::Unavailable(message) => {
-                self.absent_reads.store(0, Ordering::Relaxed);
-                self.set_connection(ConnectionState::Error, Some(message.clone()))
-                    .await;
-                return Err(message);
+            CredentialRead::Found(token) => token,
+            CredentialRead::Absent | CredentialRead::Unavailable(_) => {
+                self.hide_missing().await;
+                return Ok(self.snapshot().await);
             }
         };
 
         let access_token = match self.resolve_access_token(&token).await {
             Ok(access_token) => access_token,
-            Err(message) => {
-                self.set_connection(ConnectionState::NotAuthenticated, Some(message.clone()))
-                    .await;
+            Err(_) => {
+                self.hide_missing().await;
                 return Ok(self.snapshot().await);
             }
         };
@@ -144,11 +112,14 @@ impl AntigravityManager {
         let payload = match self.fetch_quota(&access_token).await {
             Ok(payload) => payload,
             Err(QuotaFetch::Unauthorized) => {
-                self.set_connection(ConnectionState::NotAuthenticated, Some(OPEN_APP.into()))
-                    .await;
+                self.hide_missing().await;
                 return Ok(self.snapshot().await);
             }
             Err(QuotaFetch::Failed(message)) => {
+                if self.snapshot().await.updated_at.is_none() {
+                    self.hide_missing().await;
+                    return Ok(self.snapshot().await);
+                }
                 self.set_connection(ConnectionState::Error, Some(message.clone()))
                     .await;
                 return Err(message);
@@ -202,7 +173,21 @@ impl AntigravityManager {
                 .await;
             return Ok(token.access_token.clone());
         }
-        Err(OPEN_APP.to_owned())
+        Err("Antigravity token is not usable".to_owned())
+    }
+
+    /// Drop the meter. No running Antigravity session and no usable token.
+    async fn hide_missing(&self) {
+        *self.token_cache.lock().await = None;
+        {
+            let mut state = self.state.write().await;
+            state.connection = ConnectionState::CliNotFound;
+            state.diagnostic = None;
+            state.account = None;
+            state.rate_limits = None;
+            state.updated_at = None;
+        }
+        self.emit_state().await;
     }
 
     async fn store_cached_token(&self, access_token: String, expires_at: Option<f64>) {
@@ -416,6 +401,8 @@ enum QuotaFetch {
 
 struct OAuthToken {
     access_token: String,
+    /// Parsed so tests can see the stored shape. UsageBar does not refresh with it.
+    #[allow(dead_code)]
     refresh_token: Option<String>,
     expires_at: Option<f64>,
 }
@@ -435,12 +422,8 @@ enum CredentialRead {
     Unavailable(String),
 }
 
-fn hides_tray(has_shown_usage: bool, consecutive_absent_reads: u32) -> bool {
-    !has_shown_usage || consecutive_absent_reads >= ABSENT_READS_BEFORE_HIDING
-}
-
 fn classify_keychain_status(code: i32) -> CredentialRead {
-    if code == KEYCHAIN_ITEM_NOT_FOUND {
+    if crate::provider::keychain_login_absent(code) {
         return CredentialRead::Absent;
     }
     CredentialRead::Unavailable(format!(
@@ -1096,20 +1079,15 @@ n[::1]:43124
     }
 
     #[test]
-    fn hides_the_tray_only_after_a_confirming_absent_read() {
-        assert!(hides_tray(false, 1));
-        assert!(!hides_tray(true, 1));
-        assert!(hides_tray(true, 2));
-    }
-
-    #[test]
-    fn keychain_not_found_is_absent_and_other_codes_are_unknown() {
+    fn a_suppressed_keychain_prompt_counts_as_no_login() {
+        for code in [-25300, -128, -25308] {
+            assert!(
+                matches!(classify_keychain_status(code), CredentialRead::Absent),
+                "status {code} must hide the meter"
+            );
+        }
         assert!(matches!(
-            classify_keychain_status(-25300),
-            CredentialRead::Absent
-        ));
-        assert!(matches!(
-            classify_keychain_status(-128),
+            classify_keychain_status(-25293),
             CredentialRead::Unavailable(_)
         ));
     }
