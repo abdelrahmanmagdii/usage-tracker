@@ -6,7 +6,7 @@ UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding
 
 The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset countdown for each provider — how much you have left, matching what the official apps show, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
 
-![UsageBar: the Codex window with an announced reset, then Settings](docs/usagebar-demo.gif)
+![UsageBar menu bar meter above the Codex window, then Settings](docs/usagebar-demo.gif)
 
 | Codex | Claude Code | Cursor |
 | :---: | :---: | :---: |
