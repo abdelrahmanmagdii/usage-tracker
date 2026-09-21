@@ -1,1 +1,0 @@
-/Users/abd/Documents/ChatGPT/codex-reset-tracker/tools/capture-store-screenshots.sh
