@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Turn docs/_capture PNGs into the public stills and the README demo GIF.
+"""Turn docs/_capture PNGs into the public stills.
+
+The README demo (docs/usagebar-demo.gif) is a screen recording of the
+running UI, not a composed animation. This script only rebuilds that
+GIF when passed --compose.
 
 Capture first:
 
@@ -285,6 +289,9 @@ def main() -> int:
     GIF_H = top + round(popover.height / RENDER) + bottom
     if GIF_H % 2:
         GIF_H += 1
+    if "--compose" not in sys.argv:
+        print("Skipped docs/usagebar-demo.gif (screen recording). Pass --compose to rebuild the composed GIF.")
+        return 0
     scene = wallpaper((GIF_W * RENDER, GIF_H * RENDER))
     write_frames(scene, popover)
     encode()
