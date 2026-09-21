@@ -15,3 +15,6 @@ fill.log
 
 # OS noise
 .DS_Store
+
+# Raw frames used to rebuild the README GIF and site stills
+docs/_capture/
