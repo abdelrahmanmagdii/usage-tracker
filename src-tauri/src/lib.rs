@@ -1,4 +1,5 @@
 mod alerts;
+mod antigravity;
 mod claude;
 mod codex;
 mod commands;
@@ -9,6 +10,7 @@ mod prefs;
 mod provider;
 mod tray;
 
+use antigravity::AntigravityManager;
 use claude::ClaudeManager;
 use codex::process::CodexManager;
 use cursor::CursorManager;
@@ -196,6 +198,8 @@ pub fn run() {
             app.manage(opencode_manager.clone());
             let devin_manager = DevinManager::new(app.handle().clone());
             app.manage(devin_manager.clone());
+            let antigravity_manager = AntigravityManager::new(app.handle().clone());
+            app.manage(antigravity_manager.clone());
             tray::setup(app)?;
 
             #[cfg(target_os = "macos")]
@@ -263,6 +267,10 @@ pub fn run() {
             let devin_starter = devin_manager.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = devin_starter.refresh().await;
+            });
+            let antigravity_starter = antigravity_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = antigravity_starter.refresh().await;
             });
 
             // Wall-clock staleness watchdogs instead of a plain sleep loop:
@@ -398,6 +406,29 @@ pub fn run() {
                     };
                 }
             });
+            let antigravity_refresher = antigravity_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut last_attempt = now_unix_seconds();
+                let mut failures: u32 = 1;
+                loop {
+                    interval.tick().await;
+                    let now = now_unix_seconds();
+                    let before = antigravity_refresher.snapshot().await.updated_at;
+                    if !should_refresh(now, before, last_attempt, failures) {
+                        continue;
+                    }
+                    last_attempt = now;
+                    let _ = antigravity_refresher.refresh().await;
+                    let after = antigravity_refresher.snapshot().await.updated_at;
+                    failures = if after == before {
+                        failures.saturating_add(1)
+                    } else {
+                        0
+                    };
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -421,6 +452,8 @@ pub fn run() {
             commands::refresh_opencode,
             commands::get_devin_state,
             commands::refresh_devin,
+            commands::get_antigravity_state,
+            commands::refresh_antigravity,
             commands::set_reset_incoming,
             commands::get_app_prefs,
             commands::complete_onboarding,

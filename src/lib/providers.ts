@@ -1,6 +1,6 @@
 import type { CodexBackendState } from "../types/codex";
 
-export const PROVIDER_IDS = ["codex", "claude", "cursor", "opencode", "devin"] as const;
+export const PROVIDER_IDS = ["codex", "claude", "cursor", "opencode", "devin", "antigravity"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export type ProviderPref = {
@@ -42,6 +42,7 @@ export const PROVIDER_CATALOG: Array<{
   { id: "cursor", label: "Cursor", accent: "cursor" },
   { id: "opencode", label: "OpenCode Go", accent: "opencode" },
   { id: "devin", label: "Devin", accent: "devin" },
+  { id: "antigravity", label: "Antigravity", accent: "antigravity" },
 ];
 
 export function isVisible(prefs: AppPrefs, id: ProviderId): boolean {

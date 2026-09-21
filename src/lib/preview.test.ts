@@ -14,6 +14,7 @@ describe("preview query helpers", () => {
     expect(prefs?.providers.claude?.visible).toBe(true);
     expect(prefs?.providers.cursor?.visible).toBe(false);
     expect(prefs?.providers.devin?.visible).toBe(false);
+    expect(prefs?.providers.antigravity?.visible).toBe(false);
   });
 
   it("builds an upcoming reset only when alert is set", () => {

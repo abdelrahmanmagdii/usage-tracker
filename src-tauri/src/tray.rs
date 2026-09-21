@@ -7,6 +7,7 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::antigravity::AntigravityManager;
 use crate::claude::ClaudeManager;
 use crate::codex::process::{CodexManager, ConnectionState};
 use crate::cursor::CursorManager;
@@ -25,6 +26,7 @@ pub const CLAUDE_TRAY_ID: &str = "provider-claude";
 pub const CURSOR_TRAY_ID: &str = "provider-cursor";
 pub const OPENCODE_TRAY_ID: &str = "provider-opencode";
 pub const DEVIN_TRAY_ID: &str = "provider-devin";
+pub const ANTIGRAVITY_TRAY_ID: &str = "provider-antigravity";
 
 /// Unix timestamp (seconds) until which an announced-but-not-yet-landed reset
 /// is pending. While pending, the Codex tray title carries a ⚡ prefix so the
@@ -130,15 +132,17 @@ pub enum Provider {
     Cursor,
     OpenCode,
     Devin,
+    Antigravity,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 5] = [
+    pub const ALL: [Provider; 6] = [
         Provider::Codex,
         Provider::Claude,
         Provider::Cursor,
         Provider::OpenCode,
         Provider::Devin,
+        Provider::Antigravity,
     ];
 
     pub fn key(self) -> &'static str {
@@ -148,6 +152,7 @@ impl Provider {
             Provider::Cursor => crate::prefs::PROVIDER_CURSOR,
             Provider::OpenCode => crate::prefs::PROVIDER_OPENCODE,
             Provider::Devin => crate::prefs::PROVIDER_DEVIN,
+            Provider::Antigravity => crate::prefs::PROVIDER_ANTIGRAVITY,
         }
     }
 
@@ -158,6 +163,7 @@ impl Provider {
             Provider::Cursor => "Cursor",
             Provider::OpenCode => "OpenCode Go",
             Provider::Devin => "Devin",
+            Provider::Antigravity => "Antigravity",
         }
     }
 
@@ -168,13 +174,14 @@ impl Provider {
             Provider::Cursor => CURSOR_TRAY_ID,
             Provider::OpenCode => OPENCODE_TRAY_ID,
             Provider::Devin => DEVIN_TRAY_ID,
+            Provider::Antigravity => ANTIGRAVITY_TRAY_ID,
         }
     }
 
     /// Menu-bar ink for this tool. Compact layout uses these as left-to-right
     /// bars next to the percentages; extended layout paints the same colors
     /// into each tool's logo. Distinct on purpose: purple Codex, coral Claude,
-    /// teal Cursor, indigo OpenCode, amber Devin.
+    /// teal Cursor, indigo OpenCode, amber Devin, blue Antigravity.
     fn color(self) -> [f64; 3] {
         match self {
             Provider::Codex => [140.0, 92.0, 240.0],
@@ -182,6 +189,7 @@ impl Provider {
             Provider::Cursor => [15.0, 157.0, 142.0],
             Provider::OpenCode => [79.0, 70.0, 229.0],
             Provider::Devin => [212.0, 132.0, 38.0],
+            Provider::Antigravity => [66.0, 133.0, 244.0],
         }
     }
 
@@ -458,6 +466,10 @@ async fn all_provider_views(app: &AppHandle, prefs: &crate::prefs::AppPrefs, now
         let state = manager.inner().snapshot().await;
         views.push(optional_view(Provider::Devin, prefs, now, &state));
     }
+    if let Some(manager) = app.try_state::<AntigravityManager>() {
+        let state = manager.inner().snapshot().await;
+        views.push(optional_view(Provider::Antigravity, prefs, now, &state));
+    }
     views
 }
 
@@ -725,6 +737,7 @@ pub fn refresh_all_providers(app: &AppHandle) {
     let cursor = app.try_state::<CursorManager>().map(|state| state.inner().clone());
     let opencode = app.try_state::<OpenCodeManager>().map(|state| state.inner().clone());
     let devin = app.try_state::<DevinManager>().map(|state| state.inner().clone());
+    let antigravity = app.try_state::<AntigravityManager>().map(|state| state.inner().clone());
     tauri::async_runtime::spawn(async move {
         if prefs.is_visible(crate::prefs::PROVIDER_CODEX) {
             if let Some(codex) = codex {
@@ -749,6 +762,11 @@ pub fn refresh_all_providers(app: &AppHandle) {
         if prefs.is_visible(crate::prefs::PROVIDER_DEVIN) {
             if let Some(devin) = devin {
                 let _ = devin.refresh().await;
+            }
+        }
+        if prefs.is_visible(crate::prefs::PROVIDER_ANTIGRAVITY) {
+            if let Some(antigravity) = antigravity {
+                let _ = antigravity.refresh().await;
             }
         }
     });
@@ -874,6 +892,7 @@ fn provider_tray_icon(provider: Provider) -> Image<'static> {
         Provider::Cursor => cursor_tray_icon(),
         Provider::OpenCode => opencode_tray_icon(),
         Provider::Devin => devin_tray_icon(),
+        Provider::Antigravity => antigravity_tray_icon(),
     }
 }
 
@@ -913,6 +932,14 @@ fn bar_slots(count: usize) -> Vec<(f64, f64, f64, f64)> {
             (8.2, 11.2, 6.4, 15.0),
             (11.8, 14.8, 7.6, 15.0),
             (15.4, 18.4, 8.8, 15.0),
+        ],
+        6 => vec![
+            (0.4, 3.2, 4.0, 15.0),
+            (3.6, 6.4, 5.0, 15.0),
+            (6.8, 9.6, 6.0, 15.0),
+            (10.0, 12.8, 7.0, 15.0),
+            (13.2, 16.0, 8.0, 15.0),
+            (16.4, 19.2, 9.0, 15.0),
         ],
         _ => vec![
             (1.6, 5.0, 4.2, 15.0),
@@ -1209,6 +1236,54 @@ pub fn devin_tray_icon() -> Image<'static> {
 
 fn inside_devin_mark(x: f64, y: f64) -> bool {
     const VERTS: [(f64, f64); 4] = [(11.0, 2.2), (17.8, 9.0), (11.0, 15.8), (4.2, 9.0)];
+    point_in_polygon(x, y, &VERTS)
+}
+
+/// Antigravity's Gemini-blue four-point star for the extended layout.
+pub fn antigravity_tray_icon() -> Image<'static> {
+    const WIDTH: u32 = 22;
+    const HEIGHT: u32 = 18;
+    const SAMPLES: u32 = 4;
+    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
+
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let mut coverage = 0_u32;
+            for sample_y in 0..SAMPLES {
+                for sample_x in 0..SAMPLES {
+                    let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
+                    let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
+                    if inside_antigravity_mark(px, py) {
+                        coverage += 1;
+                    }
+                }
+            }
+            if coverage == 0 {
+                continue;
+            }
+            let alpha = ((coverage * 255) / (SAMPLES * SAMPLES)) as u8;
+            let blend = y as f64 / (HEIGHT - 1) as f64;
+            let red = (66.0 + (48.0 - 66.0) * blend).round() as u8;
+            let green = (133.0 + (98.0 - 133.0) * blend).round() as u8;
+            let blue = (244.0 + (210.0 - 244.0) * blend).round() as u8;
+            let index = ((y * WIDTH + x) * 4) as usize;
+            rgba[index..index + 4].copy_from_slice(&[red, green, blue, alpha]);
+        }
+    }
+    Image::new_owned(rgba, WIDTH, HEIGHT)
+}
+
+fn inside_antigravity_mark(x: f64, y: f64) -> bool {
+    const VERTS: [(f64, f64); 8] = [
+        (11.0, 1.6),
+        (12.3, 7.7),
+        (18.4, 9.0),
+        (12.3, 10.3),
+        (11.0, 16.4),
+        (9.7, 10.3),
+        (3.6, 9.0),
+        (9.7, 7.7),
+    ];
     point_in_polygon(x, y, &VERTS)
 }
 
@@ -1612,6 +1687,20 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_icon_is_a_blue_star() {
+        let icon = antigravity_tray_icon();
+        let rgba = icon.rgba();
+        let pixel_at = |x: usize, y: usize| &rgba[(y * 22 + x) * 4..(y * 22 + x) * 4 + 4];
+        assert_eq!(pixel_at(0, 0)[3], 0);
+        let center = pixel_at(11, 9);
+        assert!(center[3] > 200);
+        assert!(center[2] > center[0] + 80);
+        assert!(center[2] > center[1]);
+        assert!(pixel_at(11, 3)[3] > 0);
+        assert_eq!(pixel_at(21, 2)[3], 0);
+    }
+
+    #[test]
     fn combined_icon_for_one_provider_is_that_providers_logo() {
         assert_eq!(
             combined_tray_icon(&[Provider::Cursor]).rgba(),
@@ -1624,6 +1713,10 @@ mod tests {
         assert_eq!(
             combined_tray_icon(&[Provider::Devin]).rgba(),
             devin_tray_icon().rgba()
+        );
+        assert_eq!(
+            combined_tray_icon(&[Provider::Antigravity]).rgba(),
+            antigravity_tray_icon().rgba()
         );
     }
 

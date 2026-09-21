@@ -1,5 +1,5 @@
 //! Shared snapshot type and helpers for optional usage providers (Claude,
-//! Cursor, OpenCode Go, Devin). Each backend still owns its own auth and fetch,
+//! Cursor, OpenCode Go, Devin, Antigravity). Each backend still owns its own auth and fetch,
 //! but they all emit this shape so the tray and renderer stay generic.
 
 use std::time::{SystemTime, UNIX_EPOCH};

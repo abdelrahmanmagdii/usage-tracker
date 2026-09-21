@@ -286,6 +286,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); o
 .provider-block[data-provider="cursor"] { --provider-accent: #0f9d8e; }
 .provider-block[data-provider="opencode"] { --provider-accent: #4f46e5; }
 .provider-block[data-provider="devin"] { --provider-accent: #d48426; }
+.provider-block[data-provider="antigravity"] { --provider-accent: #4285f4; }
 
 /* ── Tibo Watch ── */
 .tibo-watch { margin: 11px 14px 13px; padding: 12px 13px; border: 1px solid rgba(255,255,255,.76); border-radius: 15px; background: linear-gradient(145deg, rgba(255,255,255,.59), rgba(243,238,255,.4)); box-shadow: inset 0 1px 0 rgba(255,255,255,.86), 0 10px 24px rgba(62,45,103,.06); }

@@ -2,7 +2,7 @@
 
 UsageBar is **not** going on the Mac App Store. Guideline 2.4.5(i): Apple will
 not grant `temporary-exception.files.home-relative-path.read-only`, which the
-sandboxed build needs to read Claude/Cursor/OpenCode/Devin state. Distribution is the
+sandboxed build needs to read Claude/Cursor/OpenCode/Devin/Antigravity state. Distribution is the
 Developer ID GitHub `.dmg` only.
 
 Leave this file for history. Do not upload a new `.pkg` unless that decision changes.
@@ -24,17 +24,17 @@ Paste these fields when creating the Mac app **UsageBar** (`com.abdelrahmanamer.
 
 ## Description
 
-UsageBar lives in the Mac menu bar and shows how much Codex, Claude Code, Cursor, OpenCode Go, and Devin quota you have left — and when each window resets.
+UsageBar lives in the Mac menu bar and shows how much Codex, Claude Code, Cursor, OpenCode Go, Devin, and Antigravity quota you have left — and when each window resets.
 
 Numbers match the official apps. Compact mode keeps a single icon so macOS is less likely to hide it. Pin 5-hour, weekly, or a model window such as Fable.
 
-Usage stays on this Mac. Codex talks to the local Codex app server. Claude, Cursor, OpenCode, and Devin reuse the logins those tools already keep.
+Usage stays on this Mac. Codex talks to the local Codex app server. Claude, Cursor, OpenCode, Devin, and Antigravity reuse the logins those tools already keep.
 
 Requires the matching CLI or app to be signed in on this Mac.
 
 ## Keywords (100 characters)
 
-quota,codex,claude,cursor,opencode,devin,menubar,ratelimit,reset,usage
+quota,codex,claude,cursor,opencode,devin,antigravity,gemini,menubar,reset
 
 ## What's New (0.1.0)
 
@@ -44,7 +44,7 @@ First release: menu bar meters for Codex, Claude, Cursor, and OpenCode Go, plus 
 
 UsageBar does not operate a backend and does not receive your quota. Declare **no data collected by the developer**.
 
-Claude, Cursor, OpenCode, and Devin meters send the login those tools already store to the matching vendor usage API (Anthropic, Cursor, OpenCode, Cognition) so the meter can render. Codex stays on-device via the local app server. That is App Functionality for those vendors' products, not tracking by UsageBar. Align the nutrition labels with `website/privacy.html`.
+Claude, Cursor, OpenCode, Devin, and Antigravity meters send the login those tools already store to the matching vendor usage API (Anthropic, Cursor, OpenCode, Cognition, Google) so the meter can render. Codex stays on-device via the local app server. That is App Functionality for those vendors' products, not tracking by UsageBar. Align the nutrition labels with `website/privacy.html`.
 
 ## App Review Information (Guideline 2.1)
 
@@ -56,7 +56,7 @@ Record on a physical Mac, latest macOS, QuickTime Player → File → New Screen
 
 1. Show Desktop / Finder. Open `/Applications` and double-click **UsageBar**.
 2. Point at the menu bar (no Dock icon — this is an Accessory / `LSUIElement` app). Click the compact meters (`97 · 57 · …`).
-3. Click each provider row if more than one is visible (Codex, Claude, Cursor, OpenCode, Devin).
+3. Click each provider row if more than one is visible (Codex, Claude, Cursor, OpenCode, Devin, Antigravity).
 4. Click the wide **Settings** button. Show Tools (hide/show a provider), then Layout (compact vs extended).
 5. Close Settings. Click **Refresh**. Right-click the menu bar icon and show Quit (do not have to quit).
 6. If macOS shows a notification permission prompt, leave it in the clip.
@@ -88,18 +88,18 @@ macOS should not show a Keychain sheet for Claude Code. Notification permission 
 The Mac App Store binary is Apple silicon only, minimum macOS 12.
 
 3. FUNCTIONS AND TARGET AUDIENCE
-UsageBar is a free Developer Tools app for people who write software with Codex, Claude Code, Cursor, OpenCode Go, and/or Devin CLI. Those tools bury remaining quota inside a CLI or nested settings, so it is easy to hit a rate-limit reset mid-session. UsageBar shows remaining percent and the official reset countdown in the Mac menu bar — the same numbers those apps already display — so leftover quota is visible at a glance. Compact mode keeps a single icon so macOS is less likely to hide it.
+UsageBar is a free Developer Tools app for people who write software with Codex, Claude Code, Cursor, OpenCode Go, Devin CLI, and/or Google Antigravity. Those tools bury remaining quota inside a CLI or nested settings, so it is easy to hit a rate-limit reset mid-session. UsageBar shows remaining percent and the official reset countdown in the Mac menu bar — the same numbers those apps already display — so leftover quota is visible at a glance. Compact mode keeps a single icon so macOS is less likely to hide it.
 
 4. SETUP AND ACCESS TO MAIN FEATURES
-UsageBar has no account of its own. We cannot issue OpenAI, Anthropic, Cursor, OpenCode, or Devin demo logins.
+UsageBar has no account of its own. We cannot issue OpenAI, Anthropic, Cursor, OpenCode, Devin, or Google demo logins.
 
 To use the app:
 a) Launch UsageBar from Applications. It appears only in the menu bar.
-b) Have at least one signed-in tool on the same Mac: Codex CLI (`codex login`), Claude Code CLI, the Cursor app, OpenCode Go (`/connect`), or Devin CLI (`devin auth login`).
+b) Have at least one signed-in tool on the same Mac: Codex CLI (`codex login`), Claude Code CLI, the Cursor app, OpenCode Go (`/connect`), Devin CLI (`devin auth login`), or Antigravity (`agy login`).
 c) Click the menu bar meters. Hidden tools are not polled. Onboarding copy explains how to sign in if a meter is missing.
 d) Settings (wide footer button): which tools to show, which quota window each meter follows, compact vs extended, alerts, launch at login.
 
-Sandbox: read-only temporary exceptions for ~/.claude, ~/.local/share/opencode, ~/.local/share/devin, ~/Library/Application Support/Cursor, and the user-installed Codex CLI at /opt/homebrew/bin/codex and /usr/local/bin/codex. Keychain and SQLite use public APIs. UsageBar does not write those locations.
+Sandbox: read-only temporary exceptions for ~/.claude, ~/.gemini, ~/.local/share/opencode, ~/.local/share/devin, ~/Library/Application Support/Cursor, and the user-installed Codex CLI at /opt/homebrew/bin/codex and /usr/local/bin/codex. Keychain and SQLite use public APIs. UsageBar does not write those locations.
 Launch at Login may be unavailable in the App Store sandbox; the app is fully usable without it. System Settings → Login Items can add UsageBar.
 
 5. EXTERNAL SERVICES
@@ -109,6 +109,7 @@ UsageBar does not operate a backend. Quota is never sent to the developer.
 - Cursor: local login database to https://api2.cursor.sh
 - OpenCode Go: local auth.json to https://opencode.ai/zen/go/v1/usage
 - Devin CLI: local credentials.toml to the CLI's API server (typically https://server.codeium.com)
+- Antigravity: existing OAuth token to https://daily-cloudcode-pa.googleapis.com (and https://oauth2.googleapis.com when the access token is stale)
 - Tibo Watch (optional reset radar): public JSON at https://raw.githubusercontent.com/abdelrahmanmagdii/usage-tracker/main/data/resets.json
 No payment processor. No UsageBar authentication. HTTPS only; ITSAppUsesNonExemptEncryption is false.
 
@@ -116,7 +117,7 @@ No payment processor. No UsageBar authentication. HTTPS only; ITSAppUsesNonExemp
 None. Features and content are the same in every region.
 
 7. REGULATED INDUSTRY / PROTECTED MATERIAL
-Not a regulated industry. UsageBar is an independent utility, not affiliated with OpenAI, Anthropic, Cursor, OpenCode, or Cognition. It does not redistribute those products or their content. It only displays quota the user already has through tools they installed. No extra license or credential is required.
+Not a regulated industry. UsageBar is an independent utility, not affiliated with OpenAI, Anthropic, Cursor, OpenCode, Cognition, or Google. It does not redistribute those products or their content. It only displays quota the user already has through tools they installed. No extra license or credential is required.
 ```
 
 ### Resolution Center cover note
@@ -126,7 +127,7 @@ Thank you for the review. UsageBar is a Mac menu bar extra with no Dock icon —
 
 I have attached a screen recording from a physical Mac that starts at launch and walks through the popover and Settings. Answers to items 1–7 are in this reply and in App Review Information → Notes.
 
-There is no UsageBar account or demo login. Live meters need at least one of Codex, Claude Code, Cursor, OpenCode, or Devin already signed in on the Mac. The recording shows that signed-in state. The app is free, with no IAP, UGC, or ATT.
+There is no UsageBar account or demo login. Live meters need at least one of Codex, Claude Code, Cursor, OpenCode, Devin, or Antigravity already signed in on the Mac. The recording shows that signed-in state. The app is free, with no IAP, UGC, or ATT.
 ```
 
 ## Temporary exception entitlements (Guideline 2.4.5)
@@ -138,6 +139,7 @@ The remaining temporary exceptions are required for a menu-bar developer tool th
 
 home-relative-path.read-only:
 - ~/.claude/ — fallback Claude Code credentials file if Keychain has no item. Keychain itself uses Security.framework (no /usr/bin/security).
+- ~/.gemini/ — fallback Antigravity OAuth token file if Keychain has no item.
 - ~/.local/share/opencode/ — OpenCode Go auth.json so the OpenCode meter can call OpenCode’s own usage API.
 - ~/.local/share/devin/ — Devin CLI credentials.toml so the Devin meter can call Cognition’s usage API.
 - ~/Library/Application Support/Cursor/ — Cursor’s state.vscdb. The token is read in-process with SQLite (no /usr/bin/sqlite3).

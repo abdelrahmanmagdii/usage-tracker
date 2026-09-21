@@ -106,6 +106,43 @@ function devinPreview(): CodexBackendState {
   };
 }
 
+function antigravityPreview(): CodexBackendState {
+  const now = Date.now() / 1000;
+  return {
+    connection: "connected",
+    updatedAt: Math.floor(Date.now() / 1_000),
+    account: { type: "oauth", planType: "Antigravity" },
+    rateLimits: {
+      rateLimitsByLimitId: {
+        "gemini-5h": {
+          limitId: "gemini-5h",
+          windowLabel: "Gemini 5-hour",
+          limitName: "Gemini",
+          primary: { usedPercent: 15, windowDurationMins: 300, resetsAt: now + 3.1 * 3_600 },
+        },
+        "gemini-weekly": {
+          limitId: "gemini-weekly",
+          windowLabel: "Gemini weekly",
+          limitName: "Gemini",
+          secondary: { usedPercent: 42, windowDurationMins: 10_080, resetsAt: now + 3 * 86_400 },
+        },
+        "3p-5h": {
+          limitId: "3p-5h",
+          windowLabel: "Claude and GPT 5-hour",
+          limitName: "Claude and GPT",
+          primary: { usedPercent: 8, windowDurationMins: 300, resetsAt: now + 4.2 * 3_600 },
+        },
+        "3p-weekly": {
+          limitId: "3p-weekly",
+          windowLabel: "Claude and GPT weekly",
+          limitName: "Claude and GPT",
+          secondary: { usedPercent: 27, windowDurationMins: 10_080, resetsAt: now + 5 * 86_400 },
+        },
+      },
+    },
+  };
+}
+
 export function useClaudeMeter() {
   const preview = useCallback(claudePreview, []);
   return useProviderMeter({
@@ -142,6 +179,16 @@ export function useDevinMeter() {
     getCommand: "get_devin_state",
     refreshCommand: "refresh_devin",
     event: "devin://state",
+    preview,
+  });
+}
+
+export function useAntigravityMeter() {
+  const preview = useCallback(antigravityPreview, []);
+  return useProviderMeter({
+    getCommand: "get_antigravity_state",
+    refreshCommand: "refresh_antigravity",
+    event: "antigravity://state",
     preview,
   });
 }
