@@ -287,6 +287,17 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); o
 .provider-block[data-provider="opencode"] { --provider-accent: #4f46e5; }
 .provider-block[data-provider="devin"] { --provider-accent: #d48426; }
 .provider-block[data-provider="antigravity"] { --provider-accent: #4285f4; }
+.missing-providers { margin: 14px 14px 12px; padding: 10px 12px 11px; border: 1px solid rgba(91, 72, 132, .1); border-radius: 14px; background: rgba(255, 255, 255, .42); }
+.missing-providers summary { cursor: pointer; color: var(--text-secondary); font: 650 11.5px/16px var(--font-ui); list-style: none; }
+.missing-providers summary::-webkit-details-marker { display: none; }
+.missing-providers summary::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 8px 1px 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); }
+.missing-providers[open] summary::before { transform: rotate(45deg); margin-bottom: 2px; }
+.missing-providers p { margin: 8px 0 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
+.missing-providers ul { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.missing-providers li { display: grid; gap: 2px; }
+.missing-providers strong { color: var(--text); font: 650 11.5px/15px var(--font-ui); }
+.missing-providers li span { color: var(--text-tertiary); font-size: 11px; line-height: 1.45; }
+.missing-providers-clear { margin-bottom: 2px; }
 
 /* ── Tibo Watch ── */
 .tibo-watch { margin: 11px 14px 13px; padding: 12px 13px; border: 1px solid rgba(255,255,255,.76); border-radius: 15px; background: linear-gradient(145deg, rgba(255,255,255,.59), rgba(243,238,255,.4)); box-shadow: inset 0 1px 0 rgba(255,255,255,.86), 0 10px 24px rgba(62,45,103,.06); }

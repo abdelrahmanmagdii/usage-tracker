@@ -69,7 +69,11 @@ impl OpenCodeManager {
                 return Ok(self.snapshot().await);
             }
             CredentialRead::Unavailable(message) => {
-                if self.snapshot().await.updated_at.is_none() {
+                let snapshot = self.snapshot().await;
+                if !crate::provider::keep_last_meter(
+                    snapshot.connection,
+                    snapshot.updated_at.is_some(),
+                ) {
                     self.set_connection(
                         ConnectionState::CliNotFound,
                         Some("No OpenCode Go login was found on this Mac".into()),
@@ -158,8 +162,12 @@ impl OpenCodeManager {
     async fn set_connection(&self, connection: ConnectionState, diagnostic: Option<String>) {
         {
             let mut state = self.state.write().await;
-            state.connection = connection;
-            state.diagnostic = diagnostic;
+            if connection == ConnectionState::CliNotFound {
+                crate::provider::conceal_provider(&mut state, diagnostic);
+            } else {
+                state.connection = connection;
+                state.diagnostic = diagnostic;
+            }
         }
         self.emit_state().await;
     }
@@ -189,7 +197,9 @@ async fn load_go_key() -> CredentialRead {
             None => CredentialRead::Absent,
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => CredentialRead::Absent,
-        Err(error) => CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display())),
+        Err(error) => {
+            CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display()))
+        }
     }
 }
 
@@ -248,16 +258,13 @@ fn normalize_usage(raw: &Value) -> Option<Value> {
         let Some(window) = usage.get(id) else {
             continue;
         };
-        let Some(used) = finite_f64(window.get("percent"))
-            .or_else(|| finite_f64(window.get("usedPercent")))
+        let Some(used) =
+            finite_f64(window.get("percent")).or_else(|| finite_f64(window.get("usedPercent")))
         else {
             continue;
         };
-        let resets_at = parse_reset_timestamp(
-            window
-                .get("resetsAt")
-                .or_else(|| window.get("resets_at")),
-        );
+        let resets_at =
+            parse_reset_timestamp(window.get("resetsAt").or_else(|| window.get("resets_at")));
         let mut snapshot = serde_json::Map::new();
         snapshot.insert("limitId".into(), Value::from(id));
         if let Some(label) = label {
@@ -271,7 +278,10 @@ fn normalize_usage(raw: &Value) -> Option<Value> {
         {
             snapshot.insert("rateLimitReachedType".into(), Value::from("limit_reached"));
         }
-        snapshot.insert(kind.into(), window_snapshot(used, Some(duration), resets_at));
+        snapshot.insert(
+            kind.into(),
+            window_snapshot(used, Some(duration), resets_at),
+        );
         entries.push((id.to_owned(), Value::Object(snapshot)));
     }
     if entries.is_empty() {
@@ -315,7 +325,10 @@ mod tests {
             .and_then(Value::as_object)
             .expect("map");
         assert_eq!(by_id.len(), 3);
-        assert_eq!(by_id["rolling"].pointer("/primary/usedPercent"), Some(&json!(4.0)));
+        assert_eq!(
+            by_id["rolling"].pointer("/primary/usedPercent"),
+            Some(&json!(4.0))
+        );
         assert_eq!(
             by_id["rolling"].pointer("/primary/windowDurationMins"),
             Some(&json!(300.0))
