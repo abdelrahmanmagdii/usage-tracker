@@ -23,6 +23,38 @@ fn auto_window() -> String {
     TRAY_WINDOW_AUTO.to_owned()
 }
 
+/// Percent-used levels that fire a usage alert. Two keep the notification
+/// story legible (a warning, then a last call); the cap stops a typo'd list
+/// from turning into alert spam.
+pub const MAX_ALERT_THRESHOLDS: usize = 4;
+
+fn default_alert_thresholds() -> Vec<u32> {
+    vec![80, 95]
+}
+
+fn is_default_alert_thresholds(value: &[u32]) -> bool {
+    value == default_alert_thresholds()
+}
+
+/// Validates and normalizes user-supplied thresholds for storage: every
+/// value must be a percent, the list must not be empty or past the cap, and
+/// the stored form is deduped and ascending.
+pub fn normalize_alert_thresholds(input: &[u32]) -> Result<Vec<u32>, String> {
+    if input.is_empty() {
+        return Err("At least one alert threshold is required.".to_owned());
+    }
+    if input.iter().any(|t| !(1..=100).contains(t)) {
+        return Err("Alert thresholds must be whole percents between 1 and 100.".to_owned());
+    }
+    if input.len() > MAX_ALERT_THRESHOLDS {
+        return Err(format!("At most {MAX_ALERT_THRESHOLDS} alert thresholds."));
+    }
+    let mut out = input.to_vec();
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
 fn is_true(value: &bool) -> bool {
     *value
 }
@@ -64,6 +96,13 @@ pub struct AppPrefs {
     pub combined_tray: bool,
     /// First-run walkthrough has been completed or skipped.
     pub onboarding_complete: bool,
+    /// Percent-used levels that trigger a usage alert (stored ascending).
+    /// Missing on files written before this field existed — defaults apply.
+    #[serde(
+        default = "default_alert_thresholds",
+        skip_serializing_if = "is_default_alert_thresholds"
+    )]
+    pub usage_alert_thresholds: Vec<u32>,
     /// Sparse map of per-tool overrides. Missing keys mean visible + auto.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, ProviderPref>,
@@ -75,6 +114,7 @@ impl Default for AppPrefs {
             usage_alerts: true,
             combined_tray: true,
             onboarding_complete: false,
+            usage_alert_thresholds: default_alert_thresholds(),
             providers: BTreeMap::new(),
         }
     }
@@ -101,6 +141,16 @@ impl AppPrefs {
     pub fn set_tray_window(&mut self, id: &str, window: String) {
         self.providers.entry(id.to_owned()).or_default().tray_window = window;
         self.prune_default(id);
+    }
+
+    /// Thresholds as the alert engine wants them: descending, so a jump that
+    /// clears two levels fires only the higher one. Out-of-range or empty
+    /// stored values (hand-edited prefs) fall back to the defaults.
+    pub fn alert_thresholds(&self) -> Vec<f64> {
+        match normalize_alert_thresholds(&self.usage_alert_thresholds) {
+            Ok(list) => list.into_iter().rev().map(f64::from).collect(),
+            Err(_) => vec![95.0, 80.0],
+        }
     }
 
     fn prune_default(&mut self, id: &str) {
@@ -222,6 +272,32 @@ mod tests {
         let reloaded: AppPrefs = serde_json::from_str(&encoded).unwrap();
         assert!(!reloaded.is_visible(PROVIDER_CURSOR));
         assert!(reloaded.is_visible(PROVIDER_OPENCODE));
+    }
+
+    #[test]
+    fn alert_thresholds_default_normalize_and_fall_back() {
+        let mut prefs = AppPrefs::default();
+        assert_eq!(prefs.alert_thresholds(), vec![95.0, 80.0]);
+        // Stored ascending; the engine reads them descending.
+        prefs.usage_alert_thresholds = vec![60, 90];
+        assert_eq!(prefs.alert_thresholds(), vec![90.0, 60.0]);
+        // Hand-edited garbage (out of range, empty) falls back to defaults.
+        prefs.usage_alert_thresholds = vec![0, 250];
+        assert_eq!(prefs.alert_thresholds(), vec![95.0, 80.0]);
+        prefs.usage_alert_thresholds = vec![];
+        assert_eq!(prefs.alert_thresholds(), vec![95.0, 80.0]);
+    }
+
+    #[test]
+    fn alert_thresholds_validation() {
+        assert_eq!(normalize_alert_thresholds(&[95, 80, 80]).unwrap(), vec![80, 95]);
+        assert!(normalize_alert_thresholds(&[]).is_err());
+        assert!(normalize_alert_thresholds(&[0]).is_err());
+        assert!(normalize_alert_thresholds(&[101]).is_err());
+        assert!(normalize_alert_thresholds(&[1, 2, 3, 4, 5]).is_err());
+        // An old prefs file without the key still parses.
+        let prefs: AppPrefs = serde_json::from_str(r#"{"usageAlerts":true}"#).unwrap();
+        assert_eq!(prefs.usage_alert_thresholds, vec![80, 95]);
     }
 
     #[test]

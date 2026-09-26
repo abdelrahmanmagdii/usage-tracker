@@ -461,6 +461,7 @@ pub fn run() {
             commands::set_tray_window,
             commands::set_provider_visible,
             commands::set_usage_alerts,
+            commands::set_usage_alert_thresholds,
             commands::set_combined_tray,
             commands::get_autostart,
             commands::set_autostart,
