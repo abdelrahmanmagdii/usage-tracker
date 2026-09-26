@@ -64,6 +64,59 @@ export function parseRssItems(xml, handle) {
   return items;
 }
 
+/**
+ * The mirror relays append decoration the author's followers never see:
+ * "QT: <tweet url>" tails (the link is to the *quoted* tweet, not this
+ * post) and "📊 This post has a poll …" footers. Strip both so keyword
+ * matching and notification text see only Tibo's words.
+ */
+function stripMirrorDecoration(text) {
+  return text
+    .replace(/\s*QT: https?:\/\/\S+/g, "")
+    .replace(/\s*📊 This post has a poll[^\n]*/g, "")
+    .trim();
+}
+
+/**
+ * Parses a Bluesky getAuthorFeed response into the same normalized item
+ * shape as parseRssItems. All Nitter mirrors have gone dark, so an
+ * unofficial X→Bluesky relay of @thsottiaux is now the primary source —
+ * the public AppView needs no auth.
+ *
+ * Ids use the post rkey (`tibo-bsky-…`), not a tweet id: Bluesky posts
+ * carry no link to the original status, so cross-source dedup with
+ * Nitter ids is impossible. Reposts are skipped (same as the RT rule).
+ */
+export function parseBskyFeed(jsonText, actor) {
+  let data;
+  try {
+    data = JSON.parse(jsonText);
+  } catch {
+    return [];
+  }
+  const feed = Array.isArray(data?.feed) ? data.feed : [];
+  const items = [];
+  for (const entry of feed) {
+    if (typeof entry?.reason?.$type === "string" && entry.reason.$type.includes("reasonRepost")) {
+      continue;
+    }
+    const post = entry?.post;
+    const text = typeof post?.record?.text === "string" ? post.record.text : null;
+    const createdAt = post?.record?.createdAt;
+    const rkey = typeof post?.uri === "string" ? post.uri.split("/").pop() : null;
+    if (!text || typeof createdAt !== "string" || !rkey) continue;
+    const announced = new Date(createdAt);
+    if (Number.isNaN(announced.getTime())) continue;
+    items.push({
+      id: `tibo-bsky-${rkey}`,
+      text: stripMirrorDecoration(text),
+      announcedAt: announced.toISOString(),
+      sourceUrl: `https://bsky.app/profile/${actor}/post/${rkey}`,
+    });
+  }
+  return items;
+}
+
 /** True when a tweet looks like an actual reset announcement. Retweets of others are excluded. */
 export function isResetTweet(text) {
   if (/^RT @/i.test(text)) return false;
