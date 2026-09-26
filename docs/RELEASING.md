@@ -84,6 +84,23 @@ Apple Silicon, signs it, sends it to Apple for notarization, staples the
 ticket, and opens a **draft** release with the `.dmg` attached. Review the
 draft and publish it.
 
+## Homebrew tap (optional)
+
+`Casks/usagebar.rb` is ready to drop into a personal tap. Create a repo named
+`homebrew-usagebar` under your account, copy the cask in under `Casks/`, and
+users can then install with:
+
+```bash
+brew install --cask abdelrahmanmagdii/usagebar/usagebar
+```
+
+The tap needs one edit per release: bump `version`, and ideally replace
+`sha256 :no_check` with the real digest of the published dmg:
+
+```bash
+curl -sL "https://github.com/abdelrahmanmagdii/usage-tracker/releases/download/v$VERSION/UsageBar_${VERSION}_universal.dmg" | shasum -a 256
+```
+
 ## Verifying a build locally
 
 To sign a local build, export the same values and build as usual:

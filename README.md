@@ -35,6 +35,9 @@ Download the `.dmg` from
 open it, and drag UsageBar to Applications. Signed releases are notarized by
 Apple, so they open without a security warning. Or build from source below.
 
+If a Homebrew tap is set up (`Casks/usagebar.rb` in this repo),
+`brew install --cask abdelrahmanmagdii/usagebar/usagebar` works too.
+
 The [public site](https://abdelrahmanmagdii.github.io/usage-tracker/) is the
 privacy and support URL. Distribution is the notarized GitHub `.dmg` only —
 not the Mac App Store.
