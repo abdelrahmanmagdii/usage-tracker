@@ -711,7 +711,9 @@ fn unified_tooltip(views: &[ProviderView], now: u64) -> String {
         }
     }
     if lines.is_empty() {
-        return "UsageBar".to_owned();
+        // Icon-only title gives no hint why the bar is blank; the tooltip is
+        // the cheapest place to say so and point at the popover's setup path.
+        return "UsageBar — no tools found yet. Click to set up.".to_owned();
     }
     lines.join("\n")
 }
