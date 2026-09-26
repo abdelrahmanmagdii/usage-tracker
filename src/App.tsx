@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronUp, Clock3, Diamond, MousePointer2, Power, RefreshCw, Settings2, ShieldCheck, Sparkle, Sparkles, Terminal, Ticket } from "lucide-react";
+import { ChevronUp, Clock3, Diamond, MousePointer2, PlugZap, Power, RefreshCw, Settings2, ShieldCheck, Sparkle, Sparkles, Terminal, Ticket } from "lucide-react";
 import { MeterMark } from "./components/MeterMark";
 import { meterTone } from "./components/EdgeMeter";
 import { QuotaSection } from "./components/QuotaSection";
@@ -150,6 +150,24 @@ export default function App() {
   );
   const anyRefreshing = refreshing || claude.refreshing || cursor.refreshing || opencode.refreshing || devin.refreshing || antigravity.refreshing;
 
+  // Every provider renders nothing while its login is absent (cli_not_found)
+  // or still starting, so a Mac with no tools — or every meter hidden — would
+  // show a blank card between the header and footer. Detect that exact case
+  // and say what to do next instead.
+  const codexRenders = showCodex && state.connection !== "cli_not_found";
+  const otherMeters = [
+    { show: showClaude, connection: claude.state.connection },
+    { show: showCursor, connection: cursor.state.connection },
+    { show: showOpenCode, connection: opencode.state.connection },
+    { show: showDevin, connection: devin.state.connection },
+    { show: showAntigravity, connection: antigravity.state.connection },
+  ];
+  const othersRender = otherMeters.some(
+    ({ show, connection }) =>
+      show && connection !== "cli_not_found" && connection !== "starting",
+  );
+  const nothingEnabled = !showCodex && otherMeters.every(({ show }) => !show);
+
   return (
     <main className="app-shell" data-tauri-drag-region>
       {/* The traffic-light corner: where macOS puts window chrome, so it is
@@ -290,6 +308,20 @@ export default function App() {
             now={now}
             signedOutHint="open the Antigravity app and sign in there. UsageBar reads quota from the running app."
           />
+        ) : null}
+        {!codexRenders && !othersRender ? (
+          <div className="state-panel glass-tile" role="status">
+            <PlugZap size={22} strokeWidth={1.8} aria-hidden="true" />
+            <h2>{nothingEnabled ? "Every meter is hidden" : "No signed-in tools found"}</h2>
+            <p>
+              {nothingEnabled
+                ? "Turn a tool back on in Settings to see its quota here."
+                : "UsageBar reads the logins Codex, Claude Code, Cursor, OpenCode Go, Devin, and Antigravity already keep on this Mac. Sign in to one of them, then refresh."}
+            </p>
+            <button className="secondary-button" onClick={() => setOnboarding(true)}>
+              Open setup guide
+            </button>
+          </div>
         ) : null}
       </div>
 
