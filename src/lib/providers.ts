@@ -12,6 +12,8 @@ export type AppPrefs = {
   usageAlerts: boolean;
   combinedTray: boolean;
   onboardingComplete: boolean;
+  /** Percent-used levels that fire a usage alert (ascending). */
+  usageAlertThresholds?: number[];
   providers: Record<string, ProviderPref>;
 };
 
@@ -21,6 +23,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   usageAlerts: true,
   combinedTray: true,
   onboardingComplete: false,
+  usageAlertThresholds: [80, 95],
   providers: {},
 };
 
@@ -30,6 +33,14 @@ export function normalizePrefs(raw: Partial<AppPrefs> | null | undefined): AppPr
     ...raw,
     providers: raw?.providers ?? {},
   };
+}
+
+/** Alert levels as the settings UI wants them: ascending, finite, in range. */
+export function alertThresholds(prefs: AppPrefs): number[] {
+  const list = (prefs.usageAlertThresholds ?? [80, 95])
+    .filter((t) => Number.isInteger(t) && t >= 1 && t <= 100)
+    .sort((a, b) => a - b);
+  return list.length ? [...new Set(list)] : [80, 95];
 }
 
 export const PROVIDER_CATALOG: Array<{

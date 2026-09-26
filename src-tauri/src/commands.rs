@@ -158,6 +158,18 @@ pub fn set_usage_alerts(app: AppHandle, enabled: bool) {
     crate::tray::apply_preference_change(&app);
 }
 
+/// The percent-used levels that fire a usage alert. Stored ascending; the
+/// engine reads them descending so a jump past two levels fires only the
+/// higher one.
+#[tauri::command]
+pub fn set_usage_alert_thresholds(app: AppHandle, thresholds: Vec<u32>) -> Result<(), String> {
+    let normalized = crate::prefs::normalize_alert_thresholds(&thresholds)?;
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.usage_alert_thresholds = normalized);
+    crate::tray::apply_preference_change(&app);
+    Ok(())
+}
+
 /// `true` = one combined menu-bar icon; `false` = one icon per provider.
 #[tauri::command]
 pub fn set_combined_tray(app: AppHandle, enabled: bool) {

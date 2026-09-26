@@ -57,7 +57,7 @@ export function ProviderSection({
       {buckets.length ? (
         <div className="quota-list provider-quota-list">
           {buckets.map((bucket) => (
-            <QuotaSection key={bucket.id} bucket={bucket} now={now} />
+            <QuotaSection key={bucket.id} provider={id} bucket={bucket} now={now} />
           ))}
         </div>
       ) : null}

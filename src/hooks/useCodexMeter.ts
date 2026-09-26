@@ -50,7 +50,7 @@ export function useCodexMeter({ observeHistory = true }: { observeHistory?: bool
       .map((bucket) => `${bucket.id}:${bucket.usedPercent}:${bucket.resetsAt ?? ""}`)
       .join("|");
     if (observeHistory && signature && signature !== observedSignature.current) {
-      observeBuckets(buckets);
+      observeBuckets("codex", buckets);
       observedSignature.current = signature;
     }
   }, [observeHistory]);
