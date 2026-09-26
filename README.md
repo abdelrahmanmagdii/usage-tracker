@@ -181,12 +181,11 @@ Run the scraper yourself with `node tools/tibo-watch/check.mjs` (`--dry-run` to 
 
 - The reset feed relies on unofficial Nitter mirrors, which rate-limit and occasionally return empty responses; the workflow retries and simply catches up on the next run. Local on-device reset detection remains as a fallback, and hand-written `manual` entries always win.
 - GitHub's scheduled workflows can be delayed by a few minutes under load.
-- There is no auto-updater yet, so new versions mean downloading the next release.
+- Auto-updates come from the GitHub release the app is running: a signed `latest.json` is checked periodically and on demand (tray menu → Check for Updates…), and an update applies on the next restart. The very first install still needs a manual `.dmg` download.
 - A GUI-launched app must still be able to locate an executable `codex` command; common Homebrew paths and the login shell are checked.
 
 ## Future ideas
 
-- Auto-update
 - Richer local history trends and reset correlation
 - Local Claude usage history and trends
 - A Gemini CLI provider
