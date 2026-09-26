@@ -54,6 +54,10 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ runner.temp }}/asc-api-key.p8
+          # Updater artifact signing (minisign). Without this the CLI still
+          # builds the app but emits no `latest.json`, so self-updates stay off.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # One universal download rather than separate Intel/Apple Silicon builds.
           args: --target universal-apple-darwin

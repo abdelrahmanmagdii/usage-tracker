@@ -41,8 +41,17 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2RjFGREQ4NDgwMzIzNDgKUldSSUl3TkkyUDN4NXExM3F1UjBwd0NMN1EwTENkNDIxZTA5TnRIS05wME1ORWMwalB2U25PQWYK",
+      "endpoints": [
+        "https://github.com/abdelrahmanmagdii/usage-tracker/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["app", "dmg"],
     "icon": [
       "icons/32x32.png",

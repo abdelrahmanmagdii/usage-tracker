@@ -15,6 +15,7 @@ use crate::devin::DevinManager;
 use crate::opencode::OpenCodeManager;
 use crate::prefs::PrefsStore;
 use crate::provider::ProviderState;
+use crate::updates::UpdateStatus;
 
 /// The combined menu-bar item carrying both providers. One narrow item resists
 /// macOS hiding it when the bar is crowded (or collides with a notch), which is
@@ -213,7 +214,7 @@ impl TrayMenuState {
         true
     }
 
-    fn invalidate(&self) {
+    pub(crate) fn invalidate(&self) {
         self.0.lock().expect("tray menu state poisoned").clear();
     }
 }
@@ -250,6 +251,21 @@ fn layout_submenu(app: &AppHandle, combined: bool) -> tauri::Result<tauri::menu:
     let extended = CheckMenuItem::with_id(app, "layout-extended", "Extended (one icon per tool)", true, !combined, None::<&str>)?;
     let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&compact, &extended];
     Submenu::with_items(app, "Menu Bar Layout", true, &refs)
+}
+
+/// The updates row: a manual check, or the restart action once an update
+/// has downloaded and is parked waiting for a relaunch.
+fn update_menu_item(app: &AppHandle) -> tauri::Result<MenuItem<tauri::Wry>> {
+    if let Some(version) = app.state::<UpdateStatus>().pending_version() {
+        return MenuItem::with_id(
+            app,
+            "restart-update",
+            format!("Restart to Update — v{version}"),
+            true,
+            None::<&str>,
+        );
+    }
+    MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)
 }
 
 /// A provider's "Menu Bar Shows" submenu: "Most used" plus one entry per window.
@@ -327,6 +343,7 @@ fn build_unified_menu(
         None::<&str>,
     )?;
     let layout = layout_submenu(app, prefs.combined_tray)?;
+    let updates = update_menu_item(app)?;
     let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
 
@@ -340,6 +357,7 @@ fn build_unified_menu(
         &sep_after_pickers,
         &alerts,
         &autostart,
+        &updates,
         &sep_after_toggles,
         &walkthrough,
         &quit,
@@ -371,10 +389,11 @@ fn build_provider_menu(
     let layout = layout_submenu(app, prefs.combined_tray)?;
     let alerts = CheckMenuItem::with_id(app, "toggle-alerts", "Usage Alerts", true, prefs.usage_alerts, None::<&str>)?;
     let autostart = CheckMenuItem::with_id(app, "toggle-autostart", "Launch at Login", true, app.autolaunch().is_enabled().unwrap_or(false), None::<&str>)?;
+    let updates = update_menu_item(app)?;
     let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
     let items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
-        &refresh, &sep_after_refresh, &picker, &layout, &sep_after_picker, &alerts, &autostart, &sep_after_toggles, &walkthrough, &quit,
+        &refresh, &sep_after_refresh, &picker, &layout, &sep_after_picker, &alerts, &autostart, &updates, &sep_after_toggles, &walkthrough, &quit,
     ];
     Menu::with_items(app, &items)
 }
@@ -616,7 +635,13 @@ fn sync_menus(app: &AppHandle, prefs: &crate::prefs::AppPrefs, views: &[Provider
             .collect::<Vec<_>>()
             .join(",")
     };
-    let shared = format!("{}|{}", prefs.usage_alerts, prefs.combined_tray);
+    // A downloaded-but-not-restarted update is part of the signature so the
+    // "Check for Updates…" item becomes "Restart to Update" once one lands.
+    let pending = app
+        .state::<UpdateStatus>()
+        .pending_version()
+        .unwrap_or_default();
+    let shared = format!("{}|{}|{}", prefs.usage_alerts, prefs.combined_tray, pending);
     let listed: Vec<&ProviderView> = views.iter().filter(|view| view.present).collect();
 
     if prefs.combined_tray {
@@ -814,6 +839,15 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 eprintln!("usagebar: launch-at-login toggle failed: {error}");
             }
             app.state::<TrayMenuState>().invalidate();
+        }
+        "check-updates" => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::updates::check_for_update(handle, true).await;
+            });
+        }
+        "restart-update" => {
+            tauri::process::restart(&app.env());
         }
         "show-onboarding" => {
             if let Some(window) = app.get_webview_window("main") {

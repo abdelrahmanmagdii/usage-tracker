@@ -65,6 +65,24 @@ Repository → Settings → Secrets and variables → Actions:
 | `APPLE_API_KEY` | Key ID (step 4) |
 | `APPLE_API_ISSUER` | Issuer ID (step 4) |
 | `APPLE_API_KEY_P8` | full contents of the `.p8` file, including the BEGIN/END lines |
+| `TAURI_SIGNING_PRIVATE_KEY` | contents of the updater private key (step 6) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | the password you set, if the key has one — omit it if blank |
+
+### 6. Generate the updater signing key
+
+Self-updates are verified with a minisign signature: the private key signs
+`latest.json`'s artifacts in CI, and the app checks them against the public
+key baked into `src-tauri/tauri.conf.json`.
+
+```bash
+npx tauri signer generate -w ~/.tauri/usagebar-updater.key
+```
+
+Paste the contents of `~/.tauri/usagebar-updater.key` into the
+`TAURI_SIGNING_PRIVATE_KEY` secret, and keep a copy somewhere safe — **if the
+key is lost you must rotate the pair**: generate a fresh key, commit the new
+pubkey to `tauri.conf.json`, and every build signed with the old key stops
+auto-updating (those users land back on manual downloads).
 
 ## Cutting a release
 
@@ -81,8 +99,11 @@ git tag v0.1.0 && git push origin main --tags
 
 The workflow runs the test suite, builds a universal binary for Intel and
 Apple Silicon, signs it, sends it to Apple for notarization, staples the
-ticket, and opens a **draft** release with the `.dmg` attached. Review the
-draft and publish it.
+ticket, and opens a **draft** release with the `.dmg`, the updater bundle
+(`*.app.tar.gz` + `*.sig`), and `latest.json` attached. Review the draft and
+publish it — `releases/latest` then points at it and running copies of
+UsageBar pick up the update (they check on a six-hour cycle, and the tray
+menu gains a **Restart to Update** item once one has downloaded).
 
 ## Verifying a build locally
 
