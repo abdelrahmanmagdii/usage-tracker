@@ -1,6 +1,6 @@
 [package]
 name = "usagebar"
-version = "0.1.4"
+version = "0.2.0"
 description = "Codex, Claude, Cursor, OpenCode, Devin, and Antigravity quota windows and reset times, in the Mac menu bar."
 authors = ["UsageBar contributors"]
 edition = "2021"
