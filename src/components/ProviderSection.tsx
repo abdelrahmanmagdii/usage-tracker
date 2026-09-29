@@ -12,6 +12,11 @@ function planLabel(account: unknown): string | null {
   return account.planType;
 }
 
+/** Data this old while refreshes keep failing usually means the provider
+ * changed its usage API rather than a transient outage — the note then
+ * points at updating instead of just retrying. */
+const PROLONGED_FAILURE_SECS = 60 * 60;
+
 function unavailableNote(
   label: string,
   signedOutHint: string,
@@ -25,7 +30,16 @@ function unavailableNote(
   }
   const reason = expired ? signedOutHint : `${state.diagnostic ?? `${label} usage could not be refreshed`}.`;
   const age = describeAge(state.updatedAt, nowMs);
-  return `Showing the last known usage — ${reason}${age ? ` Last updated ${age}.` : ""}`;
+  let note = `Showing the last known usage — ${reason}${age ? ` Last updated ${age}.` : ""}`;
+  if (
+    !expired &&
+    state.connection === "error" &&
+    typeof state.updatedAt === "number" &&
+    nowMs / 1_000 - state.updatedAt >= PROLONGED_FAILURE_SECS
+  ) {
+    note += " If this keeps failing, check for updates — the provider may have changed its usage API.";
+  }
+  return note;
 }
 
 export function ProviderSection({
