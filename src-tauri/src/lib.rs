@@ -9,6 +9,7 @@ mod opencode;
 mod prefs;
 mod provider;
 mod tray;
+mod updates;
 
 use antigravity::AntigravityManager;
 use claude::ClaudeManager;
@@ -170,6 +171,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
@@ -188,6 +190,7 @@ pub fn run() {
             app.manage(tray::ResetRadar::default());
             app.manage(tray::TrayMenuState::default());
             app.manage(tray::TrayRenderCache::default());
+            app.manage(updates::UpdateStatus::default());
             let manager = CodexManager::new(app.handle().clone());
             app.manage(manager.clone());
             let claude_manager = ClaudeManager::new(app.handle().clone());
@@ -201,6 +204,7 @@ pub fn run() {
             let antigravity_manager = AntigravityManager::new(app.handle().clone());
             app.manage(antigravity_manager.clone());
             tray::setup(app)?;
+            updates::spawn_periodic_checks(&app.handle());
 
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
