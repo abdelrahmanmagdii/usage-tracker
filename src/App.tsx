@@ -225,7 +225,7 @@ export default function App() {
           <>
             <ResetAlert now={now} events={resetEvents} />
             <div className="quota-list">
-              {buckets.map((bucket) => <QuotaSection key={bucket.id} bucket={bucket} now={now} />)}
+              {buckets.map((bucket) => <QuotaSection key={bucket.id} provider="codex" bucket={bucket} now={now} />)}
             </div>
             {resetCredits.availableCount > 0 ? (
               <div className="reset-credit"><Ticket size={15} aria-hidden="true" /><strong>{resetCredits.availableCount}</strong> reset {resetCredits.availableCount === 1 ? "is" : "are"} available</div>

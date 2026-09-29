@@ -11,9 +11,10 @@ use tokio::sync::Mutex;
 
 use crate::prefs::PrefsStore;
 
-/// Crossing thresholds, checked highest-first so one refresh that jumps past
-/// both 80 and 95 produces a single, most-urgent notification.
-const THRESHOLDS: [f64; 2] = [95.0, 80.0];
+/// Fallback levels when preferences are unavailable. The stored preference
+/// is the source of truth; this only covers the first moments before the
+/// prefs store is managed.
+pub const DEFAULT_THRESHOLDS: [f64; 2] = [95.0, 80.0];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AlertKind {
@@ -22,10 +23,12 @@ pub enum AlertKind {
 }
 
 /// Pure crossing logic: what changed between two observations of one window?
-pub fn crossing(previous: f64, current: f64) -> Option<AlertKind> {
-    for threshold in THRESHOLDS {
-        if previous < threshold && current >= threshold {
-            return Some(AlertKind::Threshold(threshold));
+/// `thresholds` must be descending so one refresh that jumps past several
+/// levels produces a single, most-urgent notification.
+pub fn crossing(previous: f64, current: f64, thresholds: &[f64]) -> Option<AlertKind> {
+    for threshold in thresholds {
+        if previous < *threshold && current >= *threshold {
+            return Some(AlertKind::Threshold(*threshold));
         }
     }
     if previous >= 50.0 && current < 10.0 {
@@ -104,10 +107,12 @@ impl UsageAlerts {
     /// observation of each window seeds silently, so an app restart never
     /// re-notifies about a window that was already past a threshold.
     pub async fn observe(&self, app: &AppHandle, provider: &str, payload: &Value) {
-        let enabled = app
-            .try_state::<PrefsStore>()
-            .map(|prefs| prefs.get().usage_alerts)
-            .unwrap_or(true);
+        let prefs = app.try_state::<PrefsStore>().map(|store| store.get());
+        let enabled = prefs.as_ref().map(|p| p.usage_alerts).unwrap_or(true);
+        let thresholds = prefs
+            .as_ref()
+            .map(|p| p.alert_thresholds())
+            .unwrap_or_else(|| DEFAULT_THRESHOLDS.to_vec());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -121,7 +126,7 @@ impl UsageAlerts {
             if !enabled {
                 continue;
             }
-            let Some(alert) = crossing(previous, window.used) else {
+            let Some(alert) = crossing(previous, window.used, &thresholds) else {
                 continue;
             };
             let (title, body) = match alert {
@@ -153,18 +158,39 @@ mod tests {
 
     #[test]
     fn crossings_fire_once_and_prefer_the_higher_threshold() {
-        assert_eq!(crossing(70.0, 85.0), Some(AlertKind::Threshold(80.0)));
-        assert_eq!(crossing(70.0, 97.0), Some(AlertKind::Threshold(95.0)));
-        assert_eq!(crossing(85.0, 90.0), None);
-        assert_eq!(crossing(85.0, 96.0), Some(AlertKind::Threshold(95.0)));
-        assert_eq!(crossing(96.0, 97.0), None);
+        assert_eq!(
+            crossing(70.0, 85.0, &DEFAULT_THRESHOLDS),
+            Some(AlertKind::Threshold(80.0))
+        );
+        assert_eq!(
+            crossing(70.0, 97.0, &DEFAULT_THRESHOLDS),
+            Some(AlertKind::Threshold(95.0))
+        );
+        assert_eq!(crossing(85.0, 90.0, &DEFAULT_THRESHOLDS), None);
+        assert_eq!(
+            crossing(85.0, 96.0, &DEFAULT_THRESHOLDS),
+            Some(AlertKind::Threshold(95.0))
+        );
+        assert_eq!(crossing(96.0, 97.0, &DEFAULT_THRESHOLDS), None);
+    }
+
+    #[test]
+    fn custom_thresholds_are_honored() {
+        assert_eq!(
+            crossing(55.0, 62.0, &[90.0, 60.0]),
+            Some(AlertKind::Threshold(60.0))
+        );
+        assert_eq!(crossing(91.0, 92.0, &[90.0, 60.0]), None);
     }
 
     #[test]
     fn a_big_drop_is_a_fresh_window() {
-        assert_eq!(crossing(84.0, 2.0), Some(AlertKind::FreshWindow));
-        assert_eq!(crossing(30.0, 2.0), None);
-        assert_eq!(crossing(84.0, 20.0), None);
+        assert_eq!(
+            crossing(84.0, 2.0, &DEFAULT_THRESHOLDS),
+            Some(AlertKind::FreshWindow)
+        );
+        assert_eq!(crossing(30.0, 2.0, &DEFAULT_THRESHOLDS), None);
+        assert_eq!(crossing(84.0, 20.0, &DEFAULT_THRESHOLDS), None);
     }
 
     #[test]

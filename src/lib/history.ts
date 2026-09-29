@@ -2,7 +2,9 @@ import type { QuotaSnapshot, RateLimitBucket, ResetEvent } from "../types/codex"
 
 const HISTORY_KEY = "codex-meter.quota-history.v1";
 const EVENT_KEY = "codex-meter.detected-events.v1";
-const MAX_HISTORY = 300;
+// Six providers × a few windows each fill the cap faster than one did, and
+// the store is only ~60KB of JSON at this size.
+const MAX_HISTORY = 900;
 
 function readArray<T>(key: string): T[] {
   try {
@@ -28,7 +30,7 @@ export function isPossibleSurpriseReset(
   );
 }
 
-export function observeBuckets(buckets: RateLimitBucket[]): ResetEvent[] {
+export function observeBuckets(provider: string, buckets: RateLimitBucket[]): ResetEvent[] {
   const history = readArray<QuotaSnapshot>(HISTORY_KEY);
   const detected = readArray<ResetEvent>(EVENT_KEY);
   const newEvents: ResetEvent[] = [];
@@ -37,7 +39,9 @@ export function observeBuckets(buckets: RateLimitBucket[]): ResetEvent[] {
   for (const bucket of buckets) {
     const snapshot: QuotaSnapshot = {
       timestamp,
-      limitId: bucket.id,
+      // Bucket ids are only unique within one provider ("weekly" exists on
+      // both OpenCode and Devin), so history keys carry the provider too.
+      limitId: `${provider}:${bucket.id}`,
       usedPercent: bucket.usedPercent,
       remainingPercent: bucket.remainingPercent,
       windowDurationMins: bucket.windowDurationMins,
@@ -72,4 +76,10 @@ export function observeBuckets(buckets: RateLimitBucket[]): ResetEvent[] {
 
 export function readDetectedEvents(): ResetEvent[] {
   return readArray<ResetEvent>(EVENT_KEY);
+}
+
+/** Recorded samples for one window, oldest first, for the tile sparkline. */
+export function historySeries(provider: string, bucketId: string): QuotaSnapshot[] {
+  const key = `${provider}:${bucketId}`;
+  return readArray<QuotaSnapshot>(HISTORY_KEY).filter((entry) => entry.limitId === key);
 }

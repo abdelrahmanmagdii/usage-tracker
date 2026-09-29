@@ -6,6 +6,7 @@ import {
   AUTO_WINDOW,
   DEFAULT_PREFS,
   PROVIDER_CATALOG,
+  alertThresholds,
   isVisible,
   normalizePrefs,
   trayWindow,
@@ -101,6 +102,46 @@ function WindowPicker({
   );
 }
 
+/** A percent field that commits on blur/Enter, so typing "9" mid-edit does
+ * not persist a stray threshold. Invalid drafts are simply discarded. */
+function ThresholdField({
+  label,
+  percent,
+  onCommit,
+}: {
+  label: string;
+  percent: number;
+  onCommit: (next: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    if (draft === null) return;
+    setDraft(null);
+    const parsed = Number.parseInt(draft, 10);
+    if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 100 && parsed !== percent) {
+      onCommit(parsed);
+    }
+  };
+  return (
+    <label className="threshold-field">
+      <span className="threshold-field-label">{label}</span>
+      <input
+        type="number"
+        min={1}
+        max={100}
+        step={1}
+        value={draft ?? String(percent)}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+      />
+      <span className="threshold-field-unit" aria-hidden="true">%</span>
+    </label>
+  );
+}
+
 function Toggle({
   label,
   detail,
@@ -171,7 +212,17 @@ export function SettingsModal({
     if (inTauri()) void invoke("set_provider_visible", { provider, visible });
   }, []);
 
+  const commitThresholds = useCallback((first: number, second: number) => {
+    const next = [...new Set([first, second])].sort((a, b) => a - b);
+    setPrefs((current) => ({ ...current, usageAlertThresholds: next }));
+    if (inTauri()) {
+      void invoke("set_usage_alert_thresholds", { thresholds: next }).catch(() => undefined);
+    }
+  }, []);
+
   const visibleCount = PROVIDER_CATALOG.filter((tool) => isVisible(prefs, tool.id)).length;
+  const thresholds = alertThresholds(prefs);
+  const alertDetail = `Get notified at ${thresholds.map((t) => `${t}%`).join(" and ")} used, and when a limit resets.`;
 
   return (
     <div
@@ -275,13 +326,27 @@ export function SettingsModal({
             <span className="setting-label">General</span>
             <Toggle
               label="Usage alerts"
-              detail="Get notified at 80% and 95%, and when a limit resets."
+              detail={alertDetail}
               checked={prefs.usageAlerts}
               onChange={(next) => {
                 setPrefs((current) => ({ ...current, usageAlerts: next }));
                 if (inTauri()) void invoke("set_usage_alerts", { enabled: next });
               }}
             />
+            {prefs.usageAlerts ? (
+              <div className="threshold-editor">
+                <ThresholdField
+                  label="Warn at"
+                  percent={thresholds[0] ?? 80}
+                  onCommit={(value) => commitThresholds(value, thresholds[thresholds.length - 1] ?? 95)}
+                />
+                <ThresholdField
+                  label="Last call at"
+                  percent={thresholds[thresholds.length - 1] ?? 95}
+                  onCommit={(value) => commitThresholds(thresholds[0] ?? 80, value)}
+                />
+              </div>
+            ) : null}
             <Toggle
               label="Launch at login"
               detail="Start UsageBar when you log in."

@@ -146,6 +146,7 @@ function antigravityPreview(): CodexBackendState {
 export function useClaudeMeter() {
   const preview = useCallback(claudePreview, []);
   return useProviderMeter({
+    provider: "claude",
     getCommand: "get_claude_state",
     refreshCommand: "refresh_claude",
     event: "claude://state",
@@ -156,6 +157,7 @@ export function useClaudeMeter() {
 export function useCursorMeter() {
   const preview = useCallback(cursorPreview, []);
   return useProviderMeter({
+    provider: "cursor",
     getCommand: "get_cursor_state",
     refreshCommand: "refresh_cursor",
     event: "cursor://state",
@@ -166,6 +168,7 @@ export function useCursorMeter() {
 export function useOpenCodeMeter() {
   const preview = useCallback(opencodePreview, []);
   return useProviderMeter({
+    provider: "opencode",
     getCommand: "get_opencode_state",
     refreshCommand: "refresh_opencode",
     event: "opencode://state",
@@ -176,6 +179,7 @@ export function useOpenCodeMeter() {
 export function useDevinMeter() {
   const preview = useCallback(devinPreview, []);
   return useProviderMeter({
+    provider: "devin",
     getCommand: "get_devin_state",
     refreshCommand: "refresh_devin",
     event: "devin://state",
@@ -186,6 +190,7 @@ export function useDevinMeter() {
 export function useAntigravityMeter() {
   const preview = useCallback(antigravityPreview, []);
   return useProviderMeter({
+    provider: "antigravity",
     getCommand: "get_antigravity_state",
     refreshCommand: "refresh_antigravity",
     event: "antigravity://state",
