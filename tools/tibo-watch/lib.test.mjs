@@ -4,6 +4,7 @@ import {
   decodeEntities,
   isResetTweet,
   mergeEvents,
+  parseBskyFeed,
   parseLeadTimeMinutes,
   parseRssItems,
   toResetEvent,
@@ -46,6 +47,72 @@ describe("parseRssItems", () => {
   it("returns nothing for malformed input", () => {
     assert.deepEqual(parseRssItems("not xml at all", "thsottiaux"), []);
     assert.deepEqual(parseRssItems(null, "thsottiaux"), []);
+  });
+});
+
+const SAMPLE_BSKY_FEED = JSON.stringify({
+  feed: [
+    {
+      post: {
+        uri: "at://did:plc:abc/app.bsky.feed.post/3mweyqd7dl42r",
+        record: {
+          createdAt: "2026-09-26T00:07:13.000Z",
+          text: "o yes… we’re back in action and we’ll reset usage limits for all paid users",
+        },
+      },
+    },
+    {
+      post: {
+        uri: "at://did:plc:abc/app.bsky.feed.post/3mw7bvf2cnm22",
+        record: {
+          createdAt: "2026-09-23T17:35:48.000Z",
+          // The relay's QT tail links the *quoted* tweet — decoration, not text.
+          text: "Voice! check it out\n\nQT: https://twitter.com/i/status/2102808325742322002",
+        },
+      },
+    },
+    {
+      // A repost of someone else's post — must be skipped.
+      reason: { $type: "app.bsky.feed.defs#reasonRepost" },
+      post: {
+        uri: "at://did:plc:xyz/app.bsky.feed.post/repost1",
+        record: {
+          createdAt: "2026-09-25T00:00:00.000Z",
+          text: "usage limits have been reset for everyone",
+        },
+      },
+    },
+    {
+      // A malformed entry is skipped, not fatal.
+      post: { uri: "at://did:plc:abc/app.bsky.feed.post/broken" },
+    },
+  ],
+});
+
+describe("parseBskyFeed", () => {
+  it("normalizes posts, strips relay decoration, and skips reposts", () => {
+    const items = parseBskyFeed(SAMPLE_BSKY_FEED, "thsottiaux-bot.eurosky.social");
+    assert.equal(items.length, 2);
+    assert.equal(items[0].id, "tibo-bsky-3mweyqd7dl42r");
+    assert.equal(items[0].announcedAt, "2026-09-26T00:07:13.000Z");
+    assert.equal(
+      items[0].sourceUrl,
+      "https://bsky.app/profile/thsottiaux-bot.eurosky.social/post/3mweyqd7dl42r",
+    );
+    assert.equal(items[1].text, "Voice! check it out");
+  });
+
+  it("returns nothing for malformed input", () => {
+    assert.deepEqual(parseBskyFeed("not json", "actor"), []);
+    assert.deepEqual(parseBskyFeed("{}", "actor"), []);
+    assert.deepEqual(parseBskyFeed(null, "actor"), []);
+  });
+
+  it("feeds real reset announcements through toResetEvent", () => {
+    const [item] = parseBskyFeed(SAMPLE_BSKY_FEED, "actor");
+    const event = toResetEvent(item);
+    assert.equal(event.id, "tibo-bsky-3mweyqd7dl42r");
+    assert.equal(event.source, "tibo");
   });
 });
 

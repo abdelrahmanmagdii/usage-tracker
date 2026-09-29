@@ -1,6 +1,20 @@
 {
-  "updatedAt": "2026-08-15T21:15:00.000Z",
+  "updatedAt": "2026-09-26T14:12:24.843Z",
   "events": [
+    {
+      "id": "tibo-bsky-3mweyqd7dl42r",
+      "announcedAt": "2026-09-26T00:07:13.000Z",
+      "source": "tibo",
+      "text": "o yes… we’re back in action and we’ll reset usage limits for all paid users across codex and ChatGPT work\n\nsorry about the brief disruption!\n\n(and yes we have a special spare codex when things are down to help us out)",
+      "sourceUrl": "https://bsky.app/profile/thsottiaux-bot.eurosky.social/post/3mweyqd7dl42r"
+    },
+    {
+      "id": "tibo-bsky-3mvcn4uckic25",
+      "announcedAt": "2026-09-12T08:09:17.000Z",
+      "source": "tibo",
+      "text": "Reset all propagated. Sweet dreams.",
+      "sourceUrl": "https://bsky.app/profile/thsottiaux-bot.eurosky.social/post/3mvcn4uckic25"
+    },
     {
       "id": "tibo-2087706104814023111",
       "announcedAt": "2026-08-13T01:01:37.000Z",
@@ -35,7 +49,7 @@
       "id": "tibo-2082317452755751098",
       "announcedAt": "2026-07-29T04:09:02.981Z",
       "source": "tibo",
-      "text": "Hello people of Sol! I've reset usage limits for all ChatGPT Work and Codex users. Together with that, a quick update on GPT-5.6 Sol usage limits\u2026",
+      "text": "Hello people of Sol! I've reset usage limits for all ChatGPT Work and Codex users. Together with that, a quick update on GPT-5.6 Sol usage limits…",
       "sourceUrl": "https://x.com/thsottiaux/status/2082317452755751098",
       "occurredAt": "2026-07-29T04:09:02.981Z"
     },
@@ -75,7 +89,7 @@
       "id": "tibo-2077607697487188198",
       "announcedAt": "2026-07-16T04:14:09.822Z",
       "source": "tibo",
-      "text": "Another reset for our Codex and ChatGPT Work users. Actually hit 9M active users way earlier today, but then got distracted by the approximately millions of things the team is doing to keep the systems up and reliable\u2026",
+      "text": "Another reset for our Codex and ChatGPT Work users. Actually hit 9M active users way earlier today, but then got distracted by the approximately millions of things the team is doing to keep the systems up and reliable…",
       "sourceUrl": "https://x.com/thsottiaux/status/2077607697487188198",
       "occurredAt": "2026-07-16T04:14:09.822Z"
     },
@@ -129,7 +143,7 @@
       "id": "tibo-2071740419030053227",
       "announcedAt": "2026-06-29T23:39:41.629Z",
       "source": "tibo",
-      "text": "Codex usage limits will be fully reset again in the next hour and we will credit one additional reset into your bank for your own usage over the next 24 hours. We investigated reports that Codex usage was being consumed faster than expected\u2026",
+      "text": "Codex usage limits will be fully reset again in the next hour and we will credit one additional reset into your bank for your own usage over the next 24 hours. We investigated reports that Codex usage was being consumed faster than expected…",
       "sourceUrl": "https://x.com/thsottiaux/status/2071740419030053227",
       "occursAt": "2026-06-30T00:39:41.629Z"
     },
@@ -137,7 +151,7 @@
       "id": "tibo-2071381664853319742",
       "announcedAt": "2026-06-28T23:54:07.968Z",
       "source": "tibo",
-      "text": "As we are still investigating, I have reset everyone's Codex usage limits. This is a hard reset given some users had stacked up to three banked resets already that they can apply on their own schedule. Funnily enough, this week at OpenAI is called the RESET week\u2026",
+      "text": "As we are still investigating, I have reset everyone's Codex usage limits. This is a hard reset given some users had stacked up to three banked resets already that they can apply on their own schedule. Funnily enough, this week at OpenAI is called the RESET week…",
       "sourceUrl": "https://x.com/thsottiaux/status/2071381664853319742",
       "occurredAt": "2026-06-28T23:54:07.968Z"
     },

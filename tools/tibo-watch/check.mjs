@@ -1,27 +1,41 @@
 #!/usr/bin/env node
 /**
- * Tibo Watch checker — polls @thsottiaux's public timeline via free Nitter
- * RSS mirrors and merges surprise-reset announcements into data/resets.json.
+ * Tibo Watch checker — polls @thsottiaux's public timeline and merges
+ * surprise-reset announcements into data/resets.json.
+ *
+ * Sources, tried in order:
+ *   1. Bluesky mirrors of @thsottiaux via the public AppView (no auth) —
+ *      the primary source; every public Nitter instance has gone dark.
+ *   2. Free Nitter RSS mirrors, kept as a fallback in case one comes back.
  *
  * Usage:
  *   node tools/tibo-watch/check.mjs            # fetch + merge + write
  *   node tools/tibo-watch/check.mjs --dry-run  # fetch + print, write nothing
  *
  * Env overrides:
- *   TIBO_HANDLE     X handle to watch (default: thsottiaux)
- *   TIBO_INSTANCES  Comma-separated Nitter base URLs, tried in order
- *   TIBO_DATA_FILE  Path to resets.json (default: ../../data/resets.json)
+ *   TIBO_HANDLE       X handle to watch (default: thsottiaux)
+ *   TIBO_BSKY_ACTORS  Comma-separated Bluesky relay handles, tried in order
+ *   TIBO_INSTANCES    Comma-separated Nitter base URLs, tried in order
+ *   TIBO_DATA_FILE    Path to resets.json (default: ../../data/resets.json)
  */
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { mergeEvents, parseRssItems, toResetEvent } from "./lib.mjs";
+import { mergeEvents, parseBskyFeed, parseRssItems, toResetEvent } from "./lib.mjs";
 
 const execFileAsync = promisify(execFile);
 
 const HANDLE = process.env.TIBO_HANDLE || "thsottiaux";
+const BSKY_API = "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed";
+const BSKY_ACTORS = (
+  process.env.TIBO_BSKY_ACTORS ||
+  "thsottiaux-bot.eurosky.social,thsottiaux-mirr.selfhosted.social"
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 const INSTANCES = (
   process.env.TIBO_INSTANCES ||
   "https://nitter.net,https://nitter.privacyredirect.com,https://nitter.tiekoetter.com"
@@ -50,13 +64,13 @@ async function fetchBody(url) {
   try {
     const { stdout } = await execFileAsync(
       "curl",
-      ["-sfL", "--compressed", "-A", USER_AGENT, "-H", "Accept: application/rss+xml, text/xml, */*", "-m", "20", url],
+      ["-sfL", "--compressed", "-A", USER_AGENT, "-H", "Accept: application/json, application/rss+xml, text/xml, */*", "-m", "20", url],
       { maxBuffer: 4 * 1024 * 1024 },
     );
     return stdout;
   } catch (curlError) {
     const response = await fetch(url, {
-      headers: { "user-agent": USER_AGENT, accept: "application/rss+xml, text/xml, */*" },
+      headers: { "user-agent": USER_AGENT, accept: "application/json, application/rss+xml, text/xml, */*" },
       signal: AbortSignal.timeout(20_000),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status} (curl also failed: ${curlError.message})`);
@@ -64,25 +78,37 @@ async function fetchBody(url) {
   }
 }
 
+function sources() {
+  return [
+    ...BSKY_ACTORS.map((actor) => ({
+      url: `${BSKY_API}?actor=${encodeURIComponent(actor)}&limit=25&filter=posts_no_replies`,
+      parse: (body) => parseBskyFeed(body, actor),
+    })),
+    ...INSTANCES.map((base) => ({
+      url: `${base}/${HANDLE}/rss`,
+      // Nitter instances soft-fail with empty 200s or anti-bot HTML pages.
+      parse: (body) => parseRssItems(body, HANDLE),
+    })),
+  ];
+}
+
 async function fetchTimeline() {
   let lastError = null;
-  for (const base of INSTANCES) {
-    const url = `${base}/${HANDLE}/rss`;
+  for (const source of sources()) {
     for (let attempt = 1; attempt <= ATTEMPTS_PER_INSTANCE; attempt += 1) {
       try {
-        // Nitter instances soft-fail with empty 200s or anti-bot HTML pages.
-        const items = parseRssItems(await fetchBody(url), HANDLE);
+        const items = source.parse(await fetchBody(source.url));
         if (items.length === 0) throw new Error("no timeline items parsed");
-        console.log(`tibo-watch: fetched ${items.length} tweets from ${url}`);
+        console.log(`tibo-watch: fetched ${items.length} posts from ${source.url}`);
         return items;
       } catch (error) {
         lastError = error;
-        console.warn(`tibo-watch: ${url} attempt ${attempt} failed (${error.message})`);
+        console.warn(`tibo-watch: ${source.url} attempt ${attempt} failed (${error.message})`);
         if (attempt < ATTEMPTS_PER_INSTANCE) await sleep(RETRY_DELAY_MS);
       }
     }
   }
-  console.warn(`tibo-watch: all instances failed (${lastError?.message ?? "unknown"}); keeping existing data`);
+  console.warn(`tibo-watch: all sources failed (${lastError?.message ?? "unknown"}); keeping existing data`);
   return null;
 }
 

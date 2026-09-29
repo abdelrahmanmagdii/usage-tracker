@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ResetEvent } from "../../types/codex";
 import {
+  landedKey,
   resetNotificationBody,
   resetNotificationTitle,
   selectFreshResetNotifications,
+  selectLandedResetNotifications,
 } from "./notifications";
 
 const now = Date.parse("2026-08-13T12:00:00Z");
@@ -35,6 +37,34 @@ describe("selectFreshResetNotifications", () => {
         event({ id: "delivered" }),
       ],
       ["delivered"],
+      now,
+    );
+    expect(selected).toEqual([]);
+  });
+});
+
+describe("selectLandedResetNotifications", () => {
+  it("includes a scheduled reset once its occursAt passes", () => {
+    const selected = selectLandedResetNotifications(
+      [
+        event({ id: "landed", occursAt: "2026-08-13T11:45:00Z" }),
+        event({ id: "still-upcoming", occursAt: "2026-08-13T12:30:00Z" }),
+        event({ id: "no-schedule" }),
+      ],
+      [],
+      now,
+    );
+    expect(selected.map((entry) => entry.id)).toEqual(["landed"]);
+  });
+
+  it("excludes already-landed events, samples, and windows long past", () => {
+    const selected = selectLandedResetNotifications(
+      [
+        event({ id: "delivered", occursAt: "2026-08-13T11:45:00Z" }),
+        event({ id: "sample", sample: true, occursAt: "2026-08-13T11:45:00Z" }),
+        event({ id: "stale", occursAt: "2026-08-13T08:00:00Z" }),
+      ],
+      [landedKey(event({ id: "delivered" }))],
       now,
     );
     expect(selected).toEqual([]);

@@ -43,6 +43,27 @@ export function selectFreshResetNotifications(
   });
 }
 
+/** The dedupe key for the "reset landed" follow-up to an announcement. */
+export const landedKey = (event: ResetEvent): string => `${event.id}:landed`;
+
+/**
+ * Announced resets whose predicted window (occursAt) has now passed and
+ * whose follow-up hasn't been sent yet. This is the second act of an
+ * "incoming" notification — the moment the quota is actually fresh again.
+ */
+export function selectLandedResetNotifications(
+  events: ResetEvent[],
+  notifiedIds: Iterable<string>,
+  nowMs = Date.now(),
+): ResetEvent[] {
+  const notified = new Set(notifiedIds);
+  return events.filter((event) => {
+    if (event.sample || notified.has(landedKey(event))) return false;
+    const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
+    return Number.isFinite(occursAt) && occursAt <= nowMs && nowMs - occursAt <= FRESH_WINDOW_MS;
+  });
+}
+
 export function resetNotificationTitle(event: ResetEvent, nowMs = Date.now()): string {
   if (event.source === "detected") return "Possible Codex quota reset detected";
   const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
@@ -75,23 +96,44 @@ export function resetNotificationBody(event: ResetEvent, nowMs = Date.now()): st
 export async function notifyFreshResets(events: ResetEvent[], nowMs = Date.now()): Promise<void> {
   if (!("__TAURI_INTERNALS__" in window)) return;
   const notified = new Set(readNotified());
-  const fresh = selectFreshResetNotifications(events, notified, nowMs);
-  if (fresh.length === 0) return;
+  // "Landed" first — quota becoming usable again is the actionable moment.
+  // An event whose occursAt already passed isn't also sent as an
+  // announcement; the landed notification carries the same news.
+  const landed = selectLandedResetNotifications(events, notified, nowMs);
+  const landedIds = new Set(landed.map((event) => event.id));
+  const fresh = selectFreshResetNotifications(events, notified, nowMs)
+    .filter((event) => !landedIds.has(event.id));
+  const queue = [
+    ...landed.map((event) => ({
+      event,
+      key: landedKey(event),
+      title: "⚡ Codex quota reset has landed",
+      body: "The announced reset just took effect — your quota is fresh again.",
+    })),
+    ...fresh.map((event) => ({
+      event,
+      key: event.id,
+      title: resetNotificationTitle(event, nowMs),
+      body: resetNotificationBody(event, nowMs),
+    })),
+  ].slice(0, MAX_PER_BATCH);
+  if (queue.length === 0) return;
   let changed = false;
   try {
     let granted = await isPermissionGranted();
     if (!granted) granted = (await requestPermission()) === "granted";
     if (!granted) {
-      for (const event of fresh) notified.add(event.id);
+      for (const item of queue) notified.add(item.key);
       writeNotified(notified);
       return;
     }
-    for (const event of fresh.slice(0, MAX_PER_BATCH)) {
-      sendNotification({
-        title: resetNotificationTitle(event, nowMs),
-        body: resetNotificationBody(event, nowMs),
-      });
-      notified.add(event.id);
+    for (const item of queue) {
+      // Await delivery before recording: an un-awaited rejection used to
+      // mark the event notified without ever showing the notification.
+      await sendNotification({ title: item.title, body: item.body });
+      notified.add(item.key);
+      // A landed event is the final word on that announcement.
+      if (item.key === landedKey(item.event)) notified.add(item.event.id);
       changed = true;
     }
   } catch {
