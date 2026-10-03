@@ -61,18 +61,20 @@ pub fn parse_reset_timestamp(value: Option<&Value>) -> Option<f64> {
     match value? {
         Value::Number(number) => number.as_f64(),
         Value::String(text) => {
-            let parsed = time::OffsetDateTime::parse(
-                text,
-                &time::format_description::well_known::Rfc3339,
-            )
-            .ok()?;
+            let parsed =
+                time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
+                    .ok()?;
             Some(parsed.unix_timestamp() as f64)
         }
         _ => None,
     }
 }
 
-pub fn window_snapshot(used_percent: f64, duration_mins: Option<f64>, resets_at: Option<f64>) -> Value {
+pub fn window_snapshot(
+    used_percent: f64,
+    duration_mins: Option<f64>,
+    resets_at: Option<f64>,
+) -> Value {
     let mut window = Map::new();
     window.insert(
         "usedPercent".into(),
@@ -95,10 +97,62 @@ pub fn rate_limits_map(entries: Vec<(String, Value)>) -> Value {
     json!({ "rateLimitsByLimitId": Value::Object(by_id) })
 }
 
+/// An unreadable credential store keeps the last meter only while that meter
+/// is still on screen. A provider already marked missing stays hidden, so a
+/// later Keychain failure cannot bring it back as a status error.
+pub fn keep_last_meter(connection: ConnectionState, has_shown_usage: bool) -> bool {
+    connection != ConnectionState::CliNotFound && has_shown_usage
+}
+
+/// Mark a provider missing and drop the numbers that would otherwise make the
+/// next failed read look like a live meter.
+pub fn conceal_provider(state: &mut ProviderState, diagnostic: Option<String>) {
+    state.connection = ConnectionState::CliNotFound;
+    state.diagnostic = diagnostic;
+    state.account = None;
+    state.rate_limits = None;
+    state.updated_at = None;
+}
+
 pub fn finite_f64(value: Option<&Value>) -> Option<f64> {
     match value? {
         Value::Number(number) => number.as_f64(),
         Value::String(text) if !text.trim().is_empty() => text.parse().ok(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_hidden_provider_stays_hidden_when_the_store_cannot_be_read() {
+        assert!(!keep_last_meter(ConnectionState::CliNotFound, true));
+        assert!(!keep_last_meter(ConnectionState::CliNotFound, false));
+        assert!(!keep_last_meter(ConnectionState::Connected, false));
+        assert!(keep_last_meter(ConnectionState::Connected, true));
+        assert!(keep_last_meter(ConnectionState::Error, true));
+    }
+
+    #[test]
+    fn concealing_a_provider_drops_the_old_meter() {
+        let mut state = ProviderState {
+            connection: ConnectionState::Connected,
+            diagnostic: Some("status -25293".into()),
+            account: Some(json!({ "type": "oauth" })),
+            rate_limits: Some(json!({ "rateLimitsByLimitId": {} })),
+            updated_at: Some(1_700_000_000),
+        };
+        conceal_provider(&mut state, Some("No login was found on this Mac".into()));
+        assert_eq!(state.connection, ConnectionState::CliNotFound);
+        assert!(state.account.is_none());
+        assert!(state.rate_limits.is_none());
+        assert!(state.updated_at.is_none());
+        assert!(!keep_last_meter(
+            state.connection,
+            state.updated_at.is_some()
+        ));
     }
 }
