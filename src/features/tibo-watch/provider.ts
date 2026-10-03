@@ -204,7 +204,7 @@ export function tiboStatus(events: ResetEvent[], nowMs = Date.now()) {
     return { tone: "danger", label: "Reset incoming" } as const;
   }
   const latest = events[0];
-  if (!latest) return { tone: "warning", label: "No resets recorded" } as const;
+  if (!latest) return { tone: "warning", label: "Watching for resets" } as const;
   const ageDays = (nowMs - Date.parse(latest.occurredAt ?? latest.announcedAt)) / 86_400_000;
   if (ageDays <= 3) return { tone: "success", label: "Recently reset" } as const;
   return { tone: "warning", label: "No recent resets" } as const;

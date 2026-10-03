@@ -66,7 +66,9 @@ jobs:
           releaseBody: |
             Signed and notarized build. Download the `.dmg`, open it, and drag
             UsageBar to Applications.
-          releaseDraft: true
+          # Publish straight away: tests gate the job above, and installed
+          # copies only see `latest.json` once the release is public.
+          releaseDraft: false
 
       - name: Remove API key
         if: always()

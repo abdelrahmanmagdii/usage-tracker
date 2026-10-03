@@ -39,12 +39,16 @@ pub async fn refresh_cursor(manager: State<'_, CursorManager>) -> Result<Provide
 }
 
 #[tauri::command]
-pub async fn get_opencode_state(manager: State<'_, OpenCodeManager>) -> Result<ProviderState, String> {
+pub async fn get_opencode_state(
+    manager: State<'_, OpenCodeManager>,
+) -> Result<ProviderState, String> {
     Ok(manager.snapshot().await)
 }
 
 #[tauri::command]
-pub async fn refresh_opencode(manager: State<'_, OpenCodeManager>) -> Result<ProviderState, String> {
+pub async fn refresh_opencode(
+    manager: State<'_, OpenCodeManager>,
+) -> Result<ProviderState, String> {
     manager.refresh().await
 }
 
@@ -158,6 +162,44 @@ pub fn set_usage_alerts(app: AppHandle, enabled: bool) {
     crate::tray::apply_preference_change(&app);
 }
 
+/// Only post links from the reset feed may be handed to `open`, so the
+/// webview cannot launch arbitrary URLs or files.
+fn is_openable_post_url(url: &str) -> bool {
+    const ALLOWED: [&str; 3] = [
+        "https://bsky.app/",
+        "https://x.com/",
+        "https://twitter.com/",
+    ];
+    ALLOWED.iter().any(|prefix| url.starts_with(prefix))
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+#[tauri::command]
+pub fn open_post_url(url: String) -> Result<(), String> {
+    if !is_openable_post_url(&url) {
+        return Err("Only reset post links can be opened.".to_owned());
+    }
+    std::process::Command::new("/usr/bin/open")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_reset_alerts(app: AppHandle, enabled: bool) {
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.reset_alerts = enabled);
+    crate::tray::apply_preference_change(&app);
+}
+
+#[tauri::command]
+pub fn set_dense_layout(app: AppHandle, enabled: bool) {
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.dense_layout = enabled);
+    crate::tray::apply_preference_change(&app);
+}
+
 /// The percent-used levels that fire a usage alert. Stored ascending; the
 /// engine reads them descending so a jump past two levels fires only the
 /// higher one.
@@ -237,4 +279,20 @@ pub fn hide_window(app: AppHandle) {
     }
     #[cfg(target_os = "macos")]
     crate::hide_app();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_openable_post_url;
+
+    #[test]
+    fn only_reset_post_links_are_openable() {
+        assert!(is_openable_post_url(
+            "https://bsky.app/profile/a.social/post/3mw"
+        ));
+        assert!(is_openable_post_url("https://x.com/thsottiaux/status/1"));
+        assert!(!is_openable_post_url("file:///etc/passwd"));
+        assert!(!is_openable_post_url("https://evil.example/x.com/"));
+        assert!(!is_openable_post_url("https://x.com/a b"));
+    }
 }

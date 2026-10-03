@@ -465,6 +465,9 @@ pub fn run() {
             commands::set_tray_window,
             commands::set_provider_visible,
             commands::set_usage_alerts,
+            commands::set_reset_alerts,
+            commands::open_post_url,
+            commands::set_dense_layout,
             commands::set_usage_alert_thresholds,
             commands::set_combined_tray,
             commands::get_autostart,
@@ -498,12 +501,32 @@ mod tests {
         // Data younger than the staleness window is never re-fetched.
         assert!(!should_refresh(now, Some(now - 60), now - 3_600, 0));
         // Stale data waits out the steady cadence after a healthy run...
-        assert!(!should_refresh(now, Some(now - STALE_AFTER_SECS), now - 60, 0));
-        assert!(should_refresh(now, Some(now - STALE_AFTER_SECS), now - MIN_RETRY_SECS, 0));
+        assert!(!should_refresh(
+            now,
+            Some(now - STALE_AFTER_SECS),
+            now - 60,
+            0
+        ));
+        assert!(should_refresh(
+            now,
+            Some(now - STALE_AFTER_SECS),
+            now - MIN_RETRY_SECS,
+            0
+        ));
         // ...but a failed attempt is retried on the next watchdog tick, which
         // is what pulls a hidden or frozen Claude meter back within seconds.
-        assert!(should_refresh(now, Some(now - STALE_AFTER_SECS), now - FIRST_RETRY_SECS, 1));
-        assert!(!should_refresh(now, Some(now - STALE_AFTER_SECS), now - 10, 1));
+        assert!(should_refresh(
+            now,
+            Some(now - STALE_AFTER_SECS),
+            now - FIRST_RETRY_SECS,
+            1
+        ));
+        assert!(!should_refresh(
+            now,
+            Some(now - STALE_AFTER_SECS),
+            now - 10,
+            1
+        ));
         // A meter that never got data at all is due as soon as spacing allows.
         assert!(should_refresh(now, None, now - FIRST_RETRY_SECS, 1));
         assert!(!should_refresh(now, None, now, 1));

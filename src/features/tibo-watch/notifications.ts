@@ -89,13 +89,19 @@ export function resetNotificationTitle(event: ResetEvent, nowMs = Date.now()): s
   return "Codex quota reset announced";
 }
 
+/** "Plus, Pro" or "All paid plans", when the post said who it covers. */
+export function planSummary(event: ResetEvent): string | null {
+  return event.plansAffected?.length ? event.plansAffected.join(", ") : null;
+}
+
 export function resetNotificationBody(event: ResetEvent, nowMs = Date.now()): string {
   if (event.source === "detected") {
     return "Your available quota jumped before its scheduled renewal.";
   }
   const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
+  const plans = planSummary(event);
   if (Number.isFinite(occursAt) && occursAt > nowMs) {
-    return `Lands in ~${formatLeadTime(occursAt - nowMs)} — spend what's left of your current quota, it refreshes anyway.`;
+    return `${plans ? `${plans}: lands` : "Lands"} in ~${formatLeadTime(occursAt - nowMs)} — spend what's left of your current quota, it refreshes anyway.`;
   }
   if (Number.isFinite(occursAt)) return "Quota has been reset.";
   return event.text
@@ -109,8 +115,12 @@ export function resetNotificationBody(event: ResetEvent, nowMs = Date.now()): st
  * are recorded as delivered; denied permission is remembered for the batch so
  * the app does not repeatedly ask about the same event.
  */
-export async function notifyFreshResets(events: ResetEvent[], nowMs = Date.now()): Promise<void> {
-  if (!("__TAURI_INTERNALS__" in window)) return;
+export async function notifyFreshResets(
+  events: ResetEvent[],
+  nowMs = Date.now(),
+  { enabled = true }: { enabled?: boolean } = {},
+): Promise<void> {
+  if (!enabled || !("__TAURI_INTERNALS__" in window)) return;
   const notified = new Set(readNotified());
   // "Landed" first — quota becoming usable again is the actionable moment.
   // An event whose occursAt already passed isn't also sent as an
@@ -160,5 +170,24 @@ export async function notifyFreshResets(events: ResetEvent[], nowMs = Date.now()
     /* Keep failed events eligible for a later retry (e.g. after installing a signed build). */
   } finally {
     if (changed) writeNotified(notified);
+  }
+}
+
+export type TestNotificationResult = "sent" | "denied" | "unavailable";
+
+/** Sends a sample alert so a muted or denied permission shows up now, not on reset day. */
+export async function sendTestNotification(): Promise<TestNotificationResult> {
+  if (!("__TAURI_INTERNALS__" in window)) return "unavailable";
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (!granted) return "denied";
+    await sendNotification({
+      title: "UsageBar notifications work",
+      body: "You'll hear about Tibo's resets and your usage alerts like this.",
+    });
+    return "sent";
+  } catch {
+    return "unavailable";
   }
 }

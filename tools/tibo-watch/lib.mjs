@@ -225,14 +225,31 @@ export function parseOccursAt(text, announcedAt) {
     : null;
 }
 
+const PLAN_NAMES = ["Free", "Go", "Plus", "Pro", "Business", "Team", "Enterprise", "Edu"];
+
+/**
+ * Plans a reset covers, when the post names them ("for all paid ChatGPT
+ * accounts", "Plus and Pro"). Plan names are matched case-sensitively so
+ * ordinary words ("go /fast", "pro tip") don't count. Returns null if unstated.
+ */
+export function parsePlans(text) {
+  if (/\ball paid\b/i.test(text)) return ["All paid plans"];
+  const named = PLAN_NAMES.filter((plan) =>
+    new RegExp(`\\b${plan}\\b(?!\\s*/)`).test(text),
+  ).filter((plan) => plan !== "Go" || /\bGo\b(?=\s*(?:,|and|&|plans?|users|accounts|subscribers))/.test(text));
+  return named.length ? named : null;
+}
+
 /** Converts a parsed RSS item into a ResetEvent, or null when unrelated. */
 export function toResetEvent(item) {
   if (!isResetTweet(item.text)) return null;
   const occursAt = parseOccursAt(item.text, item.announcedAt);
+  const plansAffected = parsePlans(item.text);
   return {
     id: item.id,
     announcedAt: item.announcedAt,
     ...(occursAt ? { occursAt } : {}),
+    ...(plansAffected ? { plansAffected } : {}),
     source: "tibo",
     text: item.text.slice(0, 280),
     sourceUrl: item.sourceUrl,

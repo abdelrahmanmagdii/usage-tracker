@@ -10,6 +10,10 @@ export type ProviderPref = {
 
 export type AppPrefs = {
   usageAlerts: boolean;
+  /** Notifications when Tibo announces a reset. */
+  resetAlerts: boolean;
+  /** One-row quota cards instead of the roomy default. */
+  denseLayout: boolean;
   combinedTray: boolean;
   onboardingComplete: boolean;
   /** Percent-used levels that fire a usage alert (ascending). */
@@ -21,6 +25,8 @@ export const AUTO_WINDOW = "auto";
 
 export const DEFAULT_PREFS: AppPrefs = {
   usageAlerts: true,
+  resetAlerts: true,
+  denseLayout: false,
   combinedTray: true,
   onboardingComplete: false,
   usageAlertThresholds: [80, 95],
@@ -88,10 +94,13 @@ export function isPresent(state: CodexBackendState): boolean {
   return state.connection !== "cli_not_found" && state.connection !== "starting";
 }
 
+export function hasShownUsage(state: CodexBackendState): boolean {
+  return state.updatedAt != null || state.rateLimits != null || state.usage != null;
+}
+
 /** A tool the user does not have must stay hidden. A refresh failure is not a new meter. */
 export function stateAfterRefreshFailure(current: CodexBackendState, error: unknown): CodexBackendState {
-  const hasShownUsage = current.updatedAt != null || current.rateLimits != null;
-  if (!hasShownUsage || current.connection === "cli_not_found" || current.connection === "starting") {
+  if (current.connection === "cli_not_found" || !hasShownUsage(current)) {
     return { connection: "cli_not_found" };
   }
   return {
@@ -99,4 +108,36 @@ export function stateAfterRefreshFailure(current: CodexBackendState, error: unkn
     connection: "error",
     diagnostic: error instanceof Error ? error.message : String(error),
   };
+}
+
+export const PROVIDER_SETUP: Record<ProviderId, string> = {
+  codex: "Install the Codex CLI, sign in, and leave codex on your PATH.",
+  claude: "Run claude once and sign in. The Claude desktop app uses a different login.",
+  cursor: "Sign in through the Cursor app on this Mac.",
+  opencode: "In OpenCode, run /connect and choose OpenCode Go.",
+  devin: "Run devin auth login so the CLI stores a login on this Mac.",
+  antigravity: "Open the Antigravity app and sign in. UsageBar reads quota from the running app.",
+};
+
+export type MissingProvider = {
+  id: ProviderId;
+  label: string;
+  detail: string;
+};
+
+/** Providers the popover is not showing, with the step that brings each one back. */
+export function missingProviders(
+  prefs: AppPrefs,
+  states: Partial<Record<ProviderId, CodexBackendState>>,
+): MissingProvider[] {
+  return PROVIDER_CATALOG.flatMap((provider) => {
+    if (!isVisible(prefs, provider.id)) {
+      return [{ id: provider.id, label: provider.label, detail: "Turn this meter on in Settings." }];
+    }
+    const connection = states[provider.id]?.connection;
+    if (connection === "cli_not_found") {
+      return [{ id: provider.id, label: provider.label, detail: PROVIDER_SETUP[provider.id] }];
+    }
+    return [];
+  });
 }

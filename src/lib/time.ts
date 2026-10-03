@@ -35,3 +35,17 @@ export function formatLeadTime(ms: number): string {
   const days = Math.floor(hours / 24);
   return days === 1 ? "1 day" : `${days} days`;
 }
+
+/** Matches the tray's stale marker (`TRAY_STALE_AFTER_SECS`). */
+export const STALE_AFTER_SECS = 15 * 60;
+
+/** "Updated 2m ago", flagged stale once a reading is older than 15 minutes. */
+export function freshness(
+  updatedAtSeconds?: number | null,
+  nowMs = Date.now(),
+): { label: string; stale: boolean } | null {
+  const age = describeAge(updatedAtSeconds, nowMs);
+  if (!age || typeof updatedAtSeconds !== "number") return null;
+  const stale = nowMs / 1_000 - updatedAtSeconds >= STALE_AFTER_SECS;
+  return { label: age === "just now" ? "Updated just now" : `Updated ${age}`, stale };
+}

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { ProviderMeter } from "../hooks/useProviderMeter";
 import { QuotaSection } from "./QuotaSection";
+import { Freshness } from "./Freshness";
 import { isRecord } from "../lib/rateLimits";
 import { describeAge } from "../lib/time";
 import type { CodexBackendState } from "../types/codex";
@@ -49,6 +50,7 @@ export function ProviderSection({
   meter,
   now,
   signedOutHint,
+  dense = false,
 }: {
   id: string;
   label: string;
@@ -56,6 +58,7 @@ export function ProviderSection({
   meter: ProviderMeter;
   now: number;
   signedOutHint: string;
+  dense?: boolean;
 }) {
   const { state, buckets, refresh } = meter;
   if (state.connection === "cli_not_found" || state.connection === "starting") return null;
@@ -67,11 +70,12 @@ export function ProviderSection({
         {icon}
         <span id={`${id}-heading`}>{label}</span>
         {plan ? <span className="provider-plan">{plan}</span> : null}
+        {state.connection === "connected" ? <Freshness updatedAt={state.updatedAt} now={now} /> : null}
       </div>
       {buckets.length ? (
         <div className="quota-list provider-quota-list">
           {buckets.map((bucket) => (
-            <QuotaSection key={bucket.id} provider={id} bucket={bucket} now={now} />
+            <QuotaSection key={bucket.id} provider={id} bucket={bucket} now={now} dense={dense} />
           ))}
         </div>
       ) : null}

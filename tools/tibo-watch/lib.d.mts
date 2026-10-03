@@ -10,6 +10,7 @@ export interface TimelineItem {
 export const BSKY_ACTORS: string[];
 export function bskyFeedUrl(actor: string, limit?: number): string;
 export function parseBskyFeed(jsonText: unknown, actor: string): TimelineItem[];
+export function parsePlans(text: string): string[] | null;
 export function toResetEvent(item: TimelineItem): ResetEvent | null;
 export function mergeEvents(
   existing: ResetEvent[] | null | undefined,

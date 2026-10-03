@@ -12,12 +12,15 @@ import { TiboWatch } from "./components/TiboWatch";
 import { ResetAlert } from "./components/ResetAlert";
 import { SettingsModal } from "./components/SettingsModal";
 import { ProviderSection } from "./components/ProviderSection";
+import { MissingProviders } from "./components/MissingProviders";
 import { Onboarding } from "./components/Onboarding";
+import { Freshness } from "./components/Freshness";
 import { useCodexMeter } from "./hooks/useCodexMeter";
 import { useClaudeMeter, useCursorMeter, useDevinMeter, useOpenCodeMeter, useAntigravityMeter } from "./hooks/useClaudeMeter";
 import {
   DEFAULT_PREFS,
   isVisible,
+  missingProviders,
   normalizePrefs,
   type AppPrefs,
 } from "./lib/providers";
@@ -99,8 +102,8 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, []);
   useEffect(() => {
-    void notifyFreshResets(resetEvents);
-  }, [resetEvents]);
+    void notifyFreshResets(resetEvents, Date.now(), { enabled: prefs.resetAlerts });
+  }, [resetEvents, prefs.resetAlerts]);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     const upcoming = upcomingReset(resetEvents);
@@ -237,19 +240,28 @@ export default function App() {
       </header>
 
       <div className="content-scroll">
+        {showCodex ? <ResetAlert now={now} events={resetEvents} /> : null}
         {showCodex && !connected ? (
-          <ConnectionStateView state={state} onRetry={() => void refresh()} />
+          <ConnectionStateView
+            state={state}
+            onRetry={() => void refresh()}
+            compact={othersRender}
+          />
         ) : showCodex && buckets.length ? (
           <>
-            <ResetAlert now={now} events={resetEvents} />
+            <div className="section-label provider-label codex-label">
+              <span>Codex</span>
+              <Freshness updatedAt={state.updatedAt} now={now} />
+            </div>
             <div className="quota-list">
-              {buckets.map((bucket) => <QuotaSection key={bucket.id} provider="codex" bucket={bucket} now={now} />)}
+              {buckets.map((bucket) => <QuotaSection key={bucket.id} provider="codex" bucket={bucket} now={now} dense={prefs.denseLayout} />)}
             </div>
             {resetCredits.availableCount > 0 ? (
-              <div className="reset-credit"><Ticket size={15} aria-hidden="true" /><strong>{resetCredits.availableCount}</strong> reset {resetCredits.availableCount === 1 ? "is" : "are"} available</div>
+              <div className="reset-credit" title="Reset credits on your Codex account. Each one renews a window on demand.">
+                <Ticket size={15} aria-hidden="true" /><strong>{resetCredits.availableCount}</strong> reset credit{resetCredits.availableCount === 1 ? "" : "s"} on your account
+              </div>
             ) : null}
             {usage ? <UsageDetails usage={usage} /> : null}
-            <TiboWatch now={now} events={resetEvents} />
           </>
         ) : showCodex ? (
           <div className="state-panel glass-tile" role="status">
@@ -259,6 +271,7 @@ export default function App() {
             <button className="secondary-button" onClick={() => void refresh()}>Refresh</button>
           </div>
         ) : null}
+        {showCodex && (connected || othersRender) ? <TiboWatch now={now} events={resetEvents} /> : null}
         {showClaude ? (
           <ProviderSection
             id="claude"
@@ -266,6 +279,7 @@ export default function App() {
             icon={<Sparkles size={14} aria-hidden="true" />}
             meter={claude}
             now={now}
+            dense={prefs.denseLayout}
             signedOutHint="the stored Claude Code login is stale. Click Refresh — macOS may ask once to read the Keychain item Claude Code already keeps. Always Allow stops that sheet. The desktop Claude app uses a different login than the `claude` CLI."
           />
         ) : null}
@@ -276,6 +290,7 @@ export default function App() {
             icon={<MousePointer2 size={14} aria-hidden="true" />}
             meter={cursor}
             now={now}
+            dense={prefs.denseLayout}
             signedOutHint="the stored Cursor login was rejected. Sign in through the Cursor app, then retry."
           />
         ) : null}
@@ -286,6 +301,7 @@ export default function App() {
             icon={<Terminal size={14} aria-hidden="true" />}
             meter={opencode}
             now={now}
+            dense={prefs.denseLayout}
             signedOutHint="the stored OpenCode Go key was rejected. Sign in again with `/connect` and choose OpenCode Go."
           />
         ) : null}
@@ -296,6 +312,7 @@ export default function App() {
             icon={<Diamond size={14} aria-hidden="true" />}
             meter={devin}
             now={now}
+            dense={prefs.denseLayout}
             signedOutHint="the stored Devin CLI login was rejected. Sign in again with `devin auth login`."
           />
         ) : null}
@@ -306,6 +323,7 @@ export default function App() {
             icon={<Sparkle size={14} aria-hidden="true" />}
             meter={antigravity}
             now={now}
+            dense={prefs.denseLayout}
             signedOutHint="open the Antigravity app and sign in there. UsageBar reads quota from the running app."
           />
         ) : null}
@@ -323,6 +341,16 @@ export default function App() {
             </button>
           </div>
         ) : null}
+        <MissingProviders
+          items={missingProviders(prefs, {
+            codex: state,
+            claude: claude.state,
+            cursor: cursor.state,
+            opencode: opencode.state,
+            devin: devin.state,
+            antigravity: antigravity.state,
+          })}
+        />
       </div>
 
       <footer className="app-footer">

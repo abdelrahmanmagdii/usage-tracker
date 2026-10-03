@@ -182,7 +182,8 @@ impl CodexManager {
                     // app-server hung (commonly after system sleep). Retrying
                     // over the same pipe never recovers, so restart the child.
                     self.stop_child().await;
-                    self.set_connection(ConnectionState::Disconnected, Some(error)).await;
+                    self.set_connection(ConnectionState::Disconnected, Some(error))
+                        .await;
                     self.start().await
                 }
             }
@@ -347,6 +348,12 @@ impl CodexManager {
             let mut state = self.state.write().await;
             state.connection = connection;
             state.diagnostic = diagnostic;
+            if connection == ConnectionState::CliNotFound {
+                state.account = None;
+                state.rate_limits = None;
+                state.usage = None;
+                state.updated_at = None;
+            }
         }
         self.emit_state().await;
     }

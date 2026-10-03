@@ -25,9 +25,11 @@ use crate::provider::{
 };
 use crate::tray;
 
-const QUOTA_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+const QUOTA_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 const LOCAL_STATUS_RPC: &str = "exa.language_server_pb.LanguageServerService/GetUserStatus";
-const LOCAL_QUOTA_RPC: &str = "exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
+const LOCAL_QUOTA_RPC: &str =
+    "exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
 const KEYCHAIN_SERVICE: &str = "gemini";
 const KEYCHAIN_ACCOUNT: &str = "antigravity";
 const KEYRING_BASE64_PREFIX: &[u8] = b"go-keyring-base64:";
@@ -75,7 +77,10 @@ impl AntigravityManager {
         self.refresh_with_prompt(true).await
     }
 
-    async fn refresh_with_prompt(&self, allow_keychain_prompt: bool) -> Result<ProviderState, String> {
+    async fn refresh_with_prompt(
+        &self,
+        allow_keychain_prompt: bool,
+    ) -> Result<ProviderState, String> {
         if !self
             .app
             .state::<crate::prefs::PrefsStore>()
@@ -91,22 +96,33 @@ impl AntigravityManager {
             return Ok(self.snapshot().await);
         }
 
-        // The app and the CLI are closed. A missing or unreadable login is
-        // absence, not a status error. Users do not have to run every tool.
-        let token = match load_credentials(allow_keychain_prompt).await {
-            CredentialRead::Found(token) => token,
-            CredentialRead::Absent | CredentialRead::Unavailable(_) => {
+        // The app and the CLI are closed. No login hides the meter. An
+        // unreadable store keeps a meter that is already showing, and can
+        // still use a cached token. Users do not have to run every tool.
+        let stored = load_credentials(allow_keychain_prompt).await;
+        let has_cached = self.cached_usable_token().await.is_some();
+        let has_shown = self.snapshot().await.updated_at.is_some();
+        let access_token = match login_action(stored, has_cached, has_shown) {
+            LoginAction::Hide => {
                 self.hide_missing().await;
                 return Ok(self.snapshot().await);
             }
-        };
-
-        let access_token = match self.resolve_access_token(&token).await {
-            Ok(access_token) => access_token,
-            Err(_) => {
-                self.hide_missing().await;
-                return Ok(self.snapshot().await);
-            }
+            LoginAction::KeepLast => return Ok(self.snapshot().await),
+            LoginAction::UseCached => match self.cached_usable_token().await {
+                Some(token) => token,
+                None if has_shown => return Ok(self.snapshot().await),
+                None => {
+                    self.hide_missing().await;
+                    return Ok(self.snapshot().await);
+                }
+            },
+            LoginAction::UseStored(token) => match self.resolve_access_token(&token).await {
+                Ok(access_token) => access_token,
+                Err(_) => {
+                    self.hide_missing().await;
+                    return Ok(self.snapshot().await);
+                }
+            },
         };
 
         let payload = match self.fetch_quota(&access_token).await {
@@ -176,16 +192,20 @@ impl AntigravityManager {
         Err("Antigravity token is not usable".to_owned())
     }
 
+    async fn cached_usable_token(&self) -> Option<String> {
+        let now = now_unix_seconds() as f64;
+        let cache = self.token_cache.lock().await;
+        cache.as_ref().and_then(|cached| {
+            (cached.expires_at - EXPIRY_SKEW_SECS > now).then(|| cached.access_token.clone())
+        })
+    }
+
     /// Drop the meter. No running Antigravity session and no usable token.
     async fn hide_missing(&self) {
         *self.token_cache.lock().await = None;
         {
             let mut state = self.state.write().await;
-            state.connection = ConnectionState::CliNotFound;
-            state.diagnostic = None;
-            state.account = None;
-            state.rate_limits = None;
-            state.updated_at = None;
+            crate::provider::conceal_provider(&mut state, None);
         }
         self.emit_state().await;
     }
@@ -207,7 +227,9 @@ impl AntigravityManager {
             .json(&json!({}))
             .send()
             .await
-            .map_err(|error| QuotaFetch::Failed(format!("Antigravity usage request failed: {error}")))?;
+            .map_err(|error| {
+                QuotaFetch::Failed(format!("Antigravity usage request failed: {error}"))
+            })?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(QuotaFetch::Unauthorized);
@@ -217,17 +239,22 @@ impl AntigravityManager {
                 "Antigravity usage endpoint returned HTTP {status}"
             )));
         }
-        response
-            .json()
-            .await
-            .map_err(|error| QuotaFetch::Failed(format!("Antigravity usage response was not valid JSON: {error}")))
+        response.json().await.map_err(|error| {
+            QuotaFetch::Failed(format!(
+                "Antigravity usage response was not valid JSON: {error}"
+            ))
+        })
     }
 
     async fn set_connection(&self, connection: ConnectionState, diagnostic: Option<String>) {
         {
             let mut state = self.state.write().await;
-            state.connection = connection;
-            state.diagnostic = diagnostic;
+            if connection == ConnectionState::CliNotFound {
+                crate::provider::conceal_provider(&mut state, diagnostic);
+            } else {
+                state.connection = connection;
+                state.diagnostic = diagnostic;
+            }
         }
         self.emit_state().await;
     }
@@ -249,10 +276,12 @@ struct LocalUsage {
 async fn fetch_local_usage(client: &reqwest::Client) -> Option<LocalUsage> {
     for base in local_server_bases() {
         let csrf = fetch_local_csrf(client, &base).await;
-        let Some(status) = post_local_rpc(client, &base, csrf.as_deref(), LOCAL_STATUS_RPC).await else {
+        let Some(status) = post_local_rpc(client, &base, csrf.as_deref(), LOCAL_STATUS_RPC).await
+        else {
             continue;
         };
-        let Some(quota) = post_local_rpc(client, &base, csrf.as_deref(), LOCAL_QUOTA_RPC).await else {
+        let Some(quota) = post_local_rpc(client, &base, csrf.as_deref(), LOCAL_QUOTA_RPC).await
+        else {
             continue;
         };
         if normalize_usage(&quota).is_none() {
@@ -422,6 +451,29 @@ enum CredentialRead {
     Unavailable(String),
 }
 
+enum LoginAction {
+    Hide,
+    KeepLast,
+    UseCached,
+    UseStored(OAuthToken),
+}
+
+/// No stored login hides the meter. An unreadable store keeps the last
+/// reading, and prefers a still-valid cached token over hiding.
+fn login_action(
+    read: CredentialRead,
+    has_cached_token: bool,
+    has_shown_usage: bool,
+) -> LoginAction {
+    match read {
+        CredentialRead::Found(token) => LoginAction::UseStored(token),
+        CredentialRead::Absent => LoginAction::Hide,
+        CredentialRead::Unavailable(_) if has_cached_token => LoginAction::UseCached,
+        CredentialRead::Unavailable(_) if has_shown_usage => LoginAction::KeepLast,
+        CredentialRead::Unavailable(_) => LoginAction::Hide,
+    }
+}
+
 fn classify_keychain_status(code: i32) -> CredentialRead {
     if crate::provider::keychain_login_absent(code) {
         return CredentialRead::Absent;
@@ -467,15 +519,15 @@ fn read_keychain_password(allow_prompt: bool) -> CredentialRead {
 async fn load_from_keychain(allow_prompt: bool) -> CredentialRead {
     match tokio::task::spawn_blocking(move || read_keychain_password(allow_prompt)).await {
         Ok(read) => read,
-        Err(error) => CredentialRead::Unavailable(format!("Keychain lookup was cancelled: {error}")),
+        Err(error) => {
+            CredentialRead::Unavailable(format!("Keychain lookup was cancelled: {error}"))
+        }
     }
 }
 
 fn token_file_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(
-        std::path::PathBuf::from(home).join(".gemini/antigravity-cli/antigravity-oauth-token"),
-    )
+    Some(std::path::PathBuf::from(home).join(".gemini/antigravity-cli/antigravity-oauth-token"))
 }
 
 async fn load_from_file() -> CredentialRead {
@@ -558,7 +610,10 @@ fn decode_base64(input: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn trim_bytes(bytes: &[u8]) -> &[u8] {
-    let start = bytes.iter().position(|byte| !byte.is_ascii_whitespace()).unwrap_or(0);
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(0);
     let end = bytes
         .iter()
         .rposition(|byte| !byte.is_ascii_whitespace())
@@ -629,8 +684,7 @@ fn normalize_usage(raw: &Value) -> Option<NormalizedUsage> {
             let Some(remaining) = remaining_fraction(bucket) else {
                 continue;
             };
-            let (id, limit_name, window_label, duration, kind) =
-                slot_for(&group_meta, period);
+            let (id, limit_name, window_label, duration, kind) = slot_for(&group_meta, period);
             if !seen.insert(id.clone()) {
                 continue;
             }
@@ -763,7 +817,9 @@ fn bucket_disabled(bucket: &Value) -> bool {
     match bucket.get("disabled") {
         Some(Value::Bool(flag)) => *flag,
         Some(Value::Number(number)) => number.as_f64().is_some_and(|value| value != 0.0),
-        Some(Value::String(text)) => matches!(text.trim().to_ascii_lowercase().as_str(), "true" | "1"),
+        Some(Value::String(text)) => {
+            matches!(text.trim().to_ascii_lowercase().as_str(), "true" | "1")
+        }
         _ => false,
     }
 }
@@ -791,10 +847,7 @@ fn valid_fraction(value: &f64) -> bool {
     value.is_finite() && (0.0..=1.0).contains(value)
 }
 
-fn slot_for(
-    group: &GroupMeta,
-    period: Period,
-) -> (String, String, String, f64, &'static str) {
+fn slot_for(group: &GroupMeta, period: Period) -> (String, String, String, f64, &'static str) {
     match period {
         Period::FiveHour => (
             format!("{}-5h", group.id),
@@ -829,7 +882,10 @@ fn limit_entry(
     if used >= 100.0 {
         snapshot.insert("rateLimitReachedType".into(), Value::from("limit_reached"));
     }
-    snapshot.insert(kind.into(), window_snapshot(used, Some(duration), resets_at));
+    snapshot.insert(
+        kind.into(),
+        window_snapshot(used, Some(duration), resets_at),
+    );
     (id.to_owned(), Value::Object(snapshot))
 }
 
@@ -944,12 +1000,18 @@ mod tests {
             .and_then(Value::as_f64)
             .expect("gemini weekly");
         assert!((gemini_weekly - 41.7).abs() < 0.05);
-        assert_eq!(by_id["gemini-weekly"].get("windowLabel"), Some(&json!("Gemini weekly")));
+        assert_eq!(
+            by_id["gemini-weekly"].get("windowLabel"),
+            Some(&json!("Gemini weekly"))
+        );
         assert_eq!(
             by_id["3p-5h"].pointer("/primary/usedPercent"),
             Some(&json!(0.0))
         );
-        assert_eq!(by_id["3p-weekly"].get("limitName"), Some(&json!("Claude and GPT")));
+        assert_eq!(
+            by_id["3p-weekly"].get("limitName"),
+            Some(&json!("Claude and GPT"))
+        );
         let windows = crate::tray::collect_windows(Some(&normalized.rate_limits));
         let labels: Vec<&str> = windows.iter().map(|window| window.label.as_str()).collect();
         assert_eq!(
@@ -1040,8 +1102,14 @@ mod tests {
         });
         let normalized = normalize_usage(&payload).expect("windows");
         let weekly = &normalized.rate_limits["rateLimitsByLimitId"]["gemini-weekly"];
-        assert_eq!(weekly.pointer("/secondary/usedPercent"), Some(&json!(100.0)));
-        assert_eq!(weekly.get("rateLimitReachedType"), Some(&json!("limit_reached")));
+        assert_eq!(
+            weekly.pointer("/secondary/usedPercent"),
+            Some(&json!(100.0))
+        );
+        assert_eq!(
+            weekly.get("rateLimitReachedType"),
+            Some(&json!("limit_reached"))
+        );
     }
 
     #[test]
@@ -1089,6 +1157,38 @@ n[::1]:43124
         assert!(matches!(
             classify_keychain_status(-25293),
             CredentialRead::Unavailable(_)
+        ));
+    }
+
+    fn stored_token() -> OAuthToken {
+        OAuthToken {
+            access_token: "ya29".into(),
+            refresh_token: None,
+            expires_at: Some(9_999_999_999.0),
+        }
+    }
+
+    #[test]
+    fn an_unreadable_antigravity_store_keeps_a_live_meter() {
+        assert!(matches!(
+            login_action(CredentialRead::Absent, true, true),
+            LoginAction::Hide
+        ));
+        assert!(matches!(
+            login_action(CredentialRead::Unavailable("busy".into()), false, false),
+            LoginAction::Hide
+        ));
+        assert!(matches!(
+            login_action(CredentialRead::Unavailable("busy".into()), true, true),
+            LoginAction::UseCached
+        ));
+        assert!(matches!(
+            login_action(CredentialRead::Unavailable("busy".into()), false, true),
+            LoginAction::KeepLast
+        ));
+        assert!(matches!(
+            login_action(CredentialRead::Found(stored_token()), false, false),
+            LoginAction::UseStored(_)
         ));
     }
 }

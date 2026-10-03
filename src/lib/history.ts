@@ -83,3 +83,32 @@ export function historySeries(provider: string, bucketId: string): QuotaSnapshot
   const key = `${provider}:${bucketId}`;
   return readArray<QuotaSnapshot>(HISTORY_KEY).filter((entry) => entry.limitId === key);
 }
+
+// Look back this far for the burn rate: long enough to smooth one burst,
+// short enough to follow today's pace rather than last week's.
+const PACE_LOOKBACK_MS = 3 * 3_600_000;
+const PACE_MIN_SPAN_MS = 10 * 60_000;
+
+/**
+ * When the window runs dry at the recent burn rate, if that is before it
+ * renews. Only samples from the current window (same `resetsAt`) count, so a
+ * renewal never reads as negative usage. Returns epoch ms or null.
+ */
+export function projectedRunOut(
+  samples: QuotaSnapshot[],
+  bucket: Pick<RateLimitBucket, "usedPercent" | "resetsAt" | "reached">,
+  nowMs = Date.now(),
+): number | null {
+  if (bucket.reached || !bucket.resetsAt || bucket.usedPercent >= 100) return null;
+  const window = samples.filter(
+    (s) => s.resetsAt === bucket.resetsAt && nowMs - Date.parse(s.timestamp) <= PACE_LOOKBACK_MS,
+  );
+  if (window.length < 2) return null;
+  const first = window[0];
+  const firstMs = Date.parse(first.timestamp);
+  const spanMs = nowMs - firstMs;
+  const usedDelta = bucket.usedPercent - first.usedPercent;
+  if (!Number.isFinite(firstMs) || spanMs < PACE_MIN_SPAN_MS || usedDelta <= 0) return null;
+  const runOut = nowMs + ((100 - bucket.usedPercent) / usedDelta) * spanMs;
+  return runOut < bucket.resetsAt * 1000 ? runOut : null;
+}

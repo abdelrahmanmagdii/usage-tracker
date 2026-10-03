@@ -7,6 +7,7 @@ import {
   parseBskyFeed,
   parseLeadTimeMinutes,
   parseOccursAt,
+  parsePlans,
   parseRssItems,
   toResetEvent,
 } from "./lib.mjs";
@@ -208,6 +209,30 @@ describe("toResetEvent", () => {
   it("returns null for unrelated tweets", () => {
     const [, item] = parseRssItems(SAMPLE_RSS, "thsottiaux");
     assert.equal(toResetEvent(item), null);
+  });
+});
+
+describe("parsePlans", () => {
+  it("reads the plans a reset covers", () => {
+    assert.deepEqual(parsePlans("Global reset landing tomorrow 10am PST for all paid ChatGPT accounts."), ["All paid plans"]);
+    assert.deepEqual(parsePlans("Resetting usage for Plus and Pro users now."), ["Plus", "Pro"]);
+    assert.deepEqual(parsePlans("Reset for Business, Enterprise and Edu workspaces."), ["Business", "Enterprise", "Edu"]);
+  });
+
+  it("ignores ordinary words and unstated plans", () => {
+    assert.equal(parsePlans("Enjoy a nice reset everyone. Landing in the next hour or so, go /fast."), null);
+    assert.equal(parsePlans("Reset all propagated. Enjoy."), null);
+    assert.equal(parsePlans("a pro tip: plus one"), null);
+  });
+
+  it("is attached to built events", () => {
+    const event = toResetEvent({
+      id: "x",
+      text: "Global reset landing tomorrow 10am PST for all paid ChatGPT accounts.",
+      announcedAt: "2026-10-02T02:14:51.000Z",
+      sourceUrl: "https://bsky.app/profile/a/post/x",
+    });
+    assert.deepEqual(event.plansAffected, ["All paid plans"]);
   });
 });
 
