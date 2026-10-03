@@ -7,7 +7,10 @@ import type { ResetEvent } from "../../types/codex";
 import { formatLeadTime } from "../../lib/time";
 
 const NOTIFIED_KEY = "codex-meter.notified-events.v1";
-const FRESH_WINDOW_MS = 2 * 3_600_000;
+// Announcements stay notifiable for half a day: posts can take hours to
+// reach the feed, and a Mac that slept through one should still hear of it.
+const ANNOUNCED_WINDOW_MS = 12 * 3_600_000;
+const LANDED_WINDOW_MS = 2 * 3_600_000;
 const MAX_STORED_IDS = 200;
 const MAX_PER_BATCH = 2;
 
@@ -30,6 +33,15 @@ function writeNotified(ids: Iterable<string>): void {
   }
 }
 
+/**
+ * Each relay mirrors a tweet under its own post id but keeps the tweet's
+ * timestamp, so the timestamp also dedupes notifications across mirrors.
+ */
+export const announcedKey = (event: ResetEvent): string => `announced:${event.announcedAt}`;
+
+const wasNotified = (event: ResetEvent, notified: Set<string>): boolean =>
+  notified.has(event.id) || (event.source !== "detected" && notified.has(announcedKey(event)));
+
 export function selectFreshResetNotifications(
   events: ResetEvent[],
   notifiedIds: Iterable<string>,
@@ -37,9 +49,13 @@ export function selectFreshResetNotifications(
 ): ResetEvent[] {
   const notified = new Set(notifiedIds);
   return events.filter((event) => {
-    if (event.sample || notified.has(event.id)) return false;
+    if (event.sample || wasNotified(event, notified)) return false;
     const announced = Date.parse(event.announcedAt);
-    return Number.isFinite(announced) && announced <= nowMs && nowMs - announced <= FRESH_WINDOW_MS;
+    if (!Number.isFinite(announced) || announced > nowMs) return false;
+    const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
+    // A scheduled reset ("landing tomorrow 10am") is news until it lands.
+    if (Number.isFinite(occursAt) && occursAt > nowMs) return true;
+    return nowMs - announced <= ANNOUNCED_WINDOW_MS;
   });
 }
 
@@ -60,7 +76,7 @@ export function selectLandedResetNotifications(
   return events.filter((event) => {
     if (event.sample || notified.has(landedKey(event))) return false;
     const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
-    return Number.isFinite(occursAt) && occursAt <= nowMs && nowMs - occursAt <= FRESH_WINDOW_MS;
+    return Number.isFinite(occursAt) && occursAt <= nowMs && nowMs - occursAt <= LANDED_WINDOW_MS;
   });
 }
 
@@ -123,7 +139,10 @@ export async function notifyFreshResets(events: ResetEvent[], nowMs = Date.now()
     let granted = await isPermissionGranted();
     if (!granted) granted = (await requestPermission()) === "granted";
     if (!granted) {
-      for (const item of queue) notified.add(item.key);
+      for (const item of queue) {
+        notified.add(item.key);
+        notified.add(announcedKey(item.event));
+      }
       writeNotified(notified);
       return;
     }
@@ -132,6 +151,7 @@ export async function notifyFreshResets(events: ResetEvent[], nowMs = Date.now()
       // mark the event notified without ever showing the notification.
       await sendNotification({ title: item.title, body: item.body });
       notified.add(item.key);
+      if (item.event.source !== "detected") notified.add(announcedKey(item.event));
       // A landed event is the final word on that announcement.
       if (item.key === landedKey(item.event)) notified.add(item.event.id);
       changed = true;

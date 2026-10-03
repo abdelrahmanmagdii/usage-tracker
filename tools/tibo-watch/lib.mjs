@@ -3,6 +3,13 @@
  * No I/O in this module so it stays trivially testable with node:test.
  */
 
+/** X→Bluesky relays of @thsottiaux, read via the public AppView (no auth). */
+export const BSKY_ACTORS = ["thsottiaux-bot.eurosky.social", "thsottiaux-mirr.selfhosted.social"];
+
+export function bskyFeedUrl(actor, limit = 100) {
+  return `https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(actor)}&limit=${limit}&filter=posts_no_replies`;
+}
+
 /**
  * "reset" alone is too loose — Tibo jokes about resets ("Don't say reset",
  * "I previously promised a reset…"). These patterns target actual
@@ -10,10 +17,14 @@
  */
 const ANNOUNCEMENT_PATTERNS = [
   /limits? (?:have|has) been reset/i,
-  /(?:i|we)(?:'ve| have) reset/i,
-  /reset(?:ting)? (?:all|every|usage|the limits|your)/i,
-  /(?:nice|surprise|fresh|free) resets?\b/i,
-  /resets? (?:is|are) (?:live|done|out|landing|incoming|rolling)/i,
+  /(?:i|we)(?:'ve|’ve| have)(?: now| just)? reset/i,
+  /\ball reset\b/i,
+  /^[^.!?]*[.!?]\s*a reset and\b/i,
+  /\b(?:full|banked) reset\b/i,
+  /\breset (?:will |is going to )?land/i,
+  /(?:^|[^\w'’])resets?(?:ting)? (?:all|every|usage|the limits|your)/i,
+  /(?:nice|surprise|fresh|free|global) resets?\b/i,
+  /resets? (?:(?:is|are) )?(?:now )?(?:live|done|out|landing|landed|incoming|rolling|propagat)/i,
   /enjoy (?:a|the|this|that)? ?\w* resets?\b/i,
 ];
 
@@ -131,26 +142,97 @@ export function parseLeadTimeMinutes(text) {
   if (/in (?:the )?next half (?:an )?hour\b/i.test(text)) return 30;
   if (/in (?:the )?next hour\b/i.test(text)) return 60;
   const hours = text.match(
-    /in (?:about |around |roughly |approximately |~|less than |under )?(\d+(?:\.\d+)?)\s*(?:h|hrs?|hours?)\b/i,
+    /in (?:about |around |roughly |approximately |~ ?|less than |under )?(\d+(?:\.\d+)?)\s*(?:h|hrs?|hours?)\b/i,
   );
   if (hours) return Math.round(Number.parseFloat(hours[1]) * 60);
   const minutes = text.match(
-    /in (?:about |around |roughly |approximately |~|less than |under )?(\d+)\s*(?:m|mins?|minutes?)\b/i,
+    /in (?:about |around |roughly |approximately |~ ?|less than |under )?(\d+)\s*(?:m|mins?|minutes?)\b/i,
   );
   if (minutes) return Number.parseInt(minutes[1], 10);
   return null;
 }
 
+const ZONES = {
+  pt: "America/Los_Angeles",
+  pst: "America/Los_Angeles",
+  pdt: "America/Los_Angeles",
+  et: "America/New_York",
+  est: "America/New_York",
+  edt: "America/New_York",
+  utc: "UTC",
+  gmt: "UTC",
+};
+
+/** Offset (ms) of `timeZone` from UTC at the given instant. */
+function zoneOffsetMs(timeZone, atMs) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+      .formatToParts(new Date(atMs))
+      .map((part) => [part.type, part.value]),
+  );
+  const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  return asUtc - Math.floor(atMs / 1000) * 1000;
+}
+
+/**
+ * Wall-clock schedules ("landing tomorrow 10am PST", "today at 3:30pm ET").
+ * The day is resolved in the named zone relative to the post time; "PST" is
+ * treated as Pacific time year-round, as people write it. Returns ms or null.
+ */
+export function parseScheduledTime(text, announcedAt) {
+  const match = text.match(
+    /\b(?:land(?:s|ing)?|drops?|dropping|goes live|resets?|resetting)\b[^.!?]{0,30}?\b(today|tonight|tomorrow)?\s*(?:at\s+|@\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(pt|pst|pdt|et|est|edt|utc|gmt)\b/i,
+  );
+  const announcedMs = Date.parse(announcedAt);
+  if (!match || !Number.isFinite(announcedMs)) return null;
+  const [, day, hourText, minuteText, meridiem, zoneText] = match;
+  const timeZone = ZONES[zoneText.toLowerCase()];
+  let hour = Number.parseInt(hourText, 10) % 12;
+  if (meridiem.toLowerCase() === "pm") hour += 12;
+  const minute = minuteText ? Number.parseInt(minuteText, 10) : 0;
+  if (hour > 23 || minute > 59) return null;
+  const local = new Date(announcedMs + zoneOffsetMs(timeZone, announcedMs));
+  const dayOffset = day?.toLowerCase() === "tomorrow" ? 1 : 0;
+  const wallAsUtc = Date.UTC(
+    local.getUTCFullYear(),
+    local.getUTCMonth(),
+    local.getUTCDate() + dayOffset,
+    hour,
+    minute,
+  );
+  let occurs = wallAsUtc - zoneOffsetMs(timeZone, wallAsUtc);
+  // A bare "10am PT" already past today means the next one.
+  if (!day && occurs <= announcedMs) occurs += 86_400_000;
+  return occurs;
+}
+
+/** When an announced reset should take effect, as an ISO string, if stated. */
+export function parseOccursAt(text, announcedAt) {
+  const scheduled = parseScheduledTime(text, announcedAt);
+  if (scheduled !== null) return new Date(scheduled).toISOString();
+  const leadMinutes = parseLeadTimeMinutes(text);
+  return leadMinutes
+    ? new Date(Date.parse(announcedAt) + leadMinutes * 60_000).toISOString()
+    : null;
+}
+
 /** Converts a parsed RSS item into a ResetEvent, or null when unrelated. */
 export function toResetEvent(item) {
   if (!isResetTweet(item.text)) return null;
-  const leadMinutes = parseLeadTimeMinutes(item.text);
+  const occursAt = parseOccursAt(item.text, item.announcedAt);
   return {
     id: item.id,
     announcedAt: item.announcedAt,
-    ...(leadMinutes
-      ? { occursAt: new Date(Date.parse(item.announcedAt) + leadMinutes * 60_000).toISOString() }
-      : {}),
+    ...(occursAt ? { occursAt } : {}),
     source: "tibo",
     text: item.text.slice(0, 280),
     sourceUrl: item.sourceUrl,
@@ -168,10 +250,14 @@ export function mergeEvents(existing, incoming) {
   for (const event of Array.isArray(existing) ? existing : []) {
     if (event && typeof event.id === "string") byId.set(event.id, event);
   }
+  // Each relay mirrors the same tweet under its own post id, but keeps the
+  // tweet's timestamp, so the timestamp identifies a tweet across mirrors.
+  const announced = new Set([...byId.values()].map((event) => event.announcedAt));
   let added = 0;
   for (const event of incoming) {
-    if (!byId.has(event.id)) {
+    if (!byId.has(event.id) && !announced.has(event.announcedAt)) {
       byId.set(event.id, event);
+      announced.add(event.announcedAt);
       added += 1;
     }
   }

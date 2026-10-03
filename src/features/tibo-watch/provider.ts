@@ -1,6 +1,7 @@
 import type { ResetEvent } from "../../types/codex";
 import { readDetectedEvents } from "../../lib/history";
 import { isRecord } from "../../lib/rateLimits";
+import { BSKY_ACTORS, bskyFeedUrl, mergeEvents, parseBskyFeed, toResetEvent } from "../../../tools/tibo-watch/lib.mjs";
 
 export interface ResetEventProvider {
   readonly id: string;
@@ -106,6 +107,42 @@ export class FeedResetEventProvider implements ResetEventProvider {
   }
 }
 
+/**
+ * Reads the X→Bluesky relays directly, using the same detection rules as the
+ * GitHub watcher. GitHub runs scheduled workflows hours apart, so the hosted
+ * feed alone delivers most announcements too late to act on.
+ */
+export class BlueskyResetEventProvider implements ResetEventProvider {
+  readonly id = "bluesky";
+  private memoryCache: ResetEvent[] | null = null;
+  private lastFetchMs = 0;
+
+  constructor(
+    private readonly actors: string[] = BSKY_ACTORS,
+    private readonly fetcher: typeof fetch = (...args) => fetch(...args),
+  ) {}
+
+  async listEvents(): Promise<ResetEvent[]> {
+    if (this.memoryCache && Date.now() - this.lastFetchMs < FEED_TTL_MS) {
+      return this.memoryCache;
+    }
+    const results = await Promise.allSettled(
+      this.actors.map(async (actor) => {
+        const response = await this.fetcher(bskyFeedUrl(actor, 50), { cache: "no-store" });
+        if (!response.ok) throw new Error(`Bluesky returned HTTP ${response.status}`);
+        return parseBskyFeed(await response.text(), actor)
+          .map(toResetEvent)
+          .filter((event): event is ResetEvent => event !== null);
+      }),
+    );
+    const fetched = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+    if (results.every((result) => result.status === "rejected")) return this.memoryCache ?? [];
+    this.memoryCache = mergeEvents([], fetched).events;
+    this.lastFetchMs = Date.now();
+    return this.memoryCache;
+  }
+}
+
 export class LocalResetEventProvider implements ResetEventProvider {
   readonly id = "local";
 
@@ -117,13 +154,18 @@ export class LocalResetEventProvider implements ResetEventProvider {
   }
 }
 
-/** Merges every provider, keeping the first occurrence of each event id. */
+/**
+ * Merges every provider, keeping the first occurrence of each event. Tibo
+ * events are also keyed by tweet timestamp, since each relay mirrors a
+ * tweet under its own post id.
+ */
 export class CombinedResetEventProvider implements ResetEventProvider {
   readonly id = "combined";
 
   constructor(
     private readonly providers: ResetEventProvider[] = [
       new FeedResetEventProvider(),
+      new BlueskyResetEventProvider(),
       new LocalResetEventProvider(),
     ],
   ) {}
@@ -135,8 +177,14 @@ export class CombinedResetEventProvider implements ResetEventProvider {
       ),
     );
     const byId = new Map<string, ResetEvent>();
+    const announced = new Set<string>();
     for (const event of lists.flat()) {
-      if (!byId.has(event.id)) byId.set(event.id, event);
+      if (byId.has(event.id)) continue;
+      if (event.source === "tibo") {
+        if (announced.has(event.announcedAt)) continue;
+        announced.add(event.announcedAt);
+      }
+      byId.set(event.id, event);
     }
     return [...byId.values()].sort(
       (a, b) => Date.parse(b.occurredAt ?? b.announcedAt) - Date.parse(a.occurredAt ?? a.announcedAt),

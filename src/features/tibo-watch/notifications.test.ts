@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ResetEvent } from "../../types/codex";
 import {
+  announcedKey,
   landedKey,
   resetNotificationBody,
   resetNotificationTitle,
@@ -32,11 +33,41 @@ describe("selectFreshResetNotifications", () => {
     const selected = selectFreshResetNotifications(
       [
         event({ id: "sample", sample: true }),
-        event({ id: "old", announcedAt: "2026-08-13T08:00:00Z" }),
+        event({ id: "old", announcedAt: "2026-08-12T20:00:00Z" }),
         event({ id: "future", announcedAt: "2026-08-13T13:00:00Z" }),
         event({ id: "delivered" }),
       ],
       ["delivered"],
+      now,
+    );
+    expect(selected).toEqual([]);
+  });
+});
+
+describe("selectFreshResetNotifications windows", () => {
+  it("keeps announcements notifiable for hours, since the feed can lag", () => {
+    const selected = selectFreshResetNotifications(
+      [event({ id: "late", announcedAt: "2026-08-13T05:00:00Z" })],
+      [],
+      now,
+    );
+    expect(selected.map((entry) => entry.id)).toEqual(["late"]);
+  });
+
+  it("keeps a scheduled reset notifiable until it lands, however early it was posted", () => {
+    const selected = selectFreshResetNotifications(
+      [event({ id: "tomorrow", announcedAt: "2026-08-12T02:00:00Z", occursAt: "2026-08-13T17:00:00Z" })],
+      [],
+      now,
+    );
+    expect(selected.map((entry) => entry.id)).toEqual(["tomorrow"]);
+  });
+
+  it("treats the same tweet from another mirror as already delivered", () => {
+    const first = event({ id: "tibo-bsky-mirror-a" });
+    const selected = selectFreshResetNotifications(
+      [event({ id: "tibo-bsky-mirror-b" })],
+      [first.id, announcedKey(first)],
       now,
     );
     expect(selected).toEqual([]);

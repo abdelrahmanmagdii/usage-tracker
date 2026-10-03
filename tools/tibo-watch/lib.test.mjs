@@ -6,6 +6,7 @@ import {
   mergeEvents,
   parseBskyFeed,
   parseLeadTimeMinutes,
+  parseOccursAt,
   parseRssItems,
   toResetEvent,
 } from "./lib.mjs";
@@ -126,6 +127,24 @@ describe("isResetTweet", () => {
     assert.ok(isResetTweet("R to @thsottiaux: Usage limits have been reset for all paid users"));
   });
 
+  // Real @thsottiaux posts (via the Bluesky relays) that earlier patterns missed.
+  it("matches real phrasings seen on the relays", () => {
+    assert.ok(isResetTweet("Global reset landing tomorrow 10am PST for all paid ChatGPT accounts."));
+    assert.ok(isResetTweet("Resets all propagated. That will be all. Have a fantastic weekend."));
+    assert.ok(isResetTweet("Reset all propagated. Enjoy."));
+    assert.ok(isResetTweet("All reset for everyone. Enjoy the week with Astra."));
+    assert.ok(isResetTweet("Hi Astra users. A reset and a quick update on quality issues that have been posted around. (1/5)"));
+    assert.ok(isResetTweet("Your Codex and ChatGPT Work reset will land at 6pm PST."));
+    assert.ok(isResetTweet("we have now reset usage for all paid subscriptions for ChatGPT Work and Codex."));
+    assert.ok(isResetTweet("Some Plus and Business users won't yet get access to Astra today, we've got you covered with a banked reset. Lands by end of day"));
+  });
+
+  it("ignores real posts that mention resets without announcing one", () => {
+    assert.ok(!isResetTweet("Seeing some reports that the Pro 500 didn’t get the reset as expected earlier. Investigating and will make up for it"));
+    assert.ok(!isResetTweet("Because usage on your primary dot is virtually unlimited at the moment, I can’t really give a reset."));
+    assert.ok(!isResetTweet("We are almost Tuesday and I promised a reset for Tuesday. Among some other things."));
+  });
+
   it("ignores meta commentary, jokes, unrelated tweets and retweets", () => {
     assert.ok(!isResetTweet("What could we improve? Don't say reset."));
     assert.ok(!isResetTweet("I previously promised a reset for every 1M in additional active users"));
@@ -148,6 +167,32 @@ describe("parseLeadTimeMinutes", () => {
   it("returns null when no lead time is present", () => {
     assert.equal(parseLeadTimeMinutes("Enjoy a nice reset everyone."), null);
     assert.equal(parseLeadTimeMinutes("we reset things yesterday"), null);
+  });
+});
+
+describe("parseOccursAt", () => {
+  it("resolves wall-clock schedules in the named zone", () => {
+    // 02:14Z on Oct 2 is still Oct 1 in Pacific time, so "tomorrow" is Oct 2.
+    assert.equal(
+      parseOccursAt("Global reset landing tomorrow 10am PST for all paid ChatGPT accounts.", "2026-10-02T02:14:51.000Z"),
+      "2026-10-02T17:00:00.000Z",
+    );
+    assert.equal(
+      parseOccursAt("Your Codex and ChatGPT Work reset will land at 6pm PST.", "2026-08-30T19:24:37.000Z"),
+      "2026-08-31T01:00:00.000Z",
+    );
+    assert.equal(parseOccursAt("Reset lands today at 3:30pm ET", "2026-09-10T12:00:00.000Z"), "2026-09-10T19:30:00.000Z");
+  });
+
+  it("ignores times that aren't about the reset landing", () => {
+    assert.equal(
+      parseOccursAt("a banked reset. Lands by end of day and if you create your account by 8pm PT then you'll get it too.", "2026-09-04T20:57:17.000Z"),
+      null,
+    );
+  });
+
+  it("falls back to relative lead times", () => {
+    assert.equal(parseOccursAt("First one will land in ~ 3 hours.", "2026-09-03T23:12:09.000Z"), "2026-09-04T02:12:09.000Z");
   });
 });
 
@@ -192,6 +237,16 @@ describe("mergeEvents", () => {
     assert.equal(events[0].id, "tibo-2");
     assert.equal(events.find((event) => event.id === "tibo-1").text, existing.text);
     assert.ok(events.some((event) => event.id === "manual-2025-11-02"));
+  });
+
+  it("stores a tweet seen through two mirrors once", () => {
+    const at = "2026-10-02T21:18:48.000Z";
+    const { events, added } = mergeEvents(
+      [{ id: "tibo-bsky-a", announcedAt: at, source: "tibo" }],
+      [{ id: "tibo-bsky-b", announcedAt: at, source: "tibo" }],
+    );
+    assert.equal(added, 0);
+    assert.deepEqual(events.map((event) => event.id), ["tibo-bsky-a"]);
   });
 
   it("tolerates garbage in the existing store", () => {

@@ -3,10 +3,12 @@
  * Tibo Watch checker — polls @thsottiaux's public timeline and merges
  * surprise-reset announcements into data/resets.json.
  *
- * Sources, tried in order:
+ * Sources:
  *   1. Bluesky mirrors of @thsottiaux via the public AppView (no auth) —
  *      the primary source; every public Nitter instance has gone dark.
- *   2. Free Nitter RSS mirrors, kept as a fallback in case one comes back.
+ *   2. Free Nitter RSS mirrors, in case one comes back.
+ * All sources are read and merged; the same tweet seen via several mirrors
+ * is stored once (deduped by its timestamp).
  *
  * Usage:
  *   node tools/tibo-watch/check.mjs            # fetch + merge + write
@@ -14,8 +16,8 @@
  *
  * Env overrides:
  *   TIBO_HANDLE       X handle to watch (default: thsottiaux)
- *   TIBO_BSKY_ACTORS  Comma-separated Bluesky relay handles, tried in order
- *   TIBO_INSTANCES    Comma-separated Nitter base URLs, tried in order
+ *   TIBO_BSKY_ACTORS  Comma-separated Bluesky relay handles
+ *   TIBO_INSTANCES    Comma-separated Nitter base URLs
  *   TIBO_DATA_FILE    Path to resets.json (default: ../../data/resets.json)
  */
 import { execFile } from "node:child_process";
@@ -23,16 +25,19 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { mergeEvents, parseBskyFeed, parseRssItems, toResetEvent } from "./lib.mjs";
+import {
+  BSKY_ACTORS as DEFAULT_BSKY_ACTORS,
+  bskyFeedUrl,
+  mergeEvents,
+  parseBskyFeed,
+  parseRssItems,
+  toResetEvent,
+} from "./lib.mjs";
 
 const execFileAsync = promisify(execFile);
 
 const HANDLE = process.env.TIBO_HANDLE || "thsottiaux";
-const BSKY_API = "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed";
-const BSKY_ACTORS = (
-  process.env.TIBO_BSKY_ACTORS ||
-  "thsottiaux-bot.eurosky.social,thsottiaux-mirr.selfhosted.social"
-)
+const BSKY_ACTORS = (process.env.TIBO_BSKY_ACTORS || DEFAULT_BSKY_ACTORS.join(","))
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
@@ -81,7 +86,7 @@ async function fetchBody(url) {
 function sources() {
   return [
     ...BSKY_ACTORS.map((actor) => ({
-      url: `${BSKY_API}?actor=${encodeURIComponent(actor)}&limit=25&filter=posts_no_replies`,
+      url: bskyFeedUrl(actor),
       parse: (body) => parseBskyFeed(body, actor),
     })),
     ...INSTANCES.map((base) => ({
@@ -92,24 +97,35 @@ function sources() {
   ];
 }
 
-async function fetchTimeline() {
+async function fetchSource(source) {
   let lastError = null;
-  for (const source of sources()) {
-    for (let attempt = 1; attempt <= ATTEMPTS_PER_INSTANCE; attempt += 1) {
-      try {
-        const items = source.parse(await fetchBody(source.url));
-        if (items.length === 0) throw new Error("no timeline items parsed");
-        console.log(`tibo-watch: fetched ${items.length} posts from ${source.url}`);
-        return items;
-      } catch (error) {
-        lastError = error;
-        console.warn(`tibo-watch: ${source.url} attempt ${attempt} failed (${error.message})`);
-        if (attempt < ATTEMPTS_PER_INSTANCE) await sleep(RETRY_DELAY_MS);
-      }
+  for (let attempt = 1; attempt <= ATTEMPTS_PER_INSTANCE; attempt += 1) {
+    try {
+      const items = source.parse(await fetchBody(source.url));
+      if (items.length === 0) throw new Error("no timeline items parsed");
+      console.log(`tibo-watch: fetched ${items.length} posts from ${source.url}`);
+      return items;
+    } catch (error) {
+      lastError = error;
+      console.warn(`tibo-watch: ${source.url} attempt ${attempt} failed (${error.message})`);
+      if (attempt < ATTEMPTS_PER_INSTANCE) await sleep(RETRY_DELAY_MS);
     }
   }
-  console.warn(`tibo-watch: all sources failed (${lastError?.message ?? "unknown"}); keeping existing data`);
-  return null;
+  throw lastError;
+}
+
+/**
+ * Every source is read and merged: a single relay can drop or delay posts,
+ * and runs are hours apart in practice, so one mirror alone misses resets.
+ */
+async function fetchTimeline() {
+  const results = await Promise.allSettled(sources().map(fetchSource));
+  const items = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+  if (items.length === 0) {
+    console.warn("tibo-watch: all sources failed; keeping existing data");
+    return null;
+  }
+  return items;
 }
 
 async function readFeed() {
