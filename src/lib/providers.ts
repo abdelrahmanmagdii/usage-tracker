@@ -10,6 +10,10 @@ export type ProviderPref = {
 
 export type AppPrefs = {
   usageAlerts: boolean;
+  /** Notifications when Tibo announces a reset. */
+  resetAlerts: boolean;
+  /** One-row quota cards instead of the roomy default. */
+  denseLayout: boolean;
   combinedTray: boolean;
   onboardingComplete: boolean;
   /** Percent-used levels that fire a usage alert (ascending). */
@@ -21,6 +25,8 @@ export const AUTO_WINDOW = "auto";
 
 export const DEFAULT_PREFS: AppPrefs = {
   usageAlerts: true,
+  resetAlerts: true,
+  denseLayout: false,
   combinedTray: true,
   onboardingComplete: false,
   usageAlertThresholds: [80, 95],

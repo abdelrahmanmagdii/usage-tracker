@@ -84,7 +84,10 @@ fn collect_snapshot(provider: &str, id: &str, snapshot: &Value, out: &mut Vec<Wi
 
 pub fn extract_windows(provider: &str, payload: &Value) -> Vec<WindowSample> {
     let mut out = Vec::new();
-    if let Some(by_id) = payload.get("rateLimitsByLimitId").and_then(Value::as_object) {
+    if let Some(by_id) = payload
+        .get("rateLimitsByLimitId")
+        .and_then(Value::as_object)
+    {
         for (id, snapshot) in by_id {
             collect_snapshot(provider, id, snapshot, &mut out);
         }

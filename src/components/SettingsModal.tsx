@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Check, Settings2, X } from "lucide-react";
+import { BellRing, Check, Settings2, X } from "lucide-react";
+import { sendTestNotification, type TestNotificationResult } from "../features/tibo-watch/notifications";
 import {
   AUTO_WINDOW,
   DEFAULT_PREFS,
@@ -185,6 +186,7 @@ export function SettingsModal({
       : PREVIEW_WINDOWS,
   );
   const [autostart, setAutostart] = useState(false);
+  const [testResult, setTestResult] = useState<TestNotificationResult | "sending" | null>(null);
 
   useEffect(() => {
     if (!inTauri()) {
@@ -219,6 +221,21 @@ export function SettingsModal({
       void invoke("set_usage_alert_thresholds", { thresholds: next }).catch(() => undefined);
     }
   }, []);
+
+  const setPref = useCallback(
+    (key: "resetAlerts" | "denseLayout", command: string, next: boolean) => {
+      setPrefs((current) => ({ ...current, [key]: next }));
+      if (inTauri()) void invoke(command, { enabled: next }).catch(() => undefined);
+    },
+    [],
+  );
+
+  const testMessage: Record<TestNotificationResult | "sending", string> = {
+    sending: "Sending…",
+    sent: "Sent. If nothing appeared, check Focus and System Settings › Notifications › UsageBar.",
+    denied: "Notifications are off for UsageBar. Turn them on in System Settings › Notifications.",
+    unavailable: "Couldn't send a notification from this build.",
+  };
 
   const visibleCount = PROVIDER_CATALOG.filter((tool) => isVisible(prefs, tool.id)).length;
   const thresholds = alertThresholds(prefs);
@@ -315,6 +332,12 @@ export function SettingsModal({
                 );
               })}
             </div>
+            <Toggle
+              label="Compact cards"
+              detail="One row per quota window, so several tools fit without scrolling."
+              checked={prefs.denseLayout}
+              onChange={(next) => setPref("denseLayout", "set_dense_layout", next)}
+            />
             <p className="setting-hint">
               {visibleCount > 2
                 ? "With several tools on, Compact is much less likely to be hidden when the menu bar is crowded."
@@ -347,6 +370,29 @@ export function SettingsModal({
                 />
               </div>
             ) : null}
+            <Toggle
+              label="Reset alerts"
+              detail="Get notified when Tibo announces a Codex reset, and again when it lands."
+              checked={prefs.resetAlerts}
+              onChange={(next) => setPref("resetAlerts", "set_reset_alerts", next)}
+            />
+            <div className="test-notification">
+              <button
+                className="secondary-button"
+                disabled={testResult === "sending"}
+                onClick={() => {
+                  setTestResult("sending");
+                  void sendTestNotification().then(setTestResult);
+                }}
+              >
+                <BellRing size={13} aria-hidden="true" /> Send test notification
+              </button>
+              {testResult ? (
+                <p className={`setting-hint${testResult === "denied" ? " is-warning" : ""}`} role="status">
+                  {testMessage[testResult]}
+                </p>
+              ) : null}
+            </div>
             <Toggle
               label="Launch at login"
               detail="Start UsageBar when you log in."

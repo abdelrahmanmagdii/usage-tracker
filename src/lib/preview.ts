@@ -20,6 +20,7 @@ export function previewPrefs(search: string): AppPrefs | null {
   return {
     ...DEFAULT_PREFS,
     onboardingComplete: true,
+    denseLayout: params(search).has("dense"),
     providers: Object.fromEntries(
       PROVIDER_IDS.map((id) => [id, { visible: allowed ? allowed.has(id) : true }]),
     ),

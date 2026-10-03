@@ -206,7 +206,10 @@ pub struct TrayMenuState(std::sync::Mutex<std::collections::HashMap<&'static str
 
 impl TrayMenuState {
     fn changed(&self, key: &'static str, signature: &str) -> bool {
-        let mut map = self.0.lock().expect("tray menu state poisoned");
+        let mut map = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if map.get(key).map(String::as_str) == Some(signature) {
             return false;
         }
@@ -215,7 +218,10 @@ impl TrayMenuState {
     }
 
     pub(crate) fn invalidate(&self) {
-        self.0.lock().expect("tray menu state poisoned").clear();
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 }
 
@@ -245,10 +251,27 @@ fn window_menu_id(provider: Provider, window_id: &str) -> String {
 }
 
 /// The Compact/Extended layout picker, shown on the shared (primary) menu.
-fn layout_submenu(app: &AppHandle, combined: bool) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+fn layout_submenu(
+    app: &AppHandle,
+    combined: bool,
+) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
     use tauri::menu::{IsMenuItem, Submenu};
-    let compact = CheckMenuItem::with_id(app, "layout-compact", "Compact (one icon)", true, combined, None::<&str>)?;
-    let extended = CheckMenuItem::with_id(app, "layout-extended", "Extended (one icon per tool)", true, !combined, None::<&str>)?;
+    let compact = CheckMenuItem::with_id(
+        app,
+        "layout-compact",
+        "Compact (one icon)",
+        true,
+        combined,
+        None::<&str>,
+    )?;
+    let extended = CheckMenuItem::with_id(
+        app,
+        "layout-extended",
+        "Extended (one icon per tool)",
+        true,
+        !combined,
+        None::<&str>,
+    )?;
     let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&compact, &extended];
     Submenu::with_items(app, "Menu Bar Layout", true, &refs)
 }
@@ -265,7 +288,13 @@ fn update_menu_item(app: &AppHandle) -> tauri::Result<MenuItem<tauri::Wry>> {
             None::<&str>,
         );
     }
-    MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)
+    MenuItem::with_id(
+        app,
+        "check-updates",
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )
 }
 
 /// A provider's "Menu Bar Shows" submenu: "Most used" plus one entry per window.
@@ -344,7 +373,8 @@ fn build_unified_menu(
     )?;
     let layout = layout_submenu(app, prefs.combined_tray)?;
     let updates = update_menu_item(app)?;
-    let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
+    let walkthrough =
+        MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
 
     use tauri::menu::IsMenuItem;
@@ -387,13 +417,38 @@ fn build_provider_menu(
     let sep_after_toggles = PredefinedMenuItem::separator(app)?;
     let picker = window_picker(app, provider, windows, &selected)?;
     let layout = layout_submenu(app, prefs.combined_tray)?;
-    let alerts = CheckMenuItem::with_id(app, "toggle-alerts", "Usage Alerts", true, prefs.usage_alerts, None::<&str>)?;
-    let autostart = CheckMenuItem::with_id(app, "toggle-autostart", "Launch at Login", true, app.autolaunch().is_enabled().unwrap_or(false), None::<&str>)?;
+    let alerts = CheckMenuItem::with_id(
+        app,
+        "toggle-alerts",
+        "Usage Alerts",
+        true,
+        prefs.usage_alerts,
+        None::<&str>,
+    )?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "toggle-autostart",
+        "Launch at Login",
+        true,
+        app.autolaunch().is_enabled().unwrap_or(false),
+        None::<&str>,
+    )?;
     let updates = update_menu_item(app)?;
-    let walkthrough = MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
+    let walkthrough =
+        MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
     let items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
-        &refresh, &sep_after_refresh, &picker, &layout, &sep_after_picker, &alerts, &autostart, &updates, &sep_after_toggles, &walkthrough, &quit,
+        &refresh,
+        &sep_after_refresh,
+        &picker,
+        &layout,
+        &sep_after_picker,
+        &alerts,
+        &autostart,
+        &updates,
+        &sep_after_toggles,
+        &walkthrough,
+        &quit,
     ];
     Menu::with_items(app, &items)
 }
@@ -440,7 +495,11 @@ fn view_from_state(
     }
 }
 
-async fn all_provider_views(app: &AppHandle, prefs: &crate::prefs::AppPrefs, now: u64) -> Vec<ProviderView> {
+async fn all_provider_views(
+    app: &AppHandle,
+    prefs: &crate::prefs::AppPrefs,
+    now: u64,
+) -> Vec<ProviderView> {
     let incoming = app
         .try_state::<ResetRadar>()
         .is_some_and(|radar| radar.incoming_at(now));
@@ -557,7 +616,10 @@ pub async fn refresh_unified_tray(app: &AppHandle) {
 fn set_visible(app: &AppHandle, id: &'static str, visible: bool) {
     {
         let cache = app.state::<TrayRenderCache>();
-        let mut map = cache.visible.lock().expect("tray render cache poisoned");
+        let mut map = cache
+            .visible
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if map.get(id) == Some(&visible) {
             return;
         }
@@ -574,7 +636,10 @@ fn set_visible(app: &AppHandle, id: &'static str, visible: bool) {
 fn paint(app: &AppHandle, id: &'static str, title: &str, tooltip: &str) {
     {
         let cache = app.state::<TrayRenderCache>();
-        let mut map = cache.labels.lock().expect("tray render cache poisoned");
+        let mut map = cache
+            .labels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if map
             .get(id)
             .is_some_and(|(last_title, last_tip)| last_title == title && last_tip == tooltip)
@@ -610,7 +675,10 @@ fn paint_combined_icon(app: &AppHandle, providers: &[Provider]) {
     };
     {
         let cache = app.state::<TrayRenderCache>();
-        let mut map = cache.icons.lock().expect("tray render cache poisoned");
+        let mut map = cache
+            .icons
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if map.get(TRAY_ID) == Some(&signature) {
             return;
         }
@@ -662,7 +730,9 @@ fn sync_menus(app: &AppHandle, prefs: &crate::prefs::AppPrefs, views: &[Provider
             .iter()
             .map(|view| (view.provider, view.windows.clone()))
             .collect();
-        rebuild_menu(app, TRAY_ID, sig, move |app| build_unified_menu(app, &menu_views));
+        rebuild_menu(app, TRAY_ID, sig, move |app| {
+            build_unified_menu(app, &menu_views)
+        });
     } else {
         for view in listed {
             let sig = format!(
@@ -712,7 +782,9 @@ fn window_tooltip_line(
     now: u64,
 ) -> String {
     let percent = seg.remaining.clamp(0.0, 100.0).round() as u32;
-    let label = window.map(|window| window.label.as_str()).unwrap_or("usage");
+    let label = window
+        .map(|window| window.label.as_str())
+        .unwrap_or("usage");
     let mut line = format!("{name}: {percent}% left ({label})");
     if let Some(age) = stale_age(updated_at, now) {
         line.push_str(&format!(" · last updated {} ago", format_age(age)));
@@ -759,12 +831,24 @@ fn provider_tooltip(view: &ProviderView, now: u64) -> String {
 
 pub fn refresh_all_providers(app: &AppHandle) {
     let prefs = app.state::<PrefsStore>().get();
-    let codex = app.try_state::<CodexManager>().map(|state| state.inner().clone());
-    let claude = app.try_state::<ClaudeManager>().map(|state| state.inner().clone());
-    let cursor = app.try_state::<CursorManager>().map(|state| state.inner().clone());
-    let opencode = app.try_state::<OpenCodeManager>().map(|state| state.inner().clone());
-    let devin = app.try_state::<DevinManager>().map(|state| state.inner().clone());
-    let antigravity = app.try_state::<AntigravityManager>().map(|state| state.inner().clone());
+    let codex = app
+        .try_state::<CodexManager>()
+        .map(|state| state.inner().clone());
+    let claude = app
+        .try_state::<ClaudeManager>()
+        .map(|state| state.inner().clone());
+    let cursor = app
+        .try_state::<CursorManager>()
+        .map(|state| state.inner().clone());
+    let opencode = app
+        .try_state::<OpenCodeManager>()
+        .map(|state| state.inner().clone());
+    let devin = app
+        .try_state::<DevinManager>()
+        .map(|state| state.inner().clone());
+    let antigravity = app
+        .try_state::<AntigravityManager>()
+        .map(|state| state.inner().clone());
     tauri::async_runtime::spawn(async move {
         if prefs.is_visible(crate::prefs::PROVIDER_CODEX) {
             if let Some(codex) = codex {
@@ -921,600 +1005,13 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn provider_tray_icon(provider: Provider) -> Image<'static> {
-    match provider {
-        Provider::Codex => codex_tray_icon(),
-        Provider::Claude => claude_tray_icon(),
-        Provider::Cursor => cursor_tray_icon(),
-        Provider::OpenCode => opencode_tray_icon(),
-        Provider::Devin => devin_tray_icon(),
-        Provider::Antigravity => antigravity_tray_icon(),
-    }
-}
+mod format;
+mod icons;
 
-/// Compact menu-bar mark for the tools currently in the title. One tool keeps
-/// its logo; several tools become staggered colored bars in title order so the
-/// percentages can be told apart the same way Codex purple and Claude coral
-/// already are. An empty set falls back to the two-bar brand mark.
-fn combined_tray_icon(providers: &[Provider]) -> Image<'static> {
-    match providers {
-        [] => bars_tray_icon(&[Provider::Codex.color(), Provider::Claude.color()]),
-        [only] => provider_tray_icon(*only),
-        many => {
-            let colors: Vec<[f64; 3]> = many.iter().map(|provider| provider.color()).collect();
-            bars_tray_icon(&colors)
-        }
-    }
-}
-
-/// The app-wide brand mark: Codex purple + Claude coral bars. Also the compact
-/// icon when those two tools are the ones showing.
-pub fn usagebar_tray_icon() -> Image<'static> {
-    combined_tray_icon(&[Provider::Codex, Provider::Claude])
-}
-
-fn bar_slots(count: usize) -> Vec<(f64, f64, f64, f64)> {
-    match count {
-        0 | 1 => vec![(6.4, 13.6, 4.5, 15.0)],
-        2 => vec![(4.0, 8.6, 4.5, 15.0), (11.4, 16.0, 8.0, 15.0)],
-        3 => vec![
-            (2.4, 6.8, 4.5, 15.0),
-            (8.0, 12.4, 7.0, 15.0),
-            (13.6, 18.0, 9.2, 15.0),
-        ],
-        5 => vec![
-            (1.0, 4.0, 4.0, 15.0),
-            (4.6, 7.6, 5.2, 15.0),
-            (8.2, 11.2, 6.4, 15.0),
-            (11.8, 14.8, 7.6, 15.0),
-            (15.4, 18.4, 8.8, 15.0),
-        ],
-        6 => vec![
-            (0.4, 3.2, 4.0, 15.0),
-            (3.6, 6.4, 5.0, 15.0),
-            (6.8, 9.6, 6.0, 15.0),
-            (10.0, 12.8, 7.0, 15.0),
-            (13.2, 16.0, 8.0, 15.0),
-            (16.4, 19.2, 9.0, 15.0),
-        ],
-        _ => vec![
-            (1.6, 5.0, 4.2, 15.0),
-            (6.2, 9.6, 6.0, 15.0),
-            (10.8, 14.2, 7.8, 15.0),
-            (15.4, 18.8, 9.6, 15.0),
-        ],
-    }
-}
-
-fn bars_tray_icon(colors: &[[f64; 3]]) -> Image<'static> {
-    const WIDTH: u32 = 20;
-    const HEIGHT: u32 = 18;
-    const SAMPLES: u32 = 4;
-    let bars: Vec<(f64, f64, f64, f64, [f64; 3])> = bar_slots(colors.len())
-        .into_iter()
-        .zip(colors.iter().copied())
-        .map(|(slot, color)| (slot.0, slot.1, slot.2, slot.3, color))
-        .collect();
-    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
-
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            for &(x0, x1, top, bottom, color) in &bars {
-                let mut coverage = 0_u32;
-                for sample_y in 0..SAMPLES {
-                    for sample_x in 0..SAMPLES {
-                        let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
-                        let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
-                        let radius = (x1 - x0) / 2.0;
-                        let cx = (x0 + x1) / 2.0;
-                        let cy = py.clamp(top + radius, bottom - radius);
-                        if (px - cx).powi(2) + (py - cy).powi(2) <= radius * radius {
-                            coverage += 1;
-                        }
-                    }
-                }
-                if coverage == 0 {
-                    continue;
-                }
-                let alpha = ((coverage * 255) / (SAMPLES * SAMPLES)) as u8;
-                let index = ((y * WIDTH + x) * 4) as usize;
-                if rgba[index + 3] == 0 {
-                    rgba[index] = color[0] as u8;
-                    rgba[index + 1] = color[1] as u8;
-                    rgba[index + 2] = color[2] as u8;
-                    rgba[index + 3] = alpha;
-                }
-            }
-        }
-    }
-    Image::new_owned(rgba, WIDTH, HEIGHT)
-}
-
-/// The Codex provider's own menu-bar mark for the extended (one-icon-per-tool)
-/// layout: the cloud/terminal glyph in Codex purple. Compact layout uses
-/// colored bars (`combined_tray_icon`) when more than one tool is showing.
-pub fn codex_tray_icon() -> Image<'static> {
-    const WIDTH: u32 = 22;
-    const HEIGHT: u32 = 18;
-    const SAMPLES: u32 = 4;
-    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
-
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let mut cloud_coverage = 0_u32;
-            let mut terminal_coverage = 0_u32;
-            for sample_y in 0..SAMPLES {
-                for sample_x in 0..SAMPLES {
-                    let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
-                    let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
-                    if inside_codex_cloud(px, py) {
-                        cloud_coverage += 1;
-                        if inside_terminal_glyph(px, py) {
-                            terminal_coverage += 1;
-                        }
-                    }
-                }
-            }
-            if cloud_coverage == 0 {
-                continue;
-            }
-            let alpha = ((cloud_coverage * 255) / (SAMPLES * SAMPLES)) as u8;
-            let blend = y as f64 / (HEIGHT - 1) as f64;
-            let glyph_mix = terminal_coverage as f64 / cloud_coverage as f64;
-            let red = ((194.0 + (139.0 - 194.0) * blend) * (1.0 - glyph_mix) + 255.0 * glyph_mix)
-                .round() as u8;
-            let green = ((79.0 + (55.0 - 79.0) * blend) * (1.0 - glyph_mix) + 255.0 * glyph_mix)
-                .round() as u8;
-            let blue = ((255.0 + (235.0 - 255.0) * blend) * (1.0 - glyph_mix) + 255.0 * glyph_mix)
-                .round() as u8;
-            let index = ((y * WIDTH + x) * 4) as usize;
-            rgba[index..index + 4].copy_from_slice(&[red, green, blue, alpha]);
-        }
-    }
-    Image::new_owned(rgba, WIDTH, HEIGHT)
-}
-
-fn inside_codex_cloud(x: f64, y: f64) -> bool {
-    [
-        (6.2, 9.2, 4.0),
-        (9.1, 6.0, 4.4),
-        (13.6, 6.7, 4.1),
-        (16.0, 9.7, 4.0),
-        (13.2, 12.1, 4.3),
-        (8.3, 12.0, 4.1),
-    ]
-    .into_iter()
-    .any(|(cx, cy, radius)| (x - cx).powi(2) + (y - cy).powi(2) <= radius * radius)
-}
-
-fn inside_terminal_glyph(x: f64, y: f64) -> bool {
-    let chevron = distance_to_segment(x, y, 6.8, 7.0, 8.6, 9.2) <= 0.72
-        || distance_to_segment(x, y, 8.6, 9.2, 6.8, 11.5) <= 0.72;
-    let underscore = distance_to_segment(x, y, 11.1, 11.2, 14.4, 11.2) <= 0.72;
-    chevron || underscore
-}
-
-/// Claude's coral starburst for the extended (one-icon-per-tool) layout.
-pub fn claude_tray_icon() -> Image<'static> {
-    const WIDTH: u32 = 22;
-    const HEIGHT: u32 = 18;
-    const SAMPLES: u32 = 4;
-    const CENTER_X: f64 = 11.0;
-    const CENTER_Y: f64 = 9.0;
-    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
-
-    let rays: Vec<(f64, f64)> = (0..8)
-        .map(|index| {
-            let angle = std::f64::consts::FRAC_PI_4 * index as f64;
-            // Cardinal rays reach a little farther than diagonals, echoing the
-            // uneven spark of the Claude mark.
-            let length = if index % 2 == 0 { 7.0 } else { 5.4 };
-            (
-                CENTER_X + angle.cos() * length,
-                CENTER_Y + angle.sin() * length,
-            )
-        })
-        .collect();
-
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let mut coverage = 0_u32;
-            for sample_y in 0..SAMPLES {
-                for sample_x in 0..SAMPLES {
-                    let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
-                    let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
-                    let inside = rays.iter().any(|(tip_x, tip_y)| {
-                        distance_to_segment(px, py, CENTER_X, CENTER_Y, *tip_x, *tip_y) <= 0.78
-                    });
-                    if inside {
-                        coverage += 1;
-                    }
-                }
-            }
-            if coverage == 0 {
-                continue;
-            }
-            let alpha = ((coverage * 255) / (SAMPLES * SAMPLES)) as u8;
-            let blend = y as f64 / (HEIGHT - 1) as f64;
-            let red = (217.0 + (191.0 - 217.0) * blend).round() as u8;
-            let green = (119.0 + (94.0 - 119.0) * blend).round() as u8;
-            let blue = (87.0 + (62.0 - 87.0) * blend).round() as u8;
-            let index = ((y * WIDTH + x) * 4) as usize;
-            rgba[index..index + 4].copy_from_slice(&[red, green, blue, alpha]);
-        }
-    }
-    Image::new_owned(rgba, WIDTH, HEIGHT)
-}
-
-/// Cursor's teal pointer. Same canvas as Codex/Claude so the extended
-/// icons sit at the same visual weight in the menu bar.
-pub fn cursor_tray_icon() -> Image<'static> {
-    const WIDTH: u32 = 22;
-    const HEIGHT: u32 = 18;
-    const SAMPLES: u32 = 4;
-    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
-
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let mut coverage = 0_u32;
-            for sample_y in 0..SAMPLES {
-                for sample_x in 0..SAMPLES {
-                    let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
-                    let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
-                    if inside_cursor_pointer(px, py) {
-                        coverage += 1;
-                    }
-                }
-            }
-            if coverage == 0 {
-                continue;
-            }
-            let alpha = ((coverage * 255) / (SAMPLES * SAMPLES)) as u8;
-            let blend = y as f64 / (HEIGHT - 1) as f64;
-            let red = (15.0 + (11.0 - 15.0) * blend).round() as u8;
-            let green = (157.0 + (128.0 - 157.0) * blend).round() as u8;
-            let blue = (142.0 + (116.0 - 142.0) * blend).round() as u8;
-            let index = ((y * WIDTH + x) * 4) as usize;
-            rgba[index..index + 4].copy_from_slice(&[red, green, blue, alpha]);
-        }
-    }
-    Image::new_owned(rgba, WIDTH, HEIGHT)
-}
-
-fn inside_cursor_pointer(x: f64, y: f64) -> bool {
-    // Classic arrow cursor, tip at top-left, wing to the right, notch + tail
-    // down the shaft — the Cursor app mark, sized for a 22×18 tray canvas.
-    const VERTS: [(f64, f64); 7] = [
-        (5.0, 2.2),
-        (5.3, 15.5),
-        (8.6, 12.1),
-        (10.1, 16.6),
-        (12.4, 15.6),
-        (10.0, 11.4),
-        (16.6, 10.1),
-    ];
-    point_in_polygon(x, y, &VERTS)
-}
-
-/// OpenCode's indigo O: a rounded rectangular ring, the square brand mark
-/// compressed onto the same 22×18 canvas as the other tray logos.
-pub fn opencode_tray_icon() -> Image<'static> {
-    const WIDTH: u32 = 22;
-    const HEIGHT: u32 = 18;
-    const SAMPLES: u32 = 4;
-    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
-
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let mut coverage = 0_u32;
-            for sample_y in 0..SAMPLES {
-                for sample_x in 0..SAMPLES {
-                    let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
-                    let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
-                    if inside_opencode_mark(px, py) {
-                        coverage += 1;
-                    }
-                }
-            }
-            if coverage == 0 {
-                continue;
-            }
-            let alpha = ((coverage * 255) / (SAMPLES * SAMPLES)) as u8;
-            let blend = y as f64 / (HEIGHT - 1) as f64;
-            let red = (79.0 + (67.0 - 79.0) * blend).round() as u8;
-            let green = (70.0 + (56.0 - 70.0) * blend).round() as u8;
-            let blue = (229.0 + (202.0 - 229.0) * blend).round() as u8;
-            let index = ((y * WIDTH + x) * 4) as usize;
-            rgba[index..index + 4].copy_from_slice(&[red, green, blue, alpha]);
-        }
-    }
-    Image::new_owned(rgba, WIDTH, HEIGHT)
-}
-
-fn inside_opencode_mark(x: f64, y: f64) -> bool {
-    inside_rounded_rect(x, y, 5.0, 2.2, 17.0, 15.8, 3.8)
-        && !inside_rounded_rect(x, y, 8.6, 5.8, 13.4, 12.2, 1.6)
-}
-
-/// Devin's amber diamond for the extended (one-icon-per-tool) layout.
-pub fn devin_tray_icon() -> Image<'static> {
-    const WIDTH: u32 = 22;
-    const HEIGHT: u32 = 18;
-    const SAMPLES: u32 = 4;
-    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
-
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let mut coverage = 0_u32;
-            for sample_y in 0..SAMPLES {
-                for sample_x in 0..SAMPLES {
-                    let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
-                    let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
-                    if inside_devin_mark(px, py) {
-                        coverage += 1;
-                    }
-                }
-            }
-            if coverage == 0 {
-                continue;
-            }
-            let alpha = ((coverage * 255) / (SAMPLES * SAMPLES)) as u8;
-            let blend = y as f64 / (HEIGHT - 1) as f64;
-            let red = (212.0 + (186.0 - 212.0) * blend).round() as u8;
-            let green = (132.0 + (104.0 - 132.0) * blend).round() as u8;
-            let blue = (38.0 + (28.0 - 38.0) * blend).round() as u8;
-            let index = ((y * WIDTH + x) * 4) as usize;
-            rgba[index..index + 4].copy_from_slice(&[red, green, blue, alpha]);
-        }
-    }
-    Image::new_owned(rgba, WIDTH, HEIGHT)
-}
-
-fn inside_devin_mark(x: f64, y: f64) -> bool {
-    const VERTS: [(f64, f64); 4] = [(11.0, 2.2), (17.8, 9.0), (11.0, 15.8), (4.2, 9.0)];
-    point_in_polygon(x, y, &VERTS)
-}
-
-/// Antigravity's Gemini-blue four-point star for the extended layout.
-pub fn antigravity_tray_icon() -> Image<'static> {
-    const WIDTH: u32 = 22;
-    const HEIGHT: u32 = 18;
-    const SAMPLES: u32 = 4;
-    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
-
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let mut coverage = 0_u32;
-            for sample_y in 0..SAMPLES {
-                for sample_x in 0..SAMPLES {
-                    let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
-                    let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
-                    if inside_antigravity_mark(px, py) {
-                        coverage += 1;
-                    }
-                }
-            }
-            if coverage == 0 {
-                continue;
-            }
-            let alpha = ((coverage * 255) / (SAMPLES * SAMPLES)) as u8;
-            let blend = y as f64 / (HEIGHT - 1) as f64;
-            let red = (66.0 + (48.0 - 66.0) * blend).round() as u8;
-            let green = (133.0 + (98.0 - 133.0) * blend).round() as u8;
-            let blue = (244.0 + (210.0 - 244.0) * blend).round() as u8;
-            let index = ((y * WIDTH + x) * 4) as usize;
-            rgba[index..index + 4].copy_from_slice(&[red, green, blue, alpha]);
-        }
-    }
-    Image::new_owned(rgba, WIDTH, HEIGHT)
-}
-
-fn inside_antigravity_mark(x: f64, y: f64) -> bool {
-    const VERTS: [(f64, f64); 8] = [
-        (11.0, 1.6),
-        (12.3, 7.7),
-        (18.4, 9.0),
-        (12.3, 10.3),
-        (11.0, 16.4),
-        (9.7, 10.3),
-        (3.6, 9.0),
-        (9.7, 7.7),
-    ];
-    point_in_polygon(x, y, &VERTS)
-}
-
-fn inside_rounded_rect(x: f64, y: f64, x0: f64, y0: f64, x1: f64, y1: f64, radius: f64) -> bool {
-    let cx = x.clamp(x0 + radius, x1 - radius);
-    let cy = y.clamp(y0 + radius, y1 - radius);
-    (x - cx).powi(2) + (y - cy).powi(2) <= radius * radius
-}
-
-fn point_in_polygon(x: f64, y: f64, verts: &[(f64, f64)]) -> bool {
-    let mut inside = false;
-    let mut j = verts.len() - 1;
-    for i in 0..verts.len() {
-        let (xi, yi) = verts[i];
-        let (xj, yj) = verts[j];
-        if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
-}
-
-fn distance_to_segment(x: f64, y: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    let length_squared = dx * dx + dy * dy;
-    let t = (((x - x0) * dx + (y - y0) * dy) / length_squared).clamp(0.0, 1.0);
-    ((x - (x0 + t * dx)).powi(2) + (y - (y0 + t * dy)).powi(2)).sqrt()
-}
-
-/// One quota window a menu-bar meter can follow.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrayWindow {
-    /// Stable identifier used by the menu-bar picker preference.
-    pub id: String,
-    /// Human label for the menu and tooltip ("5-hour", "Weekly", "Fable").
-    pub label: String,
-    pub used_percent: f64,
-    pub resets_at: Option<u64>,
-    pub duration_mins: Option<f64>,
-}
-
-pub fn window_duration_label(minutes: Option<f64>) -> String {
-    match minutes {
-        Some(m) if m == 300.0 => "5-hour".to_owned(),
-        Some(m) if m == 1_440.0 => "Daily".to_owned(),
-        Some(m) if m == 10_080.0 => "Weekly".to_owned(),
-        Some(m) if m > 0.0 && m % 10_080.0 == 0.0 => format!("{}-week", (m / 10_080.0) as u64),
-        Some(m) if m > 0.0 && m % 1_440.0 == 0.0 => format!("{}-day", (m / 1_440.0) as u64),
-        Some(m) if m > 0.0 && m % 60.0 == 0.0 => format!("{}-hour", (m / 60.0) as u64),
-        _ => "Limit".to_owned(),
-    }
-}
-
-fn collect_snapshot(limit_id: &str, snapshot: &Value, out: &mut Vec<TrayWindow>) {
-    for kind in ["primary", "secondary"] {
-        let Some(window) = snapshot.get(kind) else {
-            continue;
-        };
-        let Some(used) = window.get("usedPercent").and_then(Value::as_f64) else {
-            continue;
-        };
-        let duration = window.get("windowDurationMins").and_then(Value::as_f64);
-        let label = window
-            .get("windowLabel")
-            .and_then(Value::as_str)
-            .or_else(|| snapshot.get("windowLabel").and_then(Value::as_str))
-            .map(str::to_owned)
-            .unwrap_or_else(|| window_duration_label(duration));
-        out.push(TrayWindow {
-            id: format!("{limit_id}:{kind}"),
-            label,
-            used_percent: used.clamp(0.0, 100.0),
-            resets_at: window
-                .get("resetsAt")
-                .and_then(Value::as_f64)
-                .map(|value| value.max(0.0) as u64),
-            duration_mins: duration,
-        });
-    }
-}
-
-/// Lists every window a provider reports, shortest window first so the picker
-/// reads 5-hour → weekly regardless of map ordering.
-pub fn collect_windows(payload: Option<&Value>) -> Vec<TrayWindow> {
-    let Some(payload) = payload else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    if let Some(by_id) = payload.get("rateLimitsByLimitId").and_then(Value::as_object) {
-        for (limit_id, snapshot) in by_id {
-            collect_snapshot(limit_id, snapshot, &mut out);
-        }
-    }
-    if out.is_empty() {
-        if let Some(snapshot) = payload.get("rateLimits") {
-            collect_snapshot("codex", snapshot, &mut out);
-        }
-    }
-    out.sort_by(|left, right| {
-        let a = left.duration_mins.unwrap_or(f64::MAX);
-        let b = right.duration_mins.unwrap_or(f64::MAX);
-        a.partial_cmp(&b)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    out
-}
-
-/// Resolves the preference to a window: an explicit choice when it still
-/// exists, otherwise the most-used window.
-pub fn select_window<'a>(windows: &'a [TrayWindow], preference: &str) -> Option<&'a TrayWindow> {
-    if preference != crate::prefs::TRAY_WINDOW_AUTO {
-        if let Some(chosen) = windows.iter().find(|window| window.id == preference) {
-            return Some(chosen);
-        }
-    }
-    windows.iter().max_by(|left, right| {
-        left.used_percent
-            .partial_cmp(&right.used_percent)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })
-}
-
-/// Titles show percent REMAINING, mirroring what the Codex and Claude apps
-/// display, so the menu bar never disagrees with the app it mirrors.
-pub fn tray_title(remaining_percent: Option<f64>, resets_at: Option<u64>, now_unix: u64) -> String {
-    let Some(remaining) = remaining_percent else {
-        return String::new();
-    };
-    let percent = remaining.clamp(0.0, 100.0).round() as u32;
-    match resets_at {
-        Some(target) if target > now_unix => {
-            format!("{percent}% · {}", format_countdown(target - now_unix))
-        }
-        _ => format!("{percent}%"),
-    }
-}
-
-/// Percent of a window still available.
-pub fn remaining_percent(window: &TrayWindow) -> f64 {
-    (100.0 - window.used_percent).clamp(0.0, 100.0)
-}
-
-/// One provider's contribution to the single combined menu-bar title.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MeterSegment {
-    /// Whether this provider has usable data to show at all.
-    pub present: bool,
-    pub remaining: f64,
-    pub resets_at: Option<u64>,
-    pub incoming: bool,
-    pub stale: bool,
-}
-
-fn segment_percent(seg: &MeterSegment) -> String {
-    let percent = seg.remaining.clamp(0.0, 100.0).round() as u32;
-    with_incoming_prefix(with_stale_marker(format!("{percent}%"), seg.stale), seg.incoming)
-}
-
-/// The combined (compact-layout) menu-bar title. A lone provider keeps its
-/// countdown since there is room; several providers show percentages without
-/// countdowns so they fit in one narrow item.
-pub fn combined_title(segments: &[MeterSegment], now: u64) -> String {
-    let present: Vec<&MeterSegment> = segments.iter().filter(|seg| seg.present).collect();
-    match present.as_slice() {
-        [] => String::new(),
-        [only] => {
-            let base = tray_title(Some(only.remaining), only.resets_at, now);
-            with_incoming_prefix(with_stale_marker(base, only.stale), only.incoming)
-        }
-        many => many
-            .iter()
-            .map(|seg| segment_percent(seg))
-            .collect::<Vec<_>>()
-            .join(" · "),
-    }
-}
-
-pub fn format_countdown(total_seconds: u64) -> String {
-    let days = total_seconds / 86_400;
-    if days > 0 {
-        return format!("{days}d {}h", (total_seconds % 86_400) / 3_600);
-    }
-    let hours = total_seconds / 3_600;
-    let minutes = (total_seconds % 3_600) / 60;
-    let seconds = total_seconds % 60;
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes}:{seconds:02}")
-    }
-}
+#[allow(unused_imports)]
+pub use format::*;
+#[allow(unused_imports)]
+pub use icons::*;
 
 #[cfg(test)]
 mod tests {
@@ -1602,35 +1099,80 @@ mod tests {
 
     #[test]
     fn combined_title_shows_both_providers_without_countdowns() {
-        let codex = MeterSegment { present: true, remaining: 62.0, resets_at: Some(9_000), incoming: false, stale: false };
-        let claude = MeterSegment { present: true, remaining: 8.0, resets_at: Some(9_000), incoming: false, stale: false };
+        let codex = MeterSegment {
+            present: true,
+            remaining: 62.0,
+            resets_at: Some(9_000),
+            incoming: false,
+            stale: false,
+        };
+        let claude = MeterSegment {
+            present: true,
+            remaining: 8.0,
+            resets_at: Some(9_000),
+            incoming: false,
+            stale: false,
+        };
         // Two providers: percentages only, joined, no countdowns.
         assert_eq!(combined_title(&[codex, claude], 1_000), "62% · 8%");
         // Markers still attach to the right segment.
-        let stale_claude = MeterSegment { stale: true, ..claude };
+        let stale_claude = MeterSegment {
+            stale: true,
+            ..claude
+        };
         assert_eq!(combined_title(&[codex, stale_claude], 1_000), "62% · ~8%");
-        let incoming_codex = MeterSegment { incoming: true, ..codex };
-        assert_eq!(combined_title(&[incoming_codex, claude], 1_000), "⚡ 62% · 8%");
-        let cursor = MeterSegment { present: true, remaining: 41.0, resets_at: None, incoming: false, stale: false };
-        assert_eq!(combined_title(&[codex, claude, cursor], 1_000), "62% · 8% · 41%");
+        let incoming_codex = MeterSegment {
+            incoming: true,
+            ..codex
+        };
+        assert_eq!(
+            combined_title(&[incoming_codex, claude], 1_000),
+            "⚡ 62% · 8%"
+        );
+        let cursor = MeterSegment {
+            present: true,
+            remaining: 41.0,
+            resets_at: None,
+            incoming: false,
+            stale: false,
+        };
+        assert_eq!(
+            combined_title(&[codex, claude, cursor], 1_000),
+            "62% · 8% · 41%"
+        );
     }
 
     #[test]
     fn combined_title_keeps_the_countdown_for_a_lone_provider() {
-        let codex = MeterSegment { present: true, remaining: 62.0, resets_at: Some(4_661), incoming: false, stale: false };
+        let codex = MeterSegment {
+            present: true,
+            remaining: 62.0,
+            resets_at: Some(4_661),
+            incoming: false,
+            stale: false,
+        };
         let absent = MeterSegment::default();
         // A lone provider has room for the countdown.
         assert_eq!(combined_title(&[codex, absent], 1_000), "62% · 1:01:01");
         // Nothing present yields an empty title.
         assert_eq!(combined_title(&[absent, absent], 1_000), "");
         // Claude-only (Codex still loading) shows just Claude.
-        let claude = MeterSegment { present: true, remaining: 8.0, resets_at: None, incoming: false, stale: false };
+        let claude = MeterSegment {
+            present: true,
+            remaining: 8.0,
+            resets_at: None,
+            incoming: false,
+            stale: false,
+        };
         assert_eq!(combined_title(&[absent, claude], 1_000), "8%");
     }
 
     #[test]
     fn incoming_reset_prefixes_the_title() {
-        assert_eq!(with_incoming_prefix("42% · 9:05".into(), true), "⚡ 42% · 9:05");
+        assert_eq!(
+            with_incoming_prefix("42% · 9:05".into(), true),
+            "⚡ 42% · 9:05"
+        );
         assert_eq!(with_incoming_prefix("42%".into(), false), "42%");
         assert_eq!(with_incoming_prefix(String::new(), true), "⚡");
         let radar = ResetRadar::default();
@@ -1646,7 +1188,10 @@ mod tests {
         // Fresh data, and data that has never arrived, are left alone.
         assert_eq!(stale_age(Some(now - 60), now), None);
         assert_eq!(stale_age(None, now), None);
-        assert_eq!(stale_age(Some(now - TRAY_STALE_AFTER_SECS), now), Some(TRAY_STALE_AFTER_SECS));
+        assert_eq!(
+            stale_age(Some(now - TRAY_STALE_AFTER_SECS), now),
+            Some(TRAY_STALE_AFTER_SECS)
+        );
         // A clock that jumped backwards must not read as stale.
         assert_eq!(stale_age(Some(now + 500), now), None);
 
