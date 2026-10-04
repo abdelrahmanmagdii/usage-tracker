@@ -1,5 +1,5 @@
 cask "usagebar" do
-  version "0.2.1"
+  version "0.2.2"
   sha256 :no_check
 
   url "https://github.com/abdelrahmanmagdii/usage-tracker/releases/download/v#{version}/UsageBar_#{version}_universal.dmg"
