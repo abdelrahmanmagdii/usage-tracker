@@ -1,6 +1,13 @@
 {
-  "updatedAt": "2026-10-03T19:52:45.326Z",
+  "updatedAt": "2026-10-04T23:33:33.759Z",
   "events": [
+    {
+      "id": "tibo-bsky-3mx3ayefnu42a",
+      "announcedAt": "2026-10-04T20:33:43.000Z",
+      "source": "tibo",
+      "text": "Over the next 28 days, each day we’ll either ship one thing that is a clear improvement and relevant for most codex/work users or ship a full reset. Let the improvements begin.",
+      "sourceUrl": "https://bsky.app/profile/thsottiaux-bot.eurosky.social/post/3mx3ayefnu42a"
+    },
     {
       "id": "tibo-bsky-3mwwckjns6g2k",
       "announcedAt": "2026-10-02T21:18:48.000Z",
