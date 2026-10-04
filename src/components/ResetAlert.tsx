@@ -3,6 +3,7 @@ import { X, Zap } from "lucide-react";
 import type { ResetEvent } from "../types/codex";
 import { formatLeadTime } from "../lib/time";
 import { upcomingReset } from "../features/tibo-watch/provider";
+import { planSummary } from "../features/tibo-watch/notifications";
 
 const DISMISS_KEY = "codex-meter.dismissed-alerts.v1";
 const LANDED_WINDOW_MS = 90 * 60 * 1000;
@@ -34,6 +35,7 @@ export function ResetAlert({ now, events }: { now: number; events: ResetEvent[] 
 
   const occursAt = candidate.occursAt ? Date.parse(candidate.occursAt) : Number.NaN;
   const incoming = Number.isFinite(occursAt) && occursAt > now;
+  const plans = planSummary(candidate);
 
   const dismiss = () => {
     const next = new Set(dismissed).add(candidate.id);
@@ -51,7 +53,7 @@ export function ResetAlert({ now, events }: { now: number; events: ResetEvent[] 
       <span className="reset-alert-text">
         {incoming ? (
           <>
-            Reset announced <strong>· takes effect in {formatLeadTime(occursAt - now)}</strong>
+            Reset announced{plans ? ` for ${plans}` : ""} <strong>· takes effect in {formatLeadTime(occursAt - now)}</strong>
           </>
         ) : (
           "Quota was just reset"

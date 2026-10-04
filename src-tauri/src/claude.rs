@@ -101,7 +101,10 @@ impl ClaudeManager {
         self.refresh_with_prompt(true).await
     }
 
-    async fn refresh_with_prompt(&self, allow_keychain_prompt: bool) -> Result<ClaudeState, String> {
+    async fn refresh_with_prompt(
+        &self,
+        allow_keychain_prompt: bool,
+    ) -> Result<ClaudeState, String> {
         if !self
             .app
             .state::<crate::prefs::PrefsStore>()
@@ -134,8 +137,11 @@ impl ClaudeManager {
                 return Ok(self.snapshot().await);
             }
             CredentialRead::Unavailable(message) => {
-                let has_shown_usage = self.snapshot().await.updated_at.is_some();
-                if !has_shown_usage {
+                let snapshot = self.snapshot().await;
+                if !crate::provider::keep_last_meter(
+                    snapshot.connection,
+                    snapshot.updated_at.is_some(),
+                ) {
                     self.set_connection(
                         ConnectionState::CliNotFound,
                         Some("No Claude Code login was found on this Mac".into()),
@@ -240,6 +246,11 @@ impl ClaudeManager {
             let mut state = self.state.write().await;
             state.connection = connection;
             state.diagnostic = diagnostic;
+            if connection == ConnectionState::CliNotFound {
+                state.account = None;
+                state.rate_limits = None;
+                state.updated_at = None;
+            }
         }
         // A missing Claude login no longer hides anything: the shared tray keeps
         // showing Codex, and Claude simply drops out of the title and menu until
@@ -386,7 +397,9 @@ fn read_keychain_password(allow_prompt: bool) -> CredentialRead {
 async fn load_from_keychain(allow_prompt: bool) -> CredentialRead {
     match tokio::task::spawn_blocking(move || read_keychain_password(allow_prompt)).await {
         Ok(read) => read,
-        Err(error) => CredentialRead::Unavailable(format!("Keychain lookup was cancelled: {error}")),
+        Err(error) => {
+            CredentialRead::Unavailable(format!("Keychain lookup was cancelled: {error}"))
+        }
     }
 }
 
@@ -404,7 +417,9 @@ async fn load_from_file() -> CredentialRead {
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => CredentialRead::Absent,
         // Permissions, I/O errors, a half-written file: unknown, not absent.
-        Err(error) => CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display())),
+        Err(error) => {
+            CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display()))
+        }
     }
 }
 
@@ -437,7 +452,8 @@ fn normalize_usage(raw: &Value) -> Value {
     let weekly_fallback = parse_reset_timestamp(raw.pointer("/seven_day/resets_at"));
     if let Some(limits) = raw.get("limits").and_then(Value::as_array) {
         for limit in limits {
-            let Some(entry) = normalize_limit_entry(limit, session_fallback, weekly_fallback) else {
+            let Some(entry) = normalize_limit_entry(limit, session_fallback, weekly_fallback)
+            else {
                 continue;
             };
             by_id.insert(entry.0, entry.1);
@@ -449,7 +465,11 @@ fn normalize_usage(raw: &Value) -> Value {
             let Some(used) = window.get("utilization").and_then(Value::as_f64) else {
                 continue;
             };
-            let kind = if key == "five_hour" { "primary" } else { "secondary" };
+            let kind = if key == "five_hour" {
+                "primary"
+            } else {
+                "secondary"
+            };
             by_id.insert(
                 key.replace('_', "-"),
                 json!({
@@ -487,7 +507,11 @@ fn normalize_limit_entry(
     } else {
         None
     };
-    let window_kind = if duration == Some(300.0) { "primary" } else { "secondary" };
+    let window_kind = if duration == Some(300.0) {
+        "primary"
+    } else {
+        "secondary"
+    };
 
     let mut id = kind.replace('_', "-");
     if let Some(name) = scope_name {
@@ -568,11 +592,9 @@ fn parse_reset_timestamp(value: Option<&Value>) -> Option<f64> {
     match value? {
         Value::Number(number) => number.as_f64(),
         Value::String(text) => {
-            let parsed = time::OffsetDateTime::parse(
-                text,
-                &time::format_description::well_known::Rfc3339,
-            )
-            .ok()?;
+            let parsed =
+                time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
+                    .ok()?;
             Some(parsed.unix_timestamp() as f64)
         }
         _ => None,
@@ -629,13 +651,17 @@ mod tests {
         assert_eq!(scoped.pointer("/secondary/usedPercent"), Some(&json!(63.0)));
         assert_eq!(scoped.get("windowLabel"), Some(&json!("Fable")));
         assert_eq!(scoped.get("limitName"), Some(&json!("Weekly limit")));
-        assert_eq!(scoped.pointer("/secondary/excludeFromTray"), Some(&json!(true)));
+        assert_eq!(
+            scoped.pointer("/secondary/excludeFromTray"),
+            Some(&json!(true))
+        );
 
         // The tray picker sees all three windows, labeled for the menu.
         let windows = crate::tray::collect_windows(Some(&normalized));
         let labels: Vec<&str> = windows.iter().map(|window| window.label.as_str()).collect();
         assert_eq!(labels, vec!["5-hour", "Weekly", "Fable"]);
-        let auto = crate::tray::select_window(&windows, crate::prefs::TRAY_WINDOW_AUTO).expect("auto");
+        let auto =
+            crate::tray::select_window(&windows, crate::prefs::TRAY_WINDOW_AUTO).expect("auto");
         assert!((auto.used_percent - 63.0).abs() < 1e-9);
         assert_eq!(auto.label, "Fable");
     }
@@ -731,10 +757,19 @@ mod tests {
     #[test]
     fn picks_the_freshest_usable_credential_source() {
         // A valid source beats an expired one regardless of order.
-        assert_eq!(freshest(creds(500.0), creds(2_000.0), 1_000).expires_at_ms, Some(2_000.0));
-        assert_eq!(freshest(creds(2_000.0), creds(500.0), 1_000).expires_at_ms, Some(2_000.0));
+        assert_eq!(
+            freshest(creds(500.0), creds(2_000.0), 1_000).expires_at_ms,
+            Some(2_000.0)
+        );
+        assert_eq!(
+            freshest(creds(2_000.0), creds(500.0), 1_000).expires_at_ms,
+            Some(2_000.0)
+        );
         // Both expired: the fresher one wins (its message is more accurate).
-        assert_eq!(freshest(creds(500.0), creds(800.0), 1_000).expires_at_ms, Some(800.0));
+        assert_eq!(
+            freshest(creds(500.0), creds(800.0), 1_000).expires_at_ms,
+            Some(800.0)
+        );
     }
 
     #[test]
@@ -759,7 +794,11 @@ mod tests {
         let unavailable = || CredentialRead::Unavailable("keychain locked".to_owned());
         // A usable login from either store wins outright.
         assert_eq!(
-            expiry(&combine_reads(unavailable(), CredentialRead::Found(creds(2_000.0)), 1_000)),
+            expiry(&combine_reads(
+                unavailable(),
+                CredentialRead::Found(creds(2_000.0)),
+                1_000
+            )),
             Some(2_000.0)
         );
         assert_eq!(
@@ -812,4 +851,3 @@ mod tests {
         assert!(parse_credentials("not json").is_none());
     }
 }
-

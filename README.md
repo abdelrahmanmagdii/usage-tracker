@@ -14,7 +14,7 @@ The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset c
 
 *Demo and screenshots use preview data.*
 
-By default visible providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude) — the **Compact** layout, which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **Extended** (one icon per provider), choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — and toggle **Usage Alerts** (notifications at 80% / 95% used and on a fresh window) and **Launch at Login**.
+By default visible providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude) — the **Compact** layout, which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **Extended** (one icon per provider), choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — toggle **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), **Reset Alerts** (Tibo's announcements, with a **Send test notification** button to confirm macOS will show them), **Compact cards** (one row per quota window), and **Launch at Login**. Each tool shows when it last refreshed and flags readings older than 15 minutes, and a window you're burning through quickly shows when it will run out at the current pace.
 
 ## Compared with CodexBar and similar apps
 
@@ -152,9 +152,9 @@ Local history is stored in WebView local storage and records only observed perce
 
 Tibo Watch tracks public surprise-reset announcements without any paid infrastructure:
 
-1. A GitHub Actions workflow (`.github/workflows/tibo-watch.yml`) runs `tools/tibo-watch/check.mjs` every ~5 minutes (free on public repos).
-2. The script reads @thsottiaux's public timeline through free Nitter RSS mirrors (curl/HTTP-2 first, plain fetch as fallback), keeps tweets that match reset-announcement phrasing, parses lead times like "in the next hour" into an `occursAt` timestamp, and commits new events to `data/resets.json`.
-3. The app fetches that JSON from `raw.githubusercontent.com`, caches it locally, merges it with locally detected resets (deduped by id), and notifies you when a freshly announced event appears. Events announced more than 2 hours ago are marked as seen without notifying, so backfilling never floods Notification Center.
+1. The app reads @thsottiaux's posts straight from the two public Bluesky relays (`thsottiaux-bot.eurosky.social`, `thsottiaux-mirr.selfhosted.social`) every 5 minutes, and again within a minute of the Mac waking or the popover opening. Shared parsing in `tools/tibo-watch/lib.mjs` keeps posts that match reset phrasing, turns "in the next hour" or "tomorrow 10am PST" into an `occursAt` time, and reads which plans are covered ("all paid ChatGPT accounts", "Plus and Pro").
+2. As a fallback, a GitHub Actions workflow (`.github/workflows/tibo-watch.yml`) runs `tools/tibo-watch/check.mjs` on a schedule (free on public repos; GitHub often delays these runs by hours) and commits new events to `data/resets.json`, which the app also fetches.
+3. Events are merged with locally detected resets and deduped across mirrors by post time. You're notified (if **Reset Alerts** is on) about announcements up to 12 hours old, about scheduled resets until they land, and again when a scheduled reset lands. Older events are recorded silently, so backfilling never floods Notification Center.
 
 The merge **never edits or deletes existing entries**, which makes manual backfill safe. To record historical resets, add entries to `data/resets.json`:
 

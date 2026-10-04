@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::PathBuf, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::PathBuf,
+    sync::{Mutex, PoisonError},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -90,6 +95,12 @@ impl Default for ProviderPref {
 pub struct AppPrefs {
     /// Local notifications at 80%/95% used and when a window resets.
     pub usage_alerts: bool,
+    /// Notifications for resets announced by Tibo (independent of usage alerts).
+    #[serde(default = "bool_true")]
+    pub reset_alerts: bool,
+    /// One-row quota cards in the popover instead of the roomy default.
+    #[serde(default)]
+    pub dense_layout: bool,
     /// Compact layout: every visible tool under one menu-bar icon (the default,
     /// which resists macOS hiding it on crowded bars). Extended (false) gives
     /// each visible tool its own icon.
@@ -112,6 +123,8 @@ impl Default for AppPrefs {
     fn default() -> Self {
         Self {
             usage_alerts: true,
+            reset_alerts: true,
+            dense_layout: false,
             combined_tray: true,
             onboarding_complete: false,
             usage_alert_thresholds: default_alert_thresholds(),
@@ -154,7 +167,11 @@ impl AppPrefs {
     }
 
     fn prune_default(&mut self, id: &str) {
-        if self.providers.get(id).is_some_and(|pref| *pref == ProviderPref::default()) {
+        if self
+            .providers
+            .get(id)
+            .is_some_and(|pref| *pref == ProviderPref::default())
+        {
             self.providers.remove(id);
         }
     }
@@ -178,11 +195,14 @@ impl PrefsStore {
     }
 
     pub fn get(&self) -> AppPrefs {
-        self.state.lock().expect("preferences poisoned").clone()
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub fn update(&self, mutate: impl FnOnce(&mut AppPrefs)) -> AppPrefs {
-        let mut state = self.state.lock().expect("preferences poisoned");
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         mutate(&mut state);
         let snapshot = state.clone();
         drop(state);
@@ -233,6 +253,8 @@ mod tests {
         let prefs = AppPrefs::default();
         assert!(prefs.combined_tray);
         assert!(prefs.usage_alerts);
+        assert!(prefs.reset_alerts);
+        assert!(!prefs.dense_layout);
         assert!(prefs.is_visible(PROVIDER_CODEX));
         assert!(prefs.is_visible(PROVIDER_CLAUDE));
         assert!(prefs.is_visible(PROVIDER_CURSOR));
@@ -253,8 +275,10 @@ mod tests {
 
     #[test]
     fn migrates_legacy_tray_window_fields() {
-        let prefs = parse_prefs(r#"{"codexTrayWindow":"codex:primary","claudeTrayWindow":"session:primary"}"#)
-            .expect("prefs");
+        let prefs = parse_prefs(
+            r#"{"codexTrayWindow":"codex:primary","claudeTrayWindow":"session:primary"}"#,
+        )
+        .expect("prefs");
         assert_eq!(prefs.tray_window(PROVIDER_CODEX), "codex:primary");
         assert_eq!(prefs.tray_window(PROVIDER_CLAUDE), "session:primary");
         assert!(prefs.is_visible(PROVIDER_CODEX));
@@ -290,7 +314,10 @@ mod tests {
 
     #[test]
     fn alert_thresholds_validation() {
-        assert_eq!(normalize_alert_thresholds(&[95, 80, 80]).unwrap(), vec![80, 95]);
+        assert_eq!(
+            normalize_alert_thresholds(&[95, 80, 80]).unwrap(),
+            vec![80, 95]
+        );
         assert!(normalize_alert_thresholds(&[]).is_err());
         assert!(normalize_alert_thresholds(&[0]).is_err());
         assert!(normalize_alert_thresholds(&[101]).is_err());

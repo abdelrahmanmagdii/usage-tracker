@@ -25,21 +25,22 @@ pub struct UpdateStatus(Mutex<Option<String>>);
 
 impl UpdateStatus {
     pub fn pending_version(&self) -> Option<String> {
-        self.0.lock().expect("update status poisoned").clone()
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn set_pending(&self, version: String) {
-        *self.0.lock().expect("update status poisoned") = Some(version);
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(version);
     }
 }
 
 fn notify(app: &AppHandle, title: &str, body: &str) {
-    let _ = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show();
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 /// One check → silent download+install → pending-restart flag plus a macOS

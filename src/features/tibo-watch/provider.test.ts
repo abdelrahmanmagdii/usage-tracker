@@ -118,7 +118,7 @@ describe("tiboStatus", () => {
     expect(
       tiboStatus([event({ id: "ancient", announcedAt: "2026-07-01T00:00:00Z" })], now).label,
     ).toBe("No recent resets");
-    expect(tiboStatus([], now).label).toBe("No resets recorded");
+    expect(tiboStatus([], now).label).toBe("Watching for resets");
   });
 });
 

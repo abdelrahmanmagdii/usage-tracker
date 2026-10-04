@@ -19,7 +19,8 @@ use crate::provider::{
 };
 use crate::tray;
 
-const PERIOD_USAGE_URL: &str = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
+const PERIOD_USAGE_URL: &str =
+    "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
 const LEGACY_USAGE_URL: &str = "https://api2.cursor.sh/auth/usage";
 
 #[derive(Clone)]
@@ -66,7 +67,11 @@ impl CursorManager {
                 return Ok(self.snapshot().await);
             }
             CredentialRead::Unavailable(message) => {
-                if self.snapshot().await.updated_at.is_none() {
+                let snapshot = self.snapshot().await;
+                if !crate::provider::keep_last_meter(
+                    snapshot.connection,
+                    snapshot.updated_at.is_some(),
+                ) {
                     self.set_connection(
                         ConnectionState::CliNotFound,
                         Some("No Cursor login was found on this Mac".into()),
@@ -152,8 +157,12 @@ impl CursorManager {
     async fn set_connection(&self, connection: ConnectionState, diagnostic: Option<String>) {
         {
             let mut state = self.state.write().await;
-            state.connection = connection;
-            state.diagnostic = diagnostic;
+            if connection == ConnectionState::CliNotFound {
+                crate::provider::conceal_provider(&mut state, diagnostic);
+            } else {
+                state.connection = connection;
+                state.diagnostic = diagnostic;
+            }
         }
         self.emit_state().await;
     }
@@ -174,7 +183,9 @@ enum CredentialRead {
 async fn classify_cursor_response(response: reqwest::Response) -> Result<Value, String> {
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err("Cursor rejected the stored login. Sign in through the Cursor app, then retry.".into());
+        return Err(
+            "Cursor rejected the stored login. Sign in through the Cursor app, then retry.".into(),
+        );
     }
     if !status.is_success() {
         return Err(format!("Cursor usage endpoint returned HTTP {status}"));
@@ -201,9 +212,14 @@ async fn load_access_token() -> CredentialRead {
     };
     match tokio::fs::metadata(&path).await {
         Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return CredentialRead::Absent,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return CredentialRead::Absent
+        }
         Err(error) => {
-            return CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display()))
+            return CredentialRead::Unavailable(format!(
+                "Could not read {}: {error}",
+                path.display()
+            ))
         }
     }
     match tokio::task::spawn_blocking(move || read_cursor_token(&path)).await {
@@ -331,7 +347,8 @@ fn normalize_period_usage(raw: &Value) -> Option<Value> {
 }
 
 fn percent_from_spend(plan: &Value) -> Option<f64> {
-    let used = finite_f64(plan.get("totalSpend")).or_else(|| finite_f64(plan.get("includedSpend")))?;
+    let used =
+        finite_f64(plan.get("totalSpend")).or_else(|| finite_f64(plan.get("includedSpend")))?;
     let limit = finite_f64(plan.get("limit")).filter(|limit| *limit > 0.0)?;
     Some((used / limit) * 100.0)
 }
@@ -340,7 +357,8 @@ fn normalize_legacy_usage(raw: &Value) -> Option<Value> {
     let gpt4 = raw.get("gpt-4")?;
     let used = finite_f64(gpt4.get("numRequests"))?;
     let limit = finite_f64(gpt4.get("maxRequestUsage")).filter(|limit| *limit > 0.0)?;
-    let resets_at = parse_reset_timestamp(raw.get("startOfMonth")).map(|start| start + 30.0 * 86_400.0);
+    let resets_at =
+        parse_reset_timestamp(raw.get("startOfMonth")).map(|start| start + 30.0 * 86_400.0);
     Some(rate_limits_map(vec![limit_entry(
         "premium",
         "Monthly",
@@ -378,8 +396,14 @@ mod tests {
 
     #[test]
     fn strips_json_quotes_from_the_sqlite_value() {
-        assert_eq!(parse_stored_token("\"abc.def.ghi\"\n").as_deref(), Some("abc.def.ghi"));
-        assert_eq!(parse_stored_token("abc.def.ghi").as_deref(), Some("abc.def.ghi"));
+        assert_eq!(
+            parse_stored_token("\"abc.def.ghi\"\n").as_deref(),
+            Some("abc.def.ghi")
+        );
+        assert_eq!(
+            parse_stored_token("abc.def.ghi").as_deref(),
+            Some("abc.def.ghi")
+        );
         assert!(parse_stored_token("   ").is_none());
     }
 
@@ -408,9 +432,15 @@ mod tests {
             .get("rateLimitsByLimitId")
             .and_then(Value::as_object)
             .expect("map");
-        assert_eq!(by_id["plan"].pointer("/primary/usedPercent"), Some(&json!(41.0)));
+        assert_eq!(
+            by_id["plan"].pointer("/primary/usedPercent"),
+            Some(&json!(41.0))
+        );
         assert_eq!(by_id["plan"].get("windowLabel"), Some(&json!("Monthly")));
-        assert_eq!(by_id["auto"].pointer("/secondary/usedPercent"), Some(&json!(12.0)));
+        assert_eq!(
+            by_id["auto"].pointer("/secondary/usedPercent"),
+            Some(&json!(12.0))
+        );
         let windows = crate::tray::collect_windows(Some(&normalized));
         let labels: Vec<&str> = windows.iter().map(|window| window.label.as_str()).collect();
         assert!(labels.contains(&"Monthly"));

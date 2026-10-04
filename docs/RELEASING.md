@@ -99,9 +99,9 @@ git tag v0.1.0 && git push origin main --tags
 
 The workflow runs the test suite, builds a universal binary for Intel and
 Apple Silicon, signs it, sends it to Apple for notarization, staples the
-ticket, and opens a **draft** release with the `.dmg`, the updater bundle
-(`*.app.tar.gz` + `*.sig`), and `latest.json` attached. Review the draft and
-publish it — `releases/latest` then points at it and running copies of
+ticket, and publishes the release with the `.dmg`, the updater bundle
+(`*.app.tar.gz` + `*.sig`), and `latest.json` attached. `releases/latest`
+then points at it right away and running copies of
 UsageBar pick up the update (they check on a six-hour cycle, and the tray
 menu gains a **Restart to Update** item once one has downloaded).
 

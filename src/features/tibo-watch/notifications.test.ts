@@ -118,3 +118,19 @@ describe("notification copy", () => {
     expect(body).toContain("spend what's left");
   });
 });
+
+describe("plans and gating", () => {
+  it("leads the incoming body with the plans", async () => {
+    const { resetNotificationBody, planSummary } = await import("./notifications");
+    const nowMs = Date.parse("2026-10-03T12:00:00Z");
+    const event = {
+      id: "p",
+      announcedAt: new Date(nowMs - 60_000).toISOString(),
+      occursAt: new Date(nowMs + 3_600_000).toISOString(),
+      source: "tibo" as const,
+      plansAffected: ["Plus", "Pro"],
+    };
+    expect(planSummary(event)).toBe("Plus, Pro");
+    expect(resetNotificationBody(event, nowMs)).toMatch(/^Plus, Pro: lands in ~1h/);
+  });
+});
