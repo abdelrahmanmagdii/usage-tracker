@@ -197,3 +197,39 @@ export function useAntigravityMeter() {
     preview,
   });
 }
+
+function geminiPreview(): CodexBackendState {
+  const now = Date.now() / 1000;
+  return {
+    connection: "connected",
+    updatedAt: Math.floor(Date.now() / 1_000),
+    account: { type: "oauth", planType: "Free" },
+    rateLimits: {
+      rateLimitsByLimitId: {
+        "gemini-pro": {
+          limitId: "gemini-pro",
+          windowLabel: "Pro models",
+          limitName: "Gemini Pro",
+          primary: { usedPercent: 38, resetsAt: now + 11 * 3_600 },
+        },
+        "gemini-flash": {
+          limitId: "gemini-flash",
+          windowLabel: "Flash models",
+          limitName: "Gemini Flash",
+          secondary: { usedPercent: 12, resetsAt: now + 11 * 3_600 },
+        },
+      },
+    },
+  };
+}
+
+export function useGeminiMeter() {
+  const preview = useCallback(geminiPreview, []);
+  return useProviderMeter({
+    provider: "gemini",
+    getCommand: "get_gemini_state",
+    refreshCommand: "refresh_gemini",
+    event: "gemini://state",
+    preview,
+  });
+}

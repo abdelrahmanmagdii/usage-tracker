@@ -1,6 +1,6 @@
 import type { CodexBackendState } from "../types/codex";
 
-export const PROVIDER_IDS = ["codex", "claude", "cursor", "opencode", "devin", "antigravity"] as const;
+export const PROVIDER_IDS = ["codex", "claude", "cursor", "opencode", "devin", "antigravity", "gemini"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export type ProviderPref = {
@@ -60,6 +60,7 @@ export const PROVIDER_CATALOG: Array<{
   { id: "opencode", label: "OpenCode Go", accent: "opencode" },
   { id: "devin", label: "Devin", accent: "devin" },
   { id: "antigravity", label: "Antigravity", accent: "antigravity" },
+  { id: "gemini", label: "Gemini CLI", accent: "gemini" },
 ];
 
 export function isVisible(prefs: AppPrefs, id: ProviderId): boolean {
@@ -117,6 +118,7 @@ export const PROVIDER_SETUP: Record<ProviderId, string> = {
   opencode: "In OpenCode, run /connect and choose OpenCode Go.",
   devin: "Run devin auth login so the CLI stores a login on this Mac.",
   antigravity: "Open the Antigravity app and sign in. UsageBar reads quota from the running app.",
+  gemini: "Run gemini once and sign in with a paid/Workspace Google account (personal accounts no longer get quota access).",
 };
 
 export type MissingProvider = {

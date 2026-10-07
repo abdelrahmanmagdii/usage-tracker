@@ -1,8 +1,8 @@
 # UsageBar
 
-**Codex, Claude, Cursor, OpenCode, Devin, and Antigravity quota windows and reset times, at a glance.**
+**Codex, Claude, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI quota windows and reset times, at a glance.**
 
-UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding quota windows, how much remains, and exactly when each window resets. Codex data comes from your existing Codex login through the official Codex App Server—no OpenAI API key and no credential scraping. If Claude Code, Cursor, OpenCode Go, the Devin CLI, or Google Antigravity is signed in on this Mac, those meters show up too.
+UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding quota windows, how much remains, and exactly when each window resets. Codex data comes from your existing Codex login through the official Codex App Server—no OpenAI API key and no credential scraping. If Claude Code, Cursor, OpenCode Go, the Devin CLI, Google Antigravity, or the Gemini CLI is signed in on this Mac, those meters show up too.
 
 The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset countdown for each provider — how much you have left, matching what the official apps show, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
 
@@ -22,7 +22,7 @@ By default visible providers share **one** menu-bar icon (`63% · 8%`, Codex · 
 
 **UsageBar’s wedge** is narrower and opinionated:
 
-- **Multi-CLI including Devin** — Codex, Claude Code, Cursor, OpenCode, and Devin as first-class meters in one menubar
+- **Multi-CLI including Devin** — Codex, Claude Code, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI as first-class meters in one menubar
 - **Local / read-only CLI logins** — reuses credentials those tools already keep on your Mac; never writes, refreshes, or ships them to a UsageBar server
 - **Notarized universal `.dmg`** — drag to Applications; signed releases open without a Gatekeeper fight
 
@@ -35,8 +35,9 @@ Download the `.dmg` from
 open it, and drag UsageBar to Applications. Signed releases are notarized by
 Apple, so they open without a security warning. Or build from source below.
 
-If a Homebrew tap is set up (`Casks/usagebar.rb` in this repo),
-`brew install --cask abdelrahmanmagdii/usagebar/usagebar` works too.
+A Homebrew tap is in the works — `homebrew-tap/` seeds the
+`abdelrahmanmagdii/homebrew-usagebar` repo and the Release workflow keeps its
+cask on the latest tag once it is published (see `homebrew-tap/SETUP.md`).
 
 The [public site](https://abdelrahmanmagdii.github.io/usage-tracker/) is the
 privacy and support URL. Distribution is the notarized GitHub `.dmg` only —
@@ -59,7 +60,7 @@ Maintainers: see [docs/RELEASING.md](docs/RELEASING.md) for how signed releases 
 
 - macOS 10.15 or newer
 - A working, authenticated `codex` CLI for the Codex meter
-- Optional: signed-in Claude Code, Cursor, OpenCode Go, Devin CLI, and/or Antigravity for those meters
+- Optional: signed-in Claude Code, Cursor, OpenCode Go, Devin CLI, Antigravity, and/or Gemini CLI for those meters
 - Node.js 20+ and Rust for development
 
 ## Run locally
@@ -119,6 +120,14 @@ If the app is closed, UsageBar can use a still-valid access token from Keychain 
 
 If Antigravity is not signed in, the Antigravity tray icon and popover section stay hidden. Open the app to bring the meter back.
 
+### Gemini CLI
+
+The Gemini CLI meter reads the OAuth session the `gemini` CLI keeps in `~/.gemini/oauth_creds.json` and asks Google's `retrieveUserQuota` endpoint for its per-model quota buckets, grouped into Pro, Flash, and other model families; each family meter mirrors its worst model and shows that model's reset time. Sign-in details — project id and plan name — come from the same `loadCodeAssist` call the CLI itself makes. Access is strictly read-only: the token is never refreshed, rewritten, or sent anywhere except `cloudcode-pa.googleapis.com`, so this app can never invalidate your Gemini CLI login.
+
+Two caveats. A `~/.gemini/settings.json` set to API-key or Vertex AI auth keeps no OAuth session at all, so the meter stays hidden. And Google no longer grants quota access to personal (free) Google accounts — a consumer sign-in gets turned away by the endpoint, so on those accounts the meter hides rather than erroring; the Antigravity provider already covers that login. If the token expires, run `gemini` once and sign in again; until then the meter keeps its last reading marked `~`.
+
+If no Gemini CLI login exists on the Mac, the Gemini tray icon and popover section stay hidden entirely.
+
 Protocol assumptions were checked against TypeScript bindings generated by the locally installed Codex CLI (`codex app-server generate-ts`). The renderer intentionally uses narrow, defensive application types so new or unknown response fields do not break the app.
 
 The app is split into:
@@ -141,6 +150,7 @@ Private usage stays on this Mac. UsageBar does not read Codex credential files, 
 - OpenCode Go — [`src-tauri/src/opencode.rs`](src-tauri/src/opencode.rs): reads `auth.json` and sends the key only to `opencode.ai`.
 - Devin CLI — [`src-tauri/src/devin.rs`](src-tauri/src/devin.rs): reads `~/.local/share/devin/credentials.toml` and sends the key only to the API server the CLI itself uses (typically `server.codeium.com`).
 - Antigravity — [`src-tauri/src/antigravity.rs`](src-tauri/src/antigravity.rs): reads quota from the running Antigravity app on this Mac. If the app is closed, it can send a still-valid access token from Keychain item `gemini` / `antigravity` (or `~/.gemini/antigravity-cli/antigravity-oauth-token`) only to Google Cloud Code (`daily-cloudcode-pa.googleapis.com`). It does not refresh that token.
+- Gemini CLI — [`src-tauri/src/gemini.rs`](src-tauri/src/gemini.rs): reads `~/.gemini/oauth_creds.json` and sends the token only to Google Cloud Code (`cloudcode-pa.googleapis.com`). It does not refresh that token.
 
 In every case the credential is **never written or rotated**, never shown in the UI, and never sent to a UsageBar server. If a session expires, the meter asks you to sign in through that tool again.
 
@@ -173,8 +183,7 @@ Use a unique `id` (a `manual-*` prefix is fine), ISO-8601 timestamps, and `sourc
 
 Knobs, all optional:
 
-- `TIBO_HANDLE` — watch a different account (scraper)
-- `TIBO_INSTANCES` — comma-separated Nitter mirrors, tried in order (scraper)
+- `TIBO_BSKY_ACTORS` — comma-separated Bluesky relays, all read and merged (scraper)
 - `TIBO_DATA_FILE` — alternate resets.json path (scraper)
 - `VITE_TIBO_FEED_URL` — point the app at a forked/self-hosted feed (build-time)
 
@@ -182,7 +191,7 @@ Run the scraper yourself with `node tools/tibo-watch/check.mjs` (`--dry-run` to 
 
 ## Known limitations
 
-- The reset feed relies on unofficial Nitter mirrors, which rate-limit and occasionally return empty responses; the workflow retries and simply catches up on the next run. Local on-device reset detection remains as a fallback, and hand-written `manual` entries always win.
+- The reset feed relies on unofficial X→Bluesky relays of @thsottiaux, which can lag or drop posts; the scheduled workflow retries and simply catches up on the next run. Local on-device reset detection remains as a fallback, and hand-written `manual` entries always win.
 - GitHub's scheduled workflows can be delayed by a few minutes under load.
 - Auto-updates come from the GitHub release the app is running: a signed `latest.json` is checked periodically and on demand (tray menu → Check for Updates…), and an update applies on the next restart. The very first install still needs a manual `.dmg` download.
 - A GUI-launched app must still be able to locate an executable `codex` command; common Homebrew paths and the login shell are checked.
@@ -191,6 +200,5 @@ Run the scraper yourself with `node tools/tibo-watch/check.mjs` (`--dry-run` to 
 
 - Richer local history trends and reset correlation
 - Local Claude usage history and trends
-- A Gemini CLI provider
 
 UsageBar is an independent community project and is not an official OpenAI product.

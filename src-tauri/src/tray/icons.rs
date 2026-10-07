@@ -10,6 +10,7 @@ pub(super) fn provider_tray_icon(provider: Provider) -> Image<'static> {
         Provider::OpenCode => opencode_tray_icon(),
         Provider::Devin => devin_tray_icon(),
         Provider::Antigravity => antigravity_tray_icon(),
+        Provider::Gemini => gemini_tray_icon(),
     }
 }
 
@@ -400,6 +401,56 @@ pub(super) fn inside_antigravity_mark(x: f64, y: f64) -> bool {
         (9.7, 10.3),
         (3.6, 9.0),
         (9.7, 7.7),
+    ];
+    point_in_polygon(x, y, &VERTS)
+}
+
+/// Gemini CLI's menu-bar mark for the extended layout: the Gemini sparkle in
+/// magenta. Taller and pinched tighter than Antigravity's blue star so the two
+/// Google-adjacent marks don't read as duplicates in the menu bar.
+pub fn gemini_tray_icon() -> Image<'static> {
+    const WIDTH: u32 = 22;
+    const HEIGHT: u32 = 18;
+    const SAMPLES: u32 = 4;
+    let mut rgba = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
+
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let mut coverage = 0_u32;
+            for sample_y in 0..SAMPLES {
+                for sample_x in 0..SAMPLES {
+                    let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
+                    let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
+                    if inside_gemini_mark(px, py) {
+                        coverage += 1;
+                    }
+                }
+            }
+            if coverage == 0 {
+                continue;
+            }
+            let alpha = ((coverage * 255) / (SAMPLES * SAMPLES)) as u8;
+            let blend = y as f64 / (HEIGHT - 1) as f64;
+            let red = (228.0 + (158.0 - 228.0) * blend).round() as u8;
+            let green = (104.0 + (60.0 - 104.0) * blend).round() as u8;
+            let blue = (216.0 + (182.0 - 216.0) * blend).round() as u8;
+            let index = ((y * WIDTH + x) * 4) as usize;
+            rgba[index..index + 4].copy_from_slice(&[red, green, blue, alpha]);
+        }
+    }
+    Image::new_owned(rgba, WIDTH, HEIGHT)
+}
+
+pub(super) fn inside_gemini_mark(x: f64, y: f64) -> bool {
+    const VERTS: [(f64, f64); 8] = [
+        (11.0, 0.8),
+        (12.8, 7.2),
+        (19.2, 9.0),
+        (12.8, 10.8),
+        (11.0, 17.2),
+        (9.2, 10.8),
+        (2.8, 9.0),
+        (9.2, 7.2),
     ];
     point_in_polygon(x, y, &VERTS)
 }

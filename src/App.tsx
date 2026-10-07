@@ -16,7 +16,7 @@ import { MissingProviders } from "./components/MissingProviders";
 import { Onboarding } from "./components/Onboarding";
 import { Freshness } from "./components/Freshness";
 import { useCodexMeter } from "./hooks/useCodexMeter";
-import { useClaudeMeter, useCursorMeter, useDevinMeter, useOpenCodeMeter, useAntigravityMeter } from "./hooks/useClaudeMeter";
+import { useClaudeMeter, useCursorMeter, useDevinMeter, useOpenCodeMeter, useAntigravityMeter, useGeminiMeter } from "./hooks/useClaudeMeter";
 import {
   DEFAULT_PREFS,
   isVisible,
@@ -48,6 +48,7 @@ export default function App() {
   const opencode = useOpenCodeMeter();
   const devin = useDevinMeter();
   const antigravity = useAntigravityMeter();
+  const gemini = useGeminiMeter();
   const [prefs, setPrefs] = useState<AppPrefs>(
     () => previewPrefs(window.location.search) ?? DEFAULT_PREFS,
   );
@@ -138,6 +139,7 @@ export default function App() {
   const showOpenCode = isVisible(prefs, "opencode");
   const showDevin = isVisible(prefs, "devin");
   const showAntigravity = isVisible(prefs, "antigravity");
+  const showGemini = isVisible(prefs, "gemini");
   const connected = state.connection === "connected";
   const visibleBuckets = [
     ...(showCodex ? buckets : []),
@@ -146,12 +148,13 @@ export default function App() {
     ...(showOpenCode ? opencode.buckets : []),
     ...(showDevin ? devin.buckets : []),
     ...(showAntigravity ? antigravity.buckets : []),
+    ...(showGemini ? gemini.buckets : []),
   ];
   const mostCooked = visibleBuckets.reduce<(typeof visibleBuckets)[number] | undefined>(
     (lowest, bucket) => !lowest || bucket.remainingPercent < lowest.remainingPercent ? bucket : lowest,
     undefined,
   );
-  const anyRefreshing = refreshing || claude.refreshing || cursor.refreshing || opencode.refreshing || devin.refreshing || antigravity.refreshing;
+  const anyRefreshing = refreshing || claude.refreshing || cursor.refreshing || opencode.refreshing || devin.refreshing || antigravity.refreshing || gemini.refreshing;
 
   // Every provider renders nothing while its login is absent (cli_not_found)
   // or still starting, so a Mac with no tools — or every meter hidden — would
@@ -164,6 +167,7 @@ export default function App() {
     { show: showOpenCode, connection: opencode.state.connection },
     { show: showDevin, connection: devin.state.connection },
     { show: showAntigravity, connection: antigravity.state.connection },
+    { show: showGemini, connection: gemini.state.connection },
   ];
   const othersRender = otherMeters.some(
     ({ show, connection }) =>
@@ -327,6 +331,17 @@ export default function App() {
             signedOutHint="open the Antigravity app and sign in there. UsageBar reads quota from the running app."
           />
         ) : null}
+        {showGemini ? (
+          <ProviderSection
+            id="gemini"
+            label="Gemini CLI"
+            icon={<Sparkle size={14} aria-hidden="true" />}
+            meter={gemini}
+            now={now}
+            dense={prefs.denseLayout}
+            signedOutHint="run `gemini` and sign in with a paid/Workspace Google account. Personal accounts no longer get quota access."
+          />
+        ) : null}
         {!codexRenders && !othersRender ? (
           <div className="state-panel glass-tile" role="status">
             <PlugZap size={22} strokeWidth={1.8} aria-hidden="true" />
@@ -334,7 +349,7 @@ export default function App() {
             <p>
               {nothingEnabled
                 ? "Turn a tool back on in Settings to see its quota here."
-                : "UsageBar reads the logins Codex, Claude Code, Cursor, OpenCode Go, Devin, and Antigravity already keep on this Mac. Sign in to one of them, then refresh."}
+                : "UsageBar reads the logins Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI already keep on this Mac. Sign in to one of them, then refresh."}
             </p>
             <button className="secondary-button" onClick={() => setOnboarding(true)}>
               Open setup guide
@@ -349,6 +364,7 @@ export default function App() {
             opencode: opencode.state,
             devin: devin.state,
             antigravity: antigravity.state,
+            gemini: gemini.state,
           })}
         />
       </div>
@@ -366,6 +382,7 @@ export default function App() {
             if (showOpenCode) void opencode.refresh();
             if (showDevin) void devin.refresh();
             if (showAntigravity) void antigravity.refresh();
+            if (showGemini) void gemini.refresh();
           }}
           disabled={anyRefreshing}
           aria-label="Refresh usage data"
@@ -452,6 +469,17 @@ export default function App() {
                       ? "Reading the login kept by Antigravity"
                       : antigravity.state.diagnostic ?? "Open the Antigravity app and sign in",
                   onRetry: () => void antigravity.refresh(),
+                }]),
+            ...(gemini.state.connection === "cli_not_found"
+              ? []
+              : [{
+                  label: "Gemini CLI",
+                  connected: gemini.state.connection === "connected",
+                  detail:
+                    gemini.state.connection === "connected"
+                      ? "Reading the login kept by the gemini CLI"
+                      : gemini.state.diagnostic ?? "Run `gemini` and sign in",
+                  onRetry: () => void gemini.refresh(),
                 }]),
           ]}
         />
