@@ -3,11 +3,8 @@
  * Tibo Watch checker — polls @thsottiaux's public timeline and merges
  * surprise-reset announcements into data/resets.json.
  *
- * Sources:
- *   1. Bluesky mirrors of @thsottiaux via the public AppView (no auth) —
- *      the primary source; every public Nitter instance has gone dark.
- *   2. Free Nitter RSS mirrors, in case one comes back.
- * All sources are read and merged; the same tweet seen via several mirrors
+ * Source: Bluesky mirrors of @thsottiaux via the public AppView (no auth).
+ * All relays are read and merged; the same tweet seen via several relays
  * is stored once (deduped by its timestamp).
  *
  * Usage:
@@ -15,9 +12,7 @@
  *   node tools/tibo-watch/check.mjs --dry-run  # fetch + print, write nothing
  *
  * Env overrides:
- *   TIBO_HANDLE       X handle to watch (default: thsottiaux)
  *   TIBO_BSKY_ACTORS  Comma-separated Bluesky relay handles
- *   TIBO_INSTANCES    Comma-separated Nitter base URLs
  *   TIBO_DATA_FILE    Path to resets.json (default: ../../data/resets.json)
  */
 import { execFile } from "node:child_process";
@@ -30,23 +25,14 @@ import {
   bskyFeedUrl,
   mergeEvents,
   parseBskyFeed,
-  parseRssItems,
   toResetEvent,
 } from "./lib.mjs";
 
 const execFileAsync = promisify(execFile);
 
-const HANDLE = process.env.TIBO_HANDLE || "thsottiaux";
 const BSKY_ACTORS = (process.env.TIBO_BSKY_ACTORS || DEFAULT_BSKY_ACTORS.join(","))
   .split(",")
   .map((value) => value.trim())
-  .filter(Boolean);
-const INSTANCES = (
-  process.env.TIBO_INSTANCES ||
-  "https://nitter.net,https://nitter.privacyredirect.com,https://nitter.tiekoetter.com"
-)
-  .split(",")
-  .map((value) => value.trim().replace(/\/$/, ""))
   .filter(Boolean);
 const DATA_FILE =
   process.env.TIBO_DATA_FILE ||
@@ -55,14 +41,14 @@ const DRY_RUN = process.argv.includes("--dry-run");
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
 
-const ATTEMPTS_PER_INSTANCE = 2;
+const ATTEMPTS_PER_SOURCE = 2;
 const RETRY_DELAY_MS = 4_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * curl first: several Nitter fronts answer HTTP/1.1 fetch clients with empty
- * 200s, while curl (HTTP/2) gets the real feed. Node's global fetch is the
+ * curl first: the public AppView serves curl (HTTP/2) more reliably than some
+ * Node fetch clients, which can get empty 200s. Node's global fetch is the
  * fallback for environments without curl.
  */
 async function fetchBody(url) {
@@ -84,22 +70,15 @@ async function fetchBody(url) {
 }
 
 function sources() {
-  return [
-    ...BSKY_ACTORS.map((actor) => ({
-      url: bskyFeedUrl(actor),
-      parse: (body) => parseBskyFeed(body, actor),
-    })),
-    ...INSTANCES.map((base) => ({
-      url: `${base}/${HANDLE}/rss`,
-      // Nitter instances soft-fail with empty 200s or anti-bot HTML pages.
-      parse: (body) => parseRssItems(body, HANDLE),
-    })),
-  ];
+  return BSKY_ACTORS.map((actor) => ({
+    url: bskyFeedUrl(actor),
+    parse: (body) => parseBskyFeed(body, actor),
+  }));
 }
 
 async function fetchSource(source) {
   let lastError = null;
-  for (let attempt = 1; attempt <= ATTEMPTS_PER_INSTANCE; attempt += 1) {
+  for (let attempt = 1; attempt <= ATTEMPTS_PER_SOURCE; attempt += 1) {
     try {
       const items = source.parse(await fetchBody(source.url));
       if (items.length === 0) throw new Error("no timeline items parsed");
@@ -108,7 +87,7 @@ async function fetchSource(source) {
     } catch (error) {
       lastError = error;
       console.warn(`tibo-watch: ${source.url} attempt ${attempt} failed (${error.message})`);
-      if (attempt < ATTEMPTS_PER_INSTANCE) await sleep(RETRY_DELAY_MS);
+      if (attempt < ATTEMPTS_PER_SOURCE) await sleep(RETRY_DELAY_MS);
     }
   }
   throw lastError;

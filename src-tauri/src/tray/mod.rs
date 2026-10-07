@@ -12,6 +12,7 @@ use crate::claude::ClaudeManager;
 use crate::codex::process::{CodexManager, ConnectionState};
 use crate::cursor::CursorManager;
 use crate::devin::DevinManager;
+use crate::gemini::GeminiManager;
 use crate::opencode::OpenCodeManager;
 use crate::prefs::PrefsStore;
 use crate::provider::ProviderState;
@@ -28,6 +29,7 @@ pub const CURSOR_TRAY_ID: &str = "provider-cursor";
 pub const OPENCODE_TRAY_ID: &str = "provider-opencode";
 pub const DEVIN_TRAY_ID: &str = "provider-devin";
 pub const ANTIGRAVITY_TRAY_ID: &str = "provider-antigravity";
+pub const GEMINI_TRAY_ID: &str = "provider-gemini";
 
 /// Unix timestamp (seconds) until which an announced-but-not-yet-landed reset
 /// is pending. While pending, the Codex tray title carries a ⚡ prefix so the
@@ -134,16 +136,18 @@ pub enum Provider {
     OpenCode,
     Devin,
     Antigravity,
+    Gemini,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 6] = [
+    pub const ALL: [Provider; 7] = [
         Provider::Codex,
         Provider::Claude,
         Provider::Cursor,
         Provider::OpenCode,
         Provider::Devin,
         Provider::Antigravity,
+        Provider::Gemini,
     ];
 
     pub fn key(self) -> &'static str {
@@ -154,6 +158,7 @@ impl Provider {
             Provider::OpenCode => crate::prefs::PROVIDER_OPENCODE,
             Provider::Devin => crate::prefs::PROVIDER_DEVIN,
             Provider::Antigravity => crate::prefs::PROVIDER_ANTIGRAVITY,
+            Provider::Gemini => crate::prefs::PROVIDER_GEMINI,
         }
     }
 
@@ -165,6 +170,7 @@ impl Provider {
             Provider::OpenCode => "OpenCode Go",
             Provider::Devin => "Devin",
             Provider::Antigravity => "Antigravity",
+            Provider::Gemini => "Gemini CLI",
         }
     }
 
@@ -176,13 +182,15 @@ impl Provider {
             Provider::OpenCode => OPENCODE_TRAY_ID,
             Provider::Devin => DEVIN_TRAY_ID,
             Provider::Antigravity => ANTIGRAVITY_TRAY_ID,
+            Provider::Gemini => GEMINI_TRAY_ID,
         }
     }
 
     /// Menu-bar ink for this tool. Compact layout uses these as left-to-right
     /// bars next to the percentages; extended layout paints the same colors
     /// into each tool's logo. Distinct on purpose: purple Codex, coral Claude,
-    /// teal Cursor, indigo OpenCode, amber Devin, blue Antigravity.
+    /// teal Cursor, indigo OpenCode, amber Devin, blue Antigravity, magenta
+    /// Gemini.
     fn color(self) -> [f64; 3] {
         match self {
             Provider::Codex => [140.0, 92.0, 240.0],
@@ -191,6 +199,7 @@ impl Provider {
             Provider::OpenCode => [79.0, 70.0, 229.0],
             Provider::Devin => [212.0, 132.0, 38.0],
             Provider::Antigravity => [66.0, 133.0, 244.0],
+            Provider::Gemini => [203.0, 88.0, 192.0],
         }
     }
 
@@ -375,6 +384,8 @@ fn build_unified_menu(
     let updates = update_menu_item(app)?;
     let walkthrough =
         MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
+    let star =
+        MenuItem::with_id(app, "star-github", "Star UsageBar on GitHub", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
 
     use tauri::menu::IsMenuItem;
@@ -390,6 +401,7 @@ fn build_unified_menu(
         &updates,
         &sep_after_toggles,
         &walkthrough,
+        &star,
         &quit,
     ]);
     Menu::with_items(app, &items)
@@ -436,6 +448,8 @@ fn build_provider_menu(
     let updates = update_menu_item(app)?;
     let walkthrough =
         MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
+    let star =
+        MenuItem::with_id(app, "star-github", "Star UsageBar on GitHub", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
     let items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
         &refresh,
@@ -448,6 +462,7 @@ fn build_provider_menu(
         &updates,
         &sep_after_toggles,
         &walkthrough,
+        &star,
         &quit,
     ];
     Menu::with_items(app, &items)
@@ -547,6 +562,10 @@ async fn all_provider_views(
     if let Some(manager) = app.try_state::<AntigravityManager>() {
         let state = manager.inner().snapshot().await;
         views.push(optional_view(Provider::Antigravity, prefs, now, &state));
+    }
+    if let Some(manager) = app.try_state::<GeminiManager>() {
+        let state = manager.inner().snapshot().await;
+        views.push(optional_view(Provider::Gemini, prefs, now, &state));
     }
     views
 }
@@ -849,6 +868,9 @@ pub fn refresh_all_providers(app: &AppHandle) {
     let antigravity = app
         .try_state::<AntigravityManager>()
         .map(|state| state.inner().clone());
+    let gemini = app
+        .try_state::<GeminiManager>()
+        .map(|state| state.inner().clone());
     tauri::async_runtime::spawn(async move {
         if prefs.is_visible(crate::prefs::PROVIDER_CODEX) {
             if let Some(codex) = codex {
@@ -878,6 +900,11 @@ pub fn refresh_all_providers(app: &AppHandle) {
         if prefs.is_visible(crate::prefs::PROVIDER_ANTIGRAVITY) {
             if let Some(antigravity) = antigravity {
                 let _ = antigravity.refresh().await;
+            }
+        }
+        if prefs.is_visible(crate::prefs::PROVIDER_GEMINI) {
+            if let Some(gemini) = gemini {
+                let _ = gemini.refresh().await;
             }
         }
     });
@@ -934,6 +961,11 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         "restart-update" => {
             tauri::process::restart(&app.env());
+        }
+        "star-github" => {
+            let _ = std::process::Command::new("/usr/bin/open")
+                .arg("https://github.com/abdelrahmanmagdii/usage-tracker")
+                .spawn();
         }
         "show-onboarding" => {
             if let Some(window) = app.get_webview_window("main") {

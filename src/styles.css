@@ -299,6 +299,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); o
 .provider-block[data-provider="opencode"] { --provider-accent: #4f46e5; }
 .provider-block[data-provider="devin"] { --provider-accent: #d48426; }
 .provider-block[data-provider="antigravity"] { --provider-accent: #4285f4; }
+.provider-block[data-provider="gemini"] { --provider-accent: #c85ac0; }
 .missing-providers { margin: 14px 14px 12px; padding: 10px 12px 11px; border: 1px solid rgba(91, 72, 132, .1); border-radius: 14px; background: rgba(255, 255, 255, .42); }
 .missing-providers summary { cursor: pointer; color: var(--text-secondary); font: 650 11.5px/16px var(--font-ui); list-style: none; }
 .missing-providers summary::-webkit-details-marker { display: none; }

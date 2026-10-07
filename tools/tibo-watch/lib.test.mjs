@@ -1,56 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  decodeEntities,
   isResetTweet,
   mergeEvents,
   parseBskyFeed,
   parseLeadTimeMinutes,
   parseOccursAt,
   parsePlans,
-  parseRssItems,
   toResetEvent,
 } from "./lib.mjs";
-
-const SAMPLE_RSS = `<?xml version="1.0" encoding="UTF-8"?>
-<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
-  <channel>
-    <title>Tibo / @thsottiaux</title>
-    <item>
-      <title>Old news actually from a bunch of days ago, but crossed that 15M. Enjoy a nice reset everyone. Landing in the next hour or so, go /fast.</title>
-      <dc:creator>@thsottiaux</dc:creator>
-      <pubDate>Thu, 13 Aug 2026 01:01:37 GMT</pubDate>
-      <guid isPermaLink="false">2087706104814023111</guid>
-      <link>https://nitter.net/thsottiaux/status/2087706104814023111#m</link>
-    </item>
-    <item>
-      <title>Typical conversation with @ajambrosino &amp; friends</title>
-      <pubDate>Wed, 12 Aug 2026 22:03:35 GMT</pubDate>
-      <guid isPermaLink="false">2087660979342512391</guid>
-      <link>https://nitter.net/thsottiaux/status/2087660979342512391#m</link>
-    </item>
-    <item>
-      <title>broken item without guid</title>
-      <pubDate>Wed, 12 Aug 2026 21:00:00 GMT</pubDate>
-    </item>
-  </channel>
-</rss>`;
-
-describe("parseRssItems", () => {
-  it("extracts well-formed items and skips broken ones", () => {
-    const items = parseRssItems(SAMPLE_RSS, "thsottiaux");
-    assert.equal(items.length, 2);
-    assert.equal(items[0].id, "tibo-2087706104814023111");
-    assert.equal(items[0].announcedAt, "2026-08-13T01:01:37.000Z");
-    assert.equal(items[0].sourceUrl, "https://x.com/thsottiaux/status/2087706104814023111");
-    assert.equal(items[1].text, "Typical conversation with @ajambrosino & friends");
-  });
-
-  it("returns nothing for malformed input", () => {
-    assert.deepEqual(parseRssItems("not xml at all", "thsottiaux"), []);
-    assert.deepEqual(parseRssItems(null, "thsottiaux"), []);
-  });
-});
 
 const SAMPLE_BSKY_FEED = JSON.stringify({
   feed: [
@@ -199,16 +157,27 @@ describe("parseOccursAt", () => {
 
 describe("toResetEvent", () => {
   it("builds an event with a parsed occursAt", () => {
-    const [item] = parseRssItems(SAMPLE_RSS, "thsottiaux");
-    const event = toResetEvent(item);
-    assert.equal(event.id, "tibo-2087706104814023111");
+    const event = toResetEvent({
+      id: "tibo-bsky-abc",
+      text: "Enjoy a nice reset everyone. Landing in the next hour or so, go /fast.",
+      announcedAt: "2026-08-13T01:01:37.000Z",
+      sourceUrl: "https://bsky.app/profile/a/post/abc",
+    });
+    assert.equal(event.id, "tibo-bsky-abc");
     assert.equal(event.source, "tibo");
     assert.equal(event.occursAt, "2026-08-13T02:01:37.000Z");
   });
 
   it("returns null for unrelated tweets", () => {
-    const [, item] = parseRssItems(SAMPLE_RSS, "thsottiaux");
-    assert.equal(toResetEvent(item), null);
+    assert.equal(
+      toResetEvent({
+        id: "tibo-bsky-xyz",
+        text: "Typical conversation with @ajambrosino & friends",
+        announcedAt: "2026-08-12T22:03:35.000Z",
+        sourceUrl: "https://bsky.app/profile/a/post/xyz",
+      }),
+      null,
+    );
   });
 });
 
@@ -281,8 +250,4 @@ describe("mergeEvents", () => {
   });
 });
 
-describe("decodeEntities", () => {
-  it("decodes common entities", () => {
-    assert.equal(decodeEntities("fish &amp; chips &lt;3 &#39;tis&quot;"), "fish & chips <3 'tis\"");
-  });
-});
+

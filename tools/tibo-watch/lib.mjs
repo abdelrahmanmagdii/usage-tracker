@@ -28,53 +28,6 @@ const ANNOUNCEMENT_PATTERNS = [
   /enjoy (?:a|the|this|that)? ?\w* resets?\b/i,
 ];
 
-function extractTag(chunk, tag) {
-  const match = chunk.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
-  return match ? match[1].trim() : null;
-}
-
-function stripCdata(text) {
-  return text.replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "");
-}
-
-export function decodeEntities(text) {
-  return text
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;|&apos;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&");
-}
-
-/**
- * Parses a Nitter-style RSS timeline into normalized tweet items.
- * Only the <title> (the author's own words) is used for text, so quoted
- * tweets embedded in <description> never leak into keyword matching.
- */
-export function parseRssItems(xml, handle) {
-  if (typeof xml !== "string") return [];
-  const items = [];
-  const itemPattern = /<item>([\s\S]*?)<\/item>/g;
-  let match;
-  while ((match = itemPattern.exec(xml)) !== null) {
-    const chunk = match[1];
-    const title = extractTag(chunk, "title");
-    const pubDate = extractTag(chunk, "pubDate");
-    const guid = extractTag(chunk, "guid");
-    if (!title || !pubDate || !guid || !/^\d+$/.test(guid)) continue;
-    const announced = new Date(pubDate);
-    if (Number.isNaN(announced.getTime())) continue;
-    items.push({
-      id: `tibo-${guid}`,
-      text: decodeEntities(stripCdata(title)),
-      announcedAt: announced.toISOString(),
-      sourceUrl: `https://x.com/${handle}/status/${guid}`,
-    });
-  }
-  return items;
-}
-
 /**
  * The mirror relays append decoration the author's followers never see:
  * "QT: <tweet url>" tails (the link is to the *quoted* tweet, not this
@@ -89,14 +42,14 @@ function stripMirrorDecoration(text) {
 }
 
 /**
- * Parses a Bluesky getAuthorFeed response into the same normalized item
- * shape as parseRssItems. All Nitter mirrors have gone dark, so an
- * unofficial X→Bluesky relay of @thsottiaux is now the primary source —
+ * Parses a Bluesky getAuthorFeed response into normalized timeline items.
+ * The unofficial X→Bluesky relays of @thsottiaux are the only source —
  * the public AppView needs no auth.
  *
  * Ids use the post rkey (`tibo-bsky-…`), not a tweet id: Bluesky posts
- * carry no link to the original status, so cross-source dedup with
- * Nitter ids is impossible. Reposts are skipped (same as the RT rule).
+ * carry no link to the original status, so the same tweet seen on several
+ * relays is deduped by its timestamp instead. Reposts are skipped (same as
+ * the RT rule).
  */
 export function parseBskyFeed(jsonText, actor) {
   let data;
@@ -240,7 +193,7 @@ export function parsePlans(text) {
   return named.length ? named : null;
 }
 
-/** Converts a parsed RSS item into a ResetEvent, or null when unrelated. */
+/** Converts a parsed timeline item into a ResetEvent, or null when unrelated. */
 export function toResetEvent(item) {
   if (!isResetTweet(item.text)) return null;
   const occursAt = parseOccursAt(item.text, item.announcedAt);

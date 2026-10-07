@@ -15,6 +15,7 @@
   --opencode: #6f5ff0;
   --devin: #c47a22;
   --antigravity: #4285f4;
+  --gemini: #c85ac0;
   --amber: #a3641f;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -199,6 +200,7 @@ h1 {
 .providers li.opencode { --dot: var(--opencode); }
 .providers li.devin { --dot: var(--devin); }
 .providers li.antigravity { --dot: var(--antigravity); }
+.providers li.gemini { --dot: var(--gemini); }
 
 .cta-row {
   display: flex;
@@ -313,6 +315,24 @@ h1 {
   letter-spacing: -0.01em;
 }
 .steps p { margin: 0; color: var(--body); font-size: 14px; line-height: 1.55; }
+
+/* ---------- FAQ ---------- */
+.faq {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 32px 48px;
+  margin: 0 auto;
+  padding: 0;
+  max-width: var(--maxw);
+  list-style: none;
+}
+.faq h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.faq p { margin: 0; color: var(--body); font-size: 14px; line-height: 1.6; }
 
 /* ---------- Download ---------- */
 .platforms {
@@ -434,7 +454,7 @@ footer a { color: var(--body); }
 @media (max-width: 900px) {
   .hero { grid-template-columns: 1fr; padding: 56px 24px 64px; gap: 48px; }
   .hero .shot { order: 2; }
-  .features, .steps { grid-template-columns: 1fr; gap: 28px; }
+  .features, .steps, .faq { grid-template-columns: 1fr; gap: 28px; }
   .shots { grid-template-columns: 1fr; }
   .platforms { grid-template-columns: 1fr; }
   .section { padding: 56px 24px; }

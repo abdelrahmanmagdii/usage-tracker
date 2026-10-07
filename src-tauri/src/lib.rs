@@ -5,6 +5,7 @@ mod codex;
 mod commands;
 mod cursor;
 mod devin;
+mod gemini;
 mod opencode;
 mod prefs;
 mod provider;
@@ -16,6 +17,7 @@ use claude::ClaudeManager;
 use codex::process::CodexManager;
 use cursor::CursorManager;
 use devin::DevinManager;
+use gemini::GeminiManager;
 use opencode::OpenCodeManager;
 use tauri::{Manager, WindowEvent};
 
@@ -203,6 +205,8 @@ pub fn run() {
             app.manage(devin_manager.clone());
             let antigravity_manager = AntigravityManager::new(app.handle().clone());
             app.manage(antigravity_manager.clone());
+            let gemini_manager = GeminiManager::new(app.handle().clone());
+            app.manage(gemini_manager.clone());
             tray::setup(app)?;
             updates::spawn_periodic_checks(&app.handle());
 
@@ -275,6 +279,10 @@ pub fn run() {
             let antigravity_starter = antigravity_manager.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = antigravity_starter.refresh().await;
+            });
+            let gemini_starter = gemini_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = gemini_starter.refresh().await;
             });
 
             // Wall-clock staleness watchdogs instead of a plain sleep loop:
@@ -433,6 +441,29 @@ pub fn run() {
                     };
                 }
             });
+            let gemini_refresher = gemini_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut last_attempt = now_unix_seconds();
+                let mut failures: u32 = 1;
+                loop {
+                    interval.tick().await;
+                    let now = now_unix_seconds();
+                    let before = gemini_refresher.snapshot().await.updated_at;
+                    if !should_refresh(now, before, last_attempt, failures) {
+                        continue;
+                    }
+                    last_attempt = now;
+                    let _ = gemini_refresher.refresh().await;
+                    let after = gemini_refresher.snapshot().await.updated_at;
+                    failures = if after == before {
+                        failures.saturating_add(1)
+                    } else {
+                        0
+                    };
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -458,6 +489,8 @@ pub fn run() {
             commands::refresh_devin,
             commands::get_antigravity_state,
             commands::refresh_antigravity,
+            commands::get_gemini_state,
+            commands::refresh_gemini,
             commands::set_reset_incoming,
             commands::get_app_prefs,
             commands::complete_onboarding,

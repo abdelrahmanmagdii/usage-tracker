@@ -5,6 +5,7 @@ use crate::claude::{ClaudeManager, ClaudeState};
 use crate::codex::process::{CodexManager, CodexState};
 use crate::cursor::CursorManager;
 use crate::devin::DevinManager;
+use crate::gemini::GeminiManager;
 use crate::opencode::OpenCodeManager;
 use crate::provider::ProviderState;
 
@@ -77,6 +78,20 @@ pub async fn refresh_antigravity(
 }
 
 #[tauri::command]
+pub async fn get_gemini_state(
+    manager: State<'_, GeminiManager>,
+) -> Result<ProviderState, String> {
+    Ok(manager.snapshot().await)
+}
+
+#[tauri::command]
+pub async fn refresh_gemini(
+    manager: State<'_, GeminiManager>,
+) -> Result<ProviderState, String> {
+    manager.refresh().await
+}
+
+#[tauri::command]
 pub fn get_app_prefs(prefs: State<'_, crate::prefs::PrefsStore>) -> crate::prefs::AppPrefs {
     prefs.get()
 }
@@ -90,6 +105,7 @@ pub struct TrayWindowOptions {
     pub opencode: Vec<crate::tray::TrayWindow>,
     pub devin: Vec<crate::tray::TrayWindow>,
     pub antigravity: Vec<crate::tray::TrayWindow>,
+    pub gemini: Vec<crate::tray::TrayWindow>,
 }
 
 /// Windows each provider currently reports, for the in-app menu-bar picker.
@@ -101,6 +117,7 @@ pub async fn get_tray_windows(
     opencode: State<'_, OpenCodeManager>,
     devin: State<'_, DevinManager>,
     antigravity: State<'_, AntigravityManager>,
+    gemini: State<'_, GeminiManager>,
 ) -> Result<TrayWindowOptions, String> {
     let codex_state = codex.snapshot().await;
     let claude_state = claude.snapshot().await;
@@ -108,6 +125,7 @@ pub async fn get_tray_windows(
     let opencode_state = opencode.snapshot().await;
     let devin_state = devin.snapshot().await;
     let antigravity_state = antigravity.snapshot().await;
+    let gemini_state = gemini.snapshot().await;
     Ok(TrayWindowOptions {
         codex: crate::tray::collect_windows(codex_state.rate_limits.as_ref()),
         claude: crate::tray::collect_windows(claude_state.rate_limits.as_ref()),
@@ -115,6 +133,7 @@ pub async fn get_tray_windows(
         opencode: crate::tray::collect_windows(opencode_state.rate_limits.as_ref()),
         devin: crate::tray::collect_windows(devin_state.rate_limits.as_ref()),
         antigravity: crate::tray::collect_windows(antigravity_state.rate_limits.as_ref()),
+        gemini: crate::tray::collect_windows(gemini_state.rate_limits.as_ref()),
     })
 }
 
@@ -126,7 +145,8 @@ pub fn set_tray_window(app: AppHandle, provider: String, window: String) -> Resu
         | crate::prefs::PROVIDER_CURSOR
         | crate::prefs::PROVIDER_OPENCODE
         | crate::prefs::PROVIDER_DEVIN
-        | crate::prefs::PROVIDER_ANTIGRAVITY => {}
+        | crate::prefs::PROVIDER_ANTIGRAVITY
+        | crate::prefs::PROVIDER_GEMINI => {}
         other => return Err(format!("Unknown provider: {other}")),
     }
     app.state::<crate::prefs::PrefsStore>()
@@ -143,7 +163,8 @@ pub fn set_provider_visible(app: AppHandle, provider: String, visible: bool) -> 
         | crate::prefs::PROVIDER_CURSOR
         | crate::prefs::PROVIDER_OPENCODE
         | crate::prefs::PROVIDER_DEVIN
-        | crate::prefs::PROVIDER_ANTIGRAVITY => {}
+        | crate::prefs::PROVIDER_ANTIGRAVITY
+        | crate::prefs::PROVIDER_GEMINI => {}
         other => return Err(format!("Unknown provider: {other}")),
     }
     app.state::<crate::prefs::PrefsStore>()

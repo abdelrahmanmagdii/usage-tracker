@@ -3,23 +3,69 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>UsageBar — Codex, Claude, Cursor, OpenCode, Devin &amp; Antigravity quotas in the Mac menu bar</title>
-  <meta name="description" content="A small Mac menu bar app for leftover Codex, Claude, Cursor, OpenCode, Devin, and Antigravity quota, plus when each window resets. Same numbers as the official apps. I don't run a server." />
+  <title>UsageBar — Codex, Claude, Cursor, OpenCode, Devin, Antigravity &amp; Gemini quotas in the Mac menu bar</title>
+  <meta name="description" content="A small Mac menu bar app for leftover Codex, Claude, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI quota, plus when each window resets. Same numbers as the official apps. I don't run a server." />
   <link rel="canonical" href="https://abdelrahmanmagdii.github.io/usage-tracker/" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="UsageBar" />
   <meta property="og:title" content="UsageBar — leftover quota in the Mac menu bar" />
-  <meta property="og:description" content="Codex, Claude, Cursor, OpenCode, Devin, and Antigravity. Remaining percent and reset countdown. Nothing is sent to me." />
+  <meta property="og:description" content="Codex, Claude, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI. Remaining percent and reset countdown. Nothing is sent to me." />
   <meta property="og:url" content="https://abdelrahmanmagdii.github.io/usage-tracker/" />
   <meta property="og:image" content="https://abdelrahmanmagdii.github.io/usage-tracker/og.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="UsageBar — leftover quota in the Mac menu bar" />
-  <meta name="twitter:description" content="Codex, Claude, Cursor, OpenCode, Devin, and Antigravity. Remaining percent and reset countdown. Nothing is sent to me." />
+  <meta name="twitter:description" content="Codex, Claude, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI. Remaining percent and reset countdown. Nothing is sent to me." />
   <meta name="twitter:image" content="https://abdelrahmanmagdii.github.io/usage-tracker/og.png" />
   <link rel="icon" href="mark.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="site.css" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "UsageBar",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS 10.15 or later",
+    "description": "Mac menu bar app that shows leftover Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI quota with reset countdowns.",
+    "url": "https://abdelrahmanmagdii.github.io/usage-tracker/",
+    "downloadUrl": "https://github.com/abdelrahmanmagdii/usage-tracker/releases",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is UsageBar?",
+        "acceptedAnswer": { "@type": "Answer", "text": "UsageBar is a small macOS menu bar app that shows how much AI coding quota you have left — Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI — plus when each limit resets." }
+      },
+      {
+        "@type": "Question",
+        "name": "Does UsageBar send my data or credentials anywhere?",
+        "acceptedAnswer": { "@type": "Answer", "text": "No. Credentials stay in the places each tool already keeps them on your Mac (Keychain, local databases, config files). There is no UsageBar server, account, or telemetry." }
+      },
+      {
+        "@type": "Question",
+        "name": "Is UsageBar free?",
+        "acceptedAnswer": { "@type": "Answer", "text": "Yes. It is free and open source, distributed as a signed and notarized .dmg from GitHub Releases." }
+      },
+      {
+        "@type": "Question",
+        "name": "How does UsageBar get the quota numbers?",
+        "acceptedAnswer": { "@type": "Answer", "text": "It reuses the login each tool already keeps on your Mac and polls that provider's own usage endpoint, so the percentages match the official apps." }
+      },
+      {
+        "@type": "Question",
+        "name": "How is UsageBar different from CodexBar?",
+        "acceptedAnswer": { "@type": "Answer", "text": "CodexBar covers dozens of providers with a richer dashboard. UsageBar is a smaller, on-device meter focused on the AI coding CLIs — Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI — with per-window reset countdowns and a compact menu-bar mode." }
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -44,7 +90,7 @@
         <h1>Your AI coding quota, in&nbsp;the&nbsp;menu&nbsp;bar.</h1>
         <p class="lede">
           UsageBar is a small macOS app that shows how much Codex, Claude Code,
-          Cursor, OpenCode Go, Devin, and Antigravity quota you have left — and when each limit
+          Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI quota you have left — and when each limit
           resets. Same numbers the official apps show.
         </p>
         <ul class="providers">
@@ -54,6 +100,7 @@
           <li class="opencode">OpenCode Go</li>
           <li class="devin">Devin</li>
           <li class="antigravity">Antigravity</li>
+          <li class="gemini">Gemini CLI</li>
         </ul>
         <div class="cta-row">
           <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Download for Mac</a>
@@ -74,7 +121,7 @@
         <ul class="features">
           <li>
             <h3>Same numbers as the official apps</h3>
-            <p>Reads each provider’s own usage endpoint, so the percentages match what Codex, Claude Code, Cursor, OpenCode, Devin, and Antigravity report.</p>
+            <p>Reads each provider’s own usage endpoint, so the percentages match what Codex, Claude Code, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI report.</p>
           </li>
           <li>
             <h3>Every window that matters</h3>
@@ -153,7 +200,7 @@
         <ol class="steps">
           <li>
             <h3>Reads local credentials</h3>
-            <p>Uses the sessions the tools already keep on your Mac: Codex’s app server, Claude Code’s Keychain item, Cursor’s login database, OpenCode’s <code>auth.json</code>, Devin CLI’s <code>credentials.toml</code>, Antigravity’s Keychain item.</p>
+            <p>Uses the sessions the tools already keep on your Mac: Codex’s app server, Claude Code’s Keychain item, Cursor’s login database, OpenCode’s <code>auth.json</code>, Devin CLI’s <code>credentials.toml</code>, Antigravity’s Keychain item, Gemini CLI’s <code>oauth_creds.json</code>.</p>
           </li>
           <li>
             <h3>Polls the provider APIs</h3>
@@ -165,6 +212,38 @@
           </li>
         </ol>
       </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Questions</h2>
+      </div>
+      <ul class="faq">
+        <li>
+          <h3>What is UsageBar?</h3>
+          <p>A small macOS menu bar app that shows how much AI coding quota you have left — Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI — plus when each limit resets.</p>
+        </li>
+        <li>
+          <h3>Does UsageBar send my data or credentials anywhere?</h3>
+          <p>No. Credentials stay in the places each tool already keeps them on your Mac — Keychain items, local databases, config files. There is no UsageBar server, account, or telemetry.</p>
+        </li>
+        <li>
+          <h3>Is UsageBar free?</h3>
+          <p>Yes — free and open source, distributed as a signed and notarized <code>.dmg</code> from GitHub Releases.</p>
+        </li>
+        <li>
+          <h3>How does it get the quota numbers?</h3>
+          <p>It reuses the login each tool already keeps on your Mac and polls that provider’s own usage endpoint, so the percentages match the official apps.</p>
+        </li>
+        <li>
+          <h3>How is it different from CodexBar?</h3>
+          <p>CodexBar covers dozens of providers with a richer dashboard. UsageBar is a smaller on-device meter focused on the AI coding CLIs, with per-window reset countdowns and a compact menu-bar mode.</p>
+        </li>
+        <li>
+          <h3>Can I hide tools I don’t use?</h3>
+          <p>Yes — Settings has a toggle per provider. Hidden tools leave the menu bar and are never polled.</p>
+        </li>
+      </ul>
     </section>
 
     <section class="section">

@@ -73,3 +73,38 @@ jobs:
       - name: Remove API key
         if: always()
         run: rm -f "$RUNNER_TEMP/asc-api-key.p8"
+
+  # Keeps the Homebrew tap's cask on the released version. Skips until the tap
+  # repo exists and HOMEBREW_TAP_REPO / HOMEBREW_TAP_TOKEN are configured —
+  # see homebrew-tap/SETUP.md.
+  cask:
+    needs: release
+    runs-on: ubuntu-latest
+    if: vars.HOMEBREW_TAP_REPO != ''
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync cask to the Homebrew tap
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipping cask sync"
+            exit 0
+          fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${{ vars.HOMEBREW_TAP_REPO }}.git" tap
+          mkdir -p tap/Casks
+          cp Casks/usagebar.rb tap/Casks/usagebar.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet && git diff --cached --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "cask already up to date"
+            exit 0
+          fi
+          git add -A
+          git commit -m "usagebar ${TAG#v}"
+          git push
