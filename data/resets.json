@@ -1,6 +1,13 @@
 {
-  "updatedAt": "2026-10-04T23:33:33.759Z",
+  "updatedAt": "2026-10-07T21:18:49.345Z",
   "events": [
+    {
+      "id": "tibo-bsky-3mxco5ryiip2k",
+      "announcedAt": "2026-10-07T19:19:17.000Z",
+      "source": "tibo",
+      "text": "Day 3/\n\nThe big one is GPT-6 in Chat, but today is also a little celebration day with a new high of 40M active users across Codex and ChatGPT Work.\n\nLoading a banked reset in everyone's paid accounts. See you again tomorrow!",
+      "sourceUrl": "https://bsky.app/profile/thsottiaux-bot.eurosky.social/post/3mxco5ryiip2k"
+    },
     {
       "id": "tibo-bsky-3mx3ayefnu42a",
       "announcedAt": "2026-10-04T20:33:43.000Z",
