@@ -9,10 +9,24 @@ set -euo pipefail
 SECS="${1:-40}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out"
-APP_SRC="$ROOT/src-tauri/target/release/bundle/macos/UsageBar.app"
+# tools/tauri.mjs moves the bundle into macos.noindex so Spotlight does not
+# list the build-tree copy. Cargo may also redirect into CARGO_TARGET_DIR.
+TARGET="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target}"
+APP_SRC=""
+for candidate in \
+  "$TARGET/release/bundle/macos.noindex/UsageBar.app" \
+  "$TARGET/release/bundle/macos/UsageBar.app" \
+  "$ROOT/src-tauri/target/release/bundle/macos.noindex/UsageBar.app" \
+  "$ROOT/src-tauri/target/release/bundle/macos/UsageBar.app"
+do
+  if [[ -d "$candidate" ]]; then
+    APP_SRC="$candidate"
+    break
+  fi
+done
 APP="/Applications/UsageBar.app"
 MOV="$OUT/usagebar-macos-raw.mov"
-mkdir -p "$OUT"
+mkdir -p "$OUT/frames"
 
 log() { printf '[demo-record] %s\n' "$*"; }
 
@@ -131,10 +145,12 @@ print(f"crop {crop_w}:{crop_h}:{crop_x}:0 scale={scale} window={w}x{h} at {x},{y
 PY
 }
 
-if [[ ! -d "$APP_SRC" ]]; then
-  log "missing $APP_SRC — build with: npm run tauri build -- --bundles app"
+if [[ -z "$APP_SRC" ]]; then
+  log "UsageBar.app was not produced. Looked under $TARGET/release/bundle"
+  find "$ROOT/src-tauri/target" -name 'UsageBar.app' -maxdepth 6 2>/dev/null || true
   exit 1
 fi
+log "using bundle $APP_SRC"
 
 log "preparing desktop"
 wake_display
@@ -150,8 +166,17 @@ ditto "$APP_SRC" "$APP"
 xattr -cr "$APP" >/dev/null 2>&1 || true
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || log "ad-hoc codesign skipped"
 
-log "launching UsageBar --demo"
-USAGEBAR_DEMO=1 "$APP/Contents/MacOS/UsageBar" --demo >"$OUT/app.log" 2>&1 &
+BIN="$APP/Contents/MacOS/usagebar"
+if [[ ! -x "$BIN" && -x "$APP/Contents/MacOS/UsageBar" ]]; then
+  BIN="$APP/Contents/MacOS/UsageBar"
+fi
+if [[ ! -x "$BIN" ]]; then
+  log "no executable in $APP/Contents/MacOS"
+  ls -la "$APP/Contents/MacOS" || true
+  exit 1
+fi
+log "launching $BIN --demo"
+USAGEBAR_DEMO=1 "$BIN" --demo >"$OUT/app.log" 2>&1 &
 APP_PID=$!
 
 ready=0
@@ -210,21 +235,31 @@ fi
 geo="$(demo "GEOMETRY main" || true)"
 log "geometry: $geo"
 write_crop "$geo" || true
+screencapture -x "$OUT/frames/mac-open.png" || true
 
 sleep 0.8
+step=0
 for _ in 1 2 3 4 5 6 7 8; do
   demo "SCROLL 175" >/dev/null || true
+  step=$((step + 1))
+  if [[ "$step" == 4 ]]; then
+    screencapture -x "$OUT/frames/mac-scroll.png" || true
+  fi
   sleep 1.05
 done
 sleep 0.4
 log "settings: $(demo SETTINGS)"
-sleep 3.2
+sleep 1.2
+screencapture -x "$OUT/frames/mac-settings.png" || true
+sleep 2.0
 log "close settings: $(demo CLOSE_SETTINGS)"
 sleep 0.8
 demo SCROLL_TOP >/dev/null || true
 sleep 1.4
 log "hide: $(demo HIDE)"
-sleep 1.5
+sleep 0.8
+screencapture -x "$OUT/frames/mac-hidden.png" || true
+sleep 0.7
 
 wait "$REC_PID" || { log "screencapture exited $?"; exit 1; }
 screencapture -x "$OUT/after.png" || true

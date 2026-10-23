@@ -55,20 +55,137 @@ public static class DemoMouse {
 public class DemoWall {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
   public static extern int SystemParametersInfo(int action, int param, string path, int winIni);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+public static class DemoDesktop {
+  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc lpEnumFunc, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+  [DllImport("user32.dll")] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClass, int nMaxCount);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")] public static extern IntPtr FindWindow(string cls, string title);
+  [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+  public static void ParkOthers(uint keepPid) {
+    EnumWindows((h, l) => {
+      if (!IsWindowVisible(h)) return true;
+      var cls = new System.Text.StringBuilder(256);
+      GetClassName(h, cls, 256);
+      string c = cls.ToString();
+      if (c == "Shell_TrayWnd" || c == "Shell_SecondaryTrayWnd" || c == "Progman" || c == "WorkerW") return true;
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      if (keepPid != 0 && pid == keepPid) return true;
+      var title = new System.Text.StringBuilder(512);
+      GetWindowText(h, title, 512);
+      string t = title.ToString();
+      if (t.IndexOf("UsageBar", System.StringComparison.OrdinalIgnoreCase) >= 0) return true;
+      if (t.IndexOf("Codex quota", System.StringComparison.OrdinalIgnoreCase) >= 0) return true;
+      if (t.Length == 0) return true;
+      ShowWindow(h, 6);
+      return true;
+    }, IntPtr.Zero);
+  }
+  public static void HideDesktopIcons() {
+    IntPtr progman = FindWindow("Progman", null);
+    IntPtr def = FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
+    if (def == IntPtr.Zero) {
+      IntPtr worker = IntPtr.Zero;
+      while (true) {
+        worker = FindWindowEx(IntPtr.Zero, worker, "WorkerW", null);
+        if (worker == IntPtr.Zero) break;
+        def = FindWindowEx(worker, IntPtr.Zero, "SHELLDLL_DefView", null);
+        if (def != IntPtr.Zero) break;
+      }
+    }
+    IntPtr list = FindWindowEx(def, IntPtr.Zero, "SysListView32", "FolderView");
+    if (list != IntPtr.Zero) ShowWindow(list, 0);
+  }
 }
 "@
 
+function Set-RecordingResolution {
+  try {
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class DemoDisplay {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+  public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+    public short dmSpecVersion;
+    public short dmDriverVersion;
+    public short dmSize;
+    public short dmDriverExtra;
+    public int dmFields;
+    public int dmPositionX;
+    public int dmPositionY;
+    public int dmDisplayOrientation;
+    public int dmDisplayFixedOutput;
+    public short dmColor;
+    public short dmDuplex;
+    public short dmYResolution;
+    public short dmTTOption;
+    public short dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+    public short dmLogPixels;
+    public int dmBitsPerPel;
+    public int dmPelsWidth;
+    public int dmPelsHeight;
+    public int dmDisplayFlags;
+    public int dmDisplayFrequency;
+    public int dmICMMethod;
+    public int dmICMIntent;
+    public int dmMediaType;
+    public int dmDitherType;
+    public int dmReserved1;
+    public int dmReserved2;
+    public int dmPanningWidth;
+    public int dmPanningHeight;
+  }
+  [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+  public static extern int ChangeDisplaySettings(ref DEVMODE devMode, int flags);
+}
+"@
+    $dm = New-Object DemoDisplay+DEVMODE
+    $dm.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($dm)
+    $dm.dmPelsWidth = 1920
+    $dm.dmPelsHeight = 1080
+    $dm.dmFields = 0x180000
+    $code = [DemoDisplay]::ChangeDisplaySettings([ref]$dm, 0)
+    Write-Log "display change result $code (0 means 1920x1080)"
+  } catch {
+    Write-Log "display change skipped: $_"
+  }
+}
+
+function Set-CleanDesktop([uint32]$KeepPid) {
+  try { [DemoDesktop]::HideDesktopIcons() } catch { Write-Log "desktop icons: $_" }
+  try { [DemoDesktop]::ParkOthers($KeepPid) } catch { Write-Log "park windows: $_" }
+}
+
 try {
+  Set-RecordingResolution
   $wall = Join-Path $env:TEMP "usagebar-wall.png"
   $bmp = New-Object System.Drawing.Bitmap 1920, 1080
   $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-  $gfx.Clear([System.Drawing.Color]::FromArgb(255, 244, 240, 255))
+  $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White)
+  for ($y = 0; $y -lt 1080; $y++) {
+    $t = $y / 1079.0
+    $r = [int](246 + (228 - 246) * $t)
+    $gchan = [int](243 + (233 - 243) * $t)
+    $pen.Color = [System.Drawing.Color]::FromArgb(255, $r, $gchan, 255)
+    $gfx.DrawLine($pen, 0, $y, 1919, $y)
+  }
+  $pen.Dispose()
   $bmp.Save($wall, [System.Drawing.Imaging.ImageFormat]::Png)
   $gfx.Dispose(); $bmp.Dispose()
   [DemoWall]::SystemParametersInfo(20, 0, $wall, 3) | Out-Null
 } catch {
   Write-Log "wallpaper skipped: $_"
 }
+Set-CleanDesktop 0
 
 Get-Process UsageBar, usagebar -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Remove-Item $Log, $PortFile -ErrorAction SilentlyContinue
@@ -100,7 +217,8 @@ if (-not $installed) {
 Write-Log "exe $($installed.FullName)"
 
 $env:USAGEBAR_DEMO = "1"
-Start-Process -FilePath $installed.FullName -ArgumentList "--demo" -WorkingDirectory $installed.DirectoryName
+$appProc = Start-Process -FilePath $installed.FullName -ArgumentList "--demo" -WorkingDirectory $installed.DirectoryName -PassThru
+Write-Log "pid $($appProc.Id)"
 
 $ready = $false
 foreach ($i in 1..80) {
@@ -118,7 +236,12 @@ if (-not $ready) {
 $pong = Send-Demo "PING"
 Write-Log "ping: $pong"
 if ($pong -ne "PONG demo") { throw "demo mode did not answer: $pong" }
+Set-CleanDesktop ([uint32]$appProc.Id)
+Start-Sleep -Milliseconds 400
+try { [DemoWall]::SetForegroundWindow($appProc.MainWindowHandle) | Out-Null } catch {}
+Write-Log "show: $(Send-Demo 'SHOW')"
 Start-Sleep -Seconds 1
+Set-CleanDesktop ([uint32]$appProc.Id)
 
 $ffArgs = @(
   "-y", "-f", "gdigrab", "-framerate", "30", "-draw_mouse", "1", "-i", "desktop",
@@ -133,6 +256,8 @@ Start-Sleep -Seconds 2
 # the pointer misses the hover target.
 $widget = Send-Demo "GEOMETRY widget"
 Write-Log "widget: $widget"
+$mainEarly = Send-Demo "GEOMETRY main"
+Write-Log "main early: $mainEarly"
 $parts = $widget.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
 if ($parts.Length -ge 7 -and $parts[0] -eq "GEOMETRY") {
   $cx = [int]$parts[1] + [int]([int]$parts[3] / 2)
@@ -198,6 +323,42 @@ if ($visible -ne "VISIBLE 1") {
 }
 Start-Sleep -Seconds 2
 
+function Write-CropFile([string]$Main, [string]$Widget) {
+  function Parse-Geo([string]$line) {
+    if (-not $line) { return $null }
+    $p = $line.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
+    if ($p.Length -lt 7 -or $p[0] -ne "GEOMETRY") { return $null }
+    [pscustomobject]@{
+      x = [int][double]$p[1]; y = [int][double]$p[2]
+      w = [int][double]$p[3]; h = [int][double]$p[4]
+      sw = [int][double]$p[5]; sh = [int][double]$p[6]
+    }
+  }
+  $m = Parse-Geo $Main
+  $path = Join-Path $Out "crop.txt"
+  if (-not $m -or $m.sw -le 0 -or $m.sh -le 0) {
+    Set-Content -Path $path -Value "full" -NoNewline
+    Write-Log "crop full (no geometry)"
+    return
+  }
+  $x1 = $m.x; $y1 = $m.y
+  $g = Parse-Geo $Widget
+  if ($g) { $x1 = [Math]::Min($x1, $g.x); $y1 = [Math]::Min($y1, $g.y) }
+  # Right column through the tray, so the meter and dashboard share the frame
+  # and the runner taskbar icons on the left stay out of it.
+  $pad = 32
+  $x1 = [Math]::Max(0, $x1 - $pad)
+  $y1 = [Math]::Max(0, $y1 - $pad)
+  $w = $m.sw - $x1
+  $h = $m.sh - $y1
+  if ($w % 2) { if ($x1 -gt 0) { $x1--; $w++ } else { $w-- } }
+  if ($h % 2) { if ($y1 -gt 0) { $y1--; $h++ } else { $h-- } }
+  if ($w -lt 2 -or $h -lt 2) { Set-Content -Path $path -Value "full" -NoNewline; return }
+  Set-Content -Path $path -Value "${w}:${h}:${x1}:${y1}" -NoNewline
+  Write-Log "crop ${w}:${h}:${x1}:${y1}"
+}
+
+Write-CropFile $mainEarly $widget
 if (-not $ff.HasExited) { $ff.WaitForExit() }
 try { Send-Demo "QUIT" | Out-Null } catch {}
 Copy-DemoLogs

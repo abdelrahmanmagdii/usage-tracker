@@ -274,6 +274,10 @@ pub fn run() {
             #[cfg(any(debug_assertions, target_os = "windows"))]
             if !cfg!(target_os = "windows") || !std::env::args_os().any(|arg| arg == "--startup") {
                 if let Some(window) = app.get_webview_window("main") {
+                    if demo::enabled() {
+                        demo::place_popover(&window);
+                        let _ = window.set_always_on_top(true);
+                    }
                     window.show()?;
                     window.set_focus()?;
                 }

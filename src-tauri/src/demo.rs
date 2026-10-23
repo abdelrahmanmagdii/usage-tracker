@@ -272,18 +272,25 @@ fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) -> String + Send + 'stati
     }
 }
 
-/// Puts the popover under the menu-bar clock. Recording-only: a normal
-/// launch keeps the centered window from `tauri.conf.json`.
+/// Puts the window where a recording can see it. A normal launch keeps the
+/// centered window from `tauri.conf.json`.
+///
+/// macOS: under the menu-bar clock, which is where the status item opens it.
+/// Windows: a right-hand column above the floating meter, so the meter and
+/// the tray are in frame and the meter does not cover the dashboard.
 pub fn place_popover(window: &tauri::WebviewWindow) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let scale = monitor.scale_factor();
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if scale <= f64::EPSILON {
+        return;
+    }
     #[cfg(target_os = "macos")]
     {
-        let Ok(Some(monitor)) = window.current_monitor() else {
-            return;
-        };
-        let scale = monitor.scale_factor();
-        if scale <= f64::EPSILON {
-            return;
-        }
         let screen_w = monitor.size().width as f64 / scale;
         let window_w = window
             .outer_size()
@@ -292,7 +299,22 @@ pub fn place_popover(window: &tauri::WebviewWindow) {
         let x = (screen_w - window_w - 8.0).max(0.0);
         let _ = window.set_position(tauri::LogicalPosition::new(x, 36.0));
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let screen_w = monitor.size().width as f64 / scale;
+        let screen_h = monitor.size().height as f64 / scale;
+        let window_w = 388.0;
+        let window_h = 600.0;
+        let margin = 16.0;
+        // Taskbar plus the expanded Codex meter, so the two do not overlap
+        // when the screen is tall enough to stack them.
+        let reserved_below = 48.0 + 180.0;
+        let x = (screen_w - window_w - margin).max(0.0);
+        let stacked_y = screen_h - reserved_below - 12.0 - window_h;
+        let y = if stacked_y >= margin { stacked_y } else { margin };
+        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = window;
     }
@@ -720,6 +742,7 @@ fn civil_from_unix_days(unix_days: i64) -> (i64, u32, u32) {
     (year, month as u32, day as u32)
 }
 
+#[cfg(test)]
 fn used_percents(limits: &Value) -> Vec<f64> {
     let Some(by_id) = limits.get("rateLimitsByLimitId").and_then(Value::as_object) else {
         return Vec::new();
@@ -738,6 +761,7 @@ fn used_percents(limits: &Value) -> Vec<f64> {
     out
 }
 
+#[cfg(test)]
 fn resets_at(limits: &Value) -> Vec<f64> {
     let Some(by_id) = limits.get("rateLimitsByLimitId").and_then(Value::as_object) else {
         return Vec::new();
