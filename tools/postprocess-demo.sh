@@ -31,7 +31,7 @@ WIN_GIF_T="${WIN_GIF_T:-7}"
 LI_T="${LI_T:-26}"
 RD_T="${RD_T:-60}"
 
-X264=(-c:v libx264 -profile:v high -preset slow -crf 20 -pix_fmt yuv420p -r 30 -movflags +faststart)
+X264=(-c:v libx264 -profile:v high -preset veryfast -crf 20 -pix_fmt yuv420p -r 30 -movflags +faststart)
 SILENT=(-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000)
 AAC=(-c:a aac -b:a 128k -shortest)
 
