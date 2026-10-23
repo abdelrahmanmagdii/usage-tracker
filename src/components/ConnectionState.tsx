@@ -1,5 +1,6 @@
 import { AlertCircle, PlugZap } from "lucide-react";
 import type { CodexBackendState } from "../types/codex";
+import { deviceName } from "../lib/platform";
 
 export function ConnectionStateView({
   state,
@@ -42,7 +43,7 @@ export function ConnectionStateView({
   const title = loggedOut ? "Codex sign-in required" : "App Server unavailable";
   const message = loggedOut
     ? "Sign in through Codex first. UsageBar uses that existing session—never an API key."
-    : state.diagnostic || "UsageBar lost its local connection. Your data stays on this Mac.";
+    : state.diagnostic || `UsageBar lost its local connection. Your data stays on this ${deviceName}.`;
 
   return (
     <div className="state-panel glass-tile" role="alert">

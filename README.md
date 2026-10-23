@@ -2,7 +2,7 @@
 
 **Codex, Claude, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI quota windows and reset times, at a glance.**
 
-UsageBar is a small, local-first macOS menu-bar app for seeing current AI-coding quota windows, how much remains, and exactly when each window resets. Codex data comes from your existing Codex login through the official Codex App Server—no OpenAI API key and no credential scraping. If Claude Code, Cursor, OpenCode Go, the Devin CLI, Google Antigravity, or the Gemini CLI is signed in on this Mac, those meters show up too.
+UsageBar is a small, local-first macOS menu-bar app (with a [Windows beta](#windows-beta)) for seeing current AI-coding quota windows, how much remains, and exactly when each window resets. Codex data comes from your existing Codex login through the official Codex App Server—no OpenAI API key and no credential scraping. If Claude Code, Cursor, OpenCode Go, the Devin CLI, Google Antigravity, or the Gemini CLI is signed in on this Mac, those meters show up too.
 
 The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset countdown for each provider — how much you have left, matching what the official apps show, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
 
@@ -56,9 +56,23 @@ The app lands in `src-tauri/target/release/bundle/macos/`.
 
 Maintainers: see [docs/RELEASING.md](docs/RELEASING.md) for how signed releases are cut.
 
+### Windows (beta)
+
+UsageBar also runs on Windows 10/11 x64. It lives in the system tray instead of
+the menu bar, opens the dashboard as a normal window, and adds a small Codex
+meter that docks above the taskbar (drag it anywhere, or hide it from the tray
+menu). It reads the same tool logins from their Windows locations; there is no
+Keychain step.
+
+The Windows build is not in the GitHub releases yet and is not code-signed, so
+SmartScreen warns on first launch, and it does not auto-update — install a newer
+build over the old one. To build the per-user installer yourself, follow
+[docs/WINDOWS.md](docs/WINDOWS.md), then run `npm ci` and `npm run windows:build`;
+the `-setup.exe` lands in `src-tauri/target/release/bundle/nsis/`.
+
 ## Requirements
 
-- macOS 10.15 or newer
+- macOS 10.15 or newer, or Windows 10/11 x64 with WebView2 (beta)
 - A working, authenticated `codex` CLI for the Codex meter
 - Optional: signed-in Claude Code, Cursor, OpenCode Go, Devin CLI, Antigravity, and/or Gemini CLI for those meters
 - Node.js 20+ and Rust for development

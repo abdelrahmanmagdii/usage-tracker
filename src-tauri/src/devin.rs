@@ -62,7 +62,7 @@ impl DevinManager {
             CredentialRead::Absent => {
                 self.set_connection(
                     ConnectionState::CliNotFound,
-                    Some("No Devin CLI login was found on this Mac".into()),
+                    Some("No Devin CLI login was found on this computer".into()),
                 )
                 .await;
                 return Ok(self.snapshot().await);
@@ -75,7 +75,7 @@ impl DevinManager {
                 ) {
                     self.set_connection(
                         ConnectionState::CliNotFound,
-                        Some("No Devin CLI login was found on this Mac".into()),
+                        Some("No Devin CLI login was found on this computer".into()),
                     )
                     .await;
                     return Ok(self.snapshot().await);
@@ -205,7 +205,8 @@ enum CredentialRead {
 async fn load_cli_auth() -> CredentialRead {
     let Some(path) = credentials_path() else {
         return CredentialRead::Unavailable(
-            "HOME is not set, so Devin CLI credentials could not be located".to_owned(),
+            "The home directory is unavailable, so Devin CLI credentials could not be located"
+                .to_owned(),
         );
     };
     match tokio::fs::read_to_string(&path).await {
@@ -226,7 +227,7 @@ fn credentials_path() -> Option<std::path::PathBuf> {
             return Some(std::path::PathBuf::from(xdg).join("devin/credentials.toml"));
         }
     }
-    let home = std::env::var_os("HOME")?;
+    let home = crate::platform::home_dir()?;
     Some(std::path::PathBuf::from(home).join(".local/share/devin/credentials.toml"))
 }
 

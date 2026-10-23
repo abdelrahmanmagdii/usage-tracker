@@ -2,7 +2,7 @@
   color-scheme: light;
   font-family: var(--font-ui);
   font-synthesis: none;
-  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   --radius-window: 22px;
   --radius-tile: 18px;

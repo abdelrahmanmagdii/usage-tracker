@@ -138,6 +138,12 @@ function antigravityPreview(): CodexBackendState {
           limitName: "Claude and GPT",
           secondary: { usedPercent: 27, windowDurationMins: 10_080, resetsAt: now + 5 * 86_400 },
         },
+        "argon-weekly": {
+          limitId: "argon-weekly",
+          windowLabel: "Gemini 4 Argon weekly",
+          limitName: "Gemini 4 Argon",
+          secondary: { usedPercent: 4, windowDurationMins: 10_080, resetsAt: now + 6 * 86_400 },
+        },
       },
     },
   };

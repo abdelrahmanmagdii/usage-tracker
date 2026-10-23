@@ -25,6 +25,9 @@ time = { version = "0.3", features = ["parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "sync", "time"] }
 which = "8"
 
+[target."cfg(not(target_os = \"macos\"))".dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 [target."cfg(target_os = \"macos\")".dependencies]
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSScreen", "NSWindow", "NSApplication", "NSResponder", "NSButton", "NSControl", "NSView"] }

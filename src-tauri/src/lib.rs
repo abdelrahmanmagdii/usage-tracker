@@ -7,6 +7,7 @@ mod cursor;
 mod devin;
 mod gemini;
 mod opencode;
+mod platform;
 mod prefs;
 mod provider;
 mod tray;
@@ -171,7 +172,11 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            if cfg!(target_os = "windows") {
+                Some(vec!["--startup"])
+            } else {
+                None
+            },
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -193,6 +198,7 @@ pub fn run() {
             app.manage(tray::TrayMenuState::default());
             app.manage(tray::TrayRenderCache::default());
             app.manage(updates::UpdateStatus::default());
+            app.manage(platform::WidgetPlacement::default());
             let manager = CodexManager::new(app.handle().clone());
             app.manage(manager.clone());
             let claude_manager = ClaudeManager::new(app.handle().clone());
@@ -208,6 +214,26 @@ pub fn run() {
             let gemini_manager = GeminiManager::new(app.handle().clone());
             app.manage(gemini_manager.clone());
             tray::setup(app)?;
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(widget) = app.get_webview_window("codex-widget") {
+                    let _ = widget.set_always_on_top(true);
+                    let _ = widget.set_size(tauri::LogicalSize::new(328.0, 26.0));
+                    let _ = widget.show();
+                    let _ = widget.unminimize();
+                    let _ = platform::position_codex_widget(app.handle());
+                }
+
+                // Windows shell/taskbar may still be initializing work area at boot.
+                // Re-dock periodically over the first few seconds so it doesn't get buried.
+                let startup_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    for delay_ms in [300, 800, 1500, 3000, 5000, 8000] {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        let _ = platform::position_codex_widget(&startup_handle);
+                    }
+                });
+            }
             updates::spawn_periodic_checks(&app.handle());
 
             #[cfg(target_os = "macos")]
@@ -237,10 +263,12 @@ pub fn run() {
                 );
             }
 
-            #[cfg(debug_assertions)]
-            if let Some(window) = app.get_webview_window("main") {
-                window.show()?;
-                window.set_focus()?;
+            #[cfg(any(debug_assertions, target_os = "windows"))]
+            if !cfg!(target_os = "windows") || !std::env::args_os().any(|arg| arg == "--startup") {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.show()?;
+                    window.set_focus()?;
+                }
             }
 
             // Both providers share one tray coordinator, so a single repaint per
@@ -254,6 +282,13 @@ pub fn run() {
                 loop {
                     interval.tick().await;
                     tray::refresh_unified_tray(&tray_handle).await;
+                    #[cfg(target_os = "windows")]
+                    if now_unix_seconds() % 5 == 0 {
+                        let handle = tray_handle.clone();
+                        let _ = tray_handle.run_on_main_thread(move || {
+                            let _ = platform::position_codex_widget(&handle);
+                        });
+                    }
                 }
             });
 
@@ -324,7 +359,10 @@ pub fn run() {
             });
             let claude_refresher = claude_manager.clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                // A shorter tick than the other providers: each one checks only
+                // whether Claude Code rewrote its login, and a rewrite (a token
+                // rotation or a fresh sign-in) refreshes the meter right away.
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 let mut last_attempt = now_unix_seconds();
                 // Start in the failure lane: if the startup refresh did not
@@ -336,7 +374,10 @@ pub fn run() {
                     interval.tick().await;
                     let now = now_unix_seconds();
                     let before = claude_refresher.snapshot().await.updated_at;
-                    if !should_refresh(now, before, last_attempt, failures) {
+                    let login_changed = claude_refresher.login_changed().await;
+                    if login_changed {
+                        failures = 0;
+                    } else if !should_refresh(now, before, last_attempt, failures) {
                         continue;
                     }
                     last_attempt = now;
@@ -420,7 +461,10 @@ pub fn run() {
             });
             let antigravity_refresher = antigravity_manager.clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                // Windows also watches for a fresh Antigravity launch log, which
+                // needs a short tick; elsewhere that check is always false.
+                let tick = if cfg!(target_os = "windows") { 5 } else { 30 };
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(tick));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 let mut last_attempt = now_unix_seconds();
                 let mut failures: u32 = 1;
@@ -428,17 +472,23 @@ pub fn run() {
                     interval.tick().await;
                     let now = now_unix_seconds();
                     let before = antigravity_refresher.snapshot().await.updated_at;
-                    if !should_refresh(now, before, last_attempt, failures) {
+                    let new_local_launch = antigravity_refresher.should_poll_local_launch().await;
+                    if !new_local_launch && !should_refresh(now, before, last_attempt, failures) {
                         continue;
                     }
                     last_attempt = now;
                     let _ = antigravity_refresher.refresh().await;
                     let after = antigravity_refresher.snapshot().await.updated_at;
-                    failures = if after == before {
-                        failures.saturating_add(1)
+                    if after == before {
+                        if new_local_launch {
+                            failures = 1;
+                            last_attempt = now.saturating_sub(FIRST_RETRY_SECS.saturating_sub(5));
+                        } else {
+                            failures = failures.saturating_add(1);
+                        }
                     } else {
-                        0
-                    };
+                        failures = 0;
+                    }
                 }
             });
             let gemini_refresher = gemini_manager.clone();
@@ -506,6 +556,11 @@ pub fn run() {
             commands::get_autostart,
             commands::set_autostart,
             commands::hide_window,
+            commands::show_dashboard,
+            commands::set_widget_expanded,
+            commands::drag_codex_widget,
+            commands::hide_codex_widget,
+            commands::reset_widget_position,
             commands::quit_app
         ])
         .run(tauri::generate_context!())

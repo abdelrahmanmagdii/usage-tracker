@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "UsageBar",
+      "width": 388,
+      "height": 600,
+      "minWidth": 388,
+      "minHeight": 520,
+      "resizable": false,
+      "minimizable": true,
+      "maximizable": false,
+      "skipTaskbar": false,
+      "visible": false,
+      "decorations": true,
+      "transparent": false,
+      "center": true
+    }, {
+      "label": "codex-widget",
+      "title": "Codex quota widget",
+      "url": "index.html?widget=codex",
+      "width": 328,
+      "height": 26,
+      "resizable": false,
+      "maximizable": false,
+      "minimizable": false,
+      "decorations": false,
+      "transparent": false,
+      "alwaysOnTop": true,
+      "skipTaskbar": true,
+      "focus": false,
+      "visible": false,
+      "shadow": false
+    }]
+  },
+  "bundle": {
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": false,
+    "icon": ["icons/icon.ico"],
+    "shortDescription": "AI coding quotas and reset times in the Windows system tray.",
+    "longDescription": "UsageBar shows remaining AI coding quota and reset times using existing local tool logins.",
+    "windows": {
+      "nsis": { "installMode": "currentUser" }
+    }
+  }
+}

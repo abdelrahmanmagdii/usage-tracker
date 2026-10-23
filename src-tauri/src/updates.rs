@@ -47,6 +47,13 @@ fn notify(app: &AppHandle, title: &str, body: &str) {
 /// notification. Manual checks also report "up to date" and failures; the
 /// background loop only speaks when there is something to act on.
 pub async fn check_for_update(app: AppHandle, manual: bool) {
+    // This Windows port is distributed manually; the upstream feed ships macOS builds.
+    if cfg!(target_os = "windows") {
+        if manual {
+            notify(&app, "Windows updates", "Install a newer Windows installer to update UsageBar. Automatic updates are not configured for this port.");
+        }
+        return;
+    }
     let updater = match app.updater() {
         Ok(updater) => updater,
         Err(error) => {
@@ -108,7 +115,7 @@ pub async fn check_for_update(app: AppHandle, manual: bool) {
 /// Periodic background checks. Skipped in dev: a `cargo tauri dev` build has
 /// no `.app` bundle for the updater to replace.
 pub fn spawn_periodic_checks(app: &AppHandle) {
-    if tauri::is_dev() {
+    if tauri::is_dev() || cfg!(target_os = "windows") {
         return;
     }
     let handle = app.clone();

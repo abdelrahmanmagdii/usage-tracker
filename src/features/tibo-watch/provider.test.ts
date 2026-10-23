@@ -142,7 +142,9 @@ describe("BlueskyResetEventProvider", () => {
     const events = await new BlueskyResetEventProvider(["mirror-a", "mirror-b"], fetcher).listEvents();
     expect(events).toHaveLength(1);
     expect(events[0].occursAt).toBe("2026-10-02T17:00:00.000Z");
-  });
+    // "10am PST" is the first time-zone lookup in the run; a cold Windows CI
+    // runner spends over 5s loading ICU zone data for it.
+  }, 30_000);
 
   it("survives one mirror failing", async () => {
     const fetcher = (async (url: string) =>

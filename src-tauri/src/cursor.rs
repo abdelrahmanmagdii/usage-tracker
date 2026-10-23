@@ -61,7 +61,7 @@ impl CursorManager {
             CredentialRead::Absent => {
                 self.set_connection(
                     ConnectionState::CliNotFound,
-                    Some("No Cursor login was found on this Mac".into()),
+                    Some("No Cursor login was found on this computer".into()),
                 )
                 .await;
                 return Ok(self.snapshot().await);
@@ -74,7 +74,7 @@ impl CursorManager {
                 ) {
                     self.set_connection(
                         ConnectionState::CliNotFound,
-                        Some("No Cursor login was found on this Mac".into()),
+                        Some("No Cursor login was found on this computer".into()),
                     )
                     .await;
                     return Ok(self.snapshot().await);
@@ -197,7 +197,16 @@ async fn classify_cursor_response(response: reqwest::Response) -> Result<Value, 
 }
 
 fn state_db_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("HOME")?;
+    #[cfg(target_os = "windows")]
+    {
+        return Some(
+            std::path::PathBuf::from(std::env::var_os("APPDATA")?)
+                .join("Cursor/User/globalStorage/state.vscdb"),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    let home = crate::platform::home_dir()?;
+    #[cfg(not(target_os = "windows"))]
     Some(
         std::path::PathBuf::from(home)
             .join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
@@ -207,7 +216,8 @@ fn state_db_path() -> Option<std::path::PathBuf> {
 async fn load_access_token() -> CredentialRead {
     let Some(path) = state_db_path() else {
         return CredentialRead::Unavailable(
-            "HOME is not set, so Cursor's login database could not be located".to_owned(),
+            "The home directory is unavailable, so Cursor's login database could not be located"
+                .to_owned(),
         );
     };
     match tokio::fs::metadata(&path).await {
@@ -233,6 +243,7 @@ async fn load_access_token() -> CredentialRead {
 fn sqlite_readonly_uri(path: &std::path::Path) -> String {
     let encoded = path
         .to_string_lossy()
+        .replace('\\', "/")
         .replace('%', "%25")
         .replace('#', "%23")
         .replace('?', "%3F")
@@ -413,6 +424,15 @@ mod tests {
         assert_eq!(
             sqlite_readonly_uri(path),
             "file:/Users/me/Library/Application%20Support/Cursor/state.vscdb?mode=ro&immutable=1"
+        );
+    }
+
+    #[test]
+    fn normalizes_windows_paths_in_sqlite_uris() {
+        let path = std::path::Path::new(r"C:\Users\Example User\Cursor\state.vscdb");
+        assert_eq!(
+            sqlite_readonly_uri(path),
+            "file:C:/Users/Example%20User/Cursor/state.vscdb?mode=ro&immutable=1"
         );
     }
 

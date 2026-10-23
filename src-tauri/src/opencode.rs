@@ -63,7 +63,7 @@ impl OpenCodeManager {
             CredentialRead::Absent => {
                 self.set_connection(
                     ConnectionState::CliNotFound,
-                    Some("No OpenCode Go login was found on this Mac".into()),
+                    Some("No OpenCode Go login was found on this computer".into()),
                 )
                 .await;
                 return Ok(self.snapshot().await);
@@ -76,7 +76,7 @@ impl OpenCodeManager {
                 ) {
                     self.set_connection(
                         ConnectionState::CliNotFound,
-                        Some("No OpenCode Go login was found on this Mac".into()),
+                        Some("No OpenCode Go login was found on this computer".into()),
                     )
                     .await;
                     return Ok(self.snapshot().await);
@@ -188,7 +188,8 @@ enum CredentialRead {
 async fn load_go_key() -> CredentialRead {
     let Some(path) = auth_json_path() else {
         return CredentialRead::Unavailable(
-            "HOME is not set, so OpenCode's auth.json could not be located".to_owned(),
+            "The home directory is unavailable, so OpenCode's auth.json could not be located"
+                .to_owned(),
         );
     };
     match tokio::fs::read_to_string(&path).await {
@@ -207,7 +208,7 @@ fn auth_json_path() -> Option<std::path::PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
         return Some(std::path::PathBuf::from(xdg).join("opencode/auth.json"));
     }
-    let home = std::env::var_os("HOME")?;
+    let home = crate::platform::home_dir()?;
     Some(std::path::PathBuf::from(home).join(".local/share/opencode/auth.json"))
 }
 

@@ -344,7 +344,7 @@ fn login_action(
 }
 
 fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
+    crate::platform::home_dir()
 }
 
 fn credentials_path() -> Option<std::path::PathBuf> {
@@ -367,7 +367,7 @@ fn oauth_supported(settings: &Value) -> bool {
 
 async fn load_credentials() -> CredentialRead {
     let Some(path) = settings_path() else {
-        return CredentialRead::Unavailable("HOME is not set".to_owned());
+        return CredentialRead::Unavailable("The home directory is unavailable".to_owned());
     };
     if let Ok(bytes) = tokio::fs::read(&path).await {
         if let Ok(settings) = serde_json::from_slice::<Value>(&bytes) {
@@ -378,7 +378,7 @@ async fn load_credentials() -> CredentialRead {
     }
 
     let Some(path) = credentials_path() else {
-        return CredentialRead::Unavailable("HOME is not set".to_owned());
+        return CredentialRead::Unavailable("The home directory is unavailable".to_owned());
     };
     match tokio::fs::read(&path).await {
         Ok(bytes) => match parse_oauth_value(&bytes) {

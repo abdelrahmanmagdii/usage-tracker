@@ -5,6 +5,12 @@
 //! endpoint for the same windows as `/usage`. Read-only: the token is never
 //! refreshed or rewritten. Background polls never show a Keychain sheet; Retry
 //! may prompt once if the file is stale and Always Allow has not been granted.
+//!
+//! Claude Code writes its Keychain item with `/usr/bin/security`, and rewrites
+//! it on every token rotation, which drops any Always Allow granted to
+//! UsageBar. Reading through the same tool stays on the item's own access list,
+//! so rotations no longer lock the meter out. A cheap attribute-only lookup
+//! (no secret, never a sheet) tells the poller when to re-read.
 
 use std::{
     sync::{
@@ -36,6 +42,18 @@ const KEYCHAIN_ITEM_NOT_FOUND: i32 = -25300;
 /// Consecutive empty reads required before the menu-bar meter disappears, once
 /// it has shown a number at least once.
 const ABSENT_READS_BEFORE_HIDING: u32 = 2;
+/// `security` exits with this when the item does not exist.
+#[cfg(target_os = "macos")]
+const SECURITY_CLI_NOT_FOUND: i32 = 44;
+/// A trusted `security` read answers in milliseconds. Anything slower is an
+/// access sheet waiting on the user, which a background poll must not leave up.
+#[cfg(target_os = "macos")]
+const SECURITY_CLI_TIMEOUT: Duration = Duration::from_secs(3);
+/// Set when a `security` read was denied or timed out on a sheet, so polls stop
+/// trying it until the item changes or the user presses Retry.
+#[cfg(target_os = "macos")]
+static SECURITY_CLI_BLOCKED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +87,9 @@ pub struct ClaudeManager {
     /// for a confirming second read, so a credential store caught mid-rewrite
     /// cannot blank the meter.
     absent_reads: Arc<AtomicU32>,
+    /// Last seen modification stamp of the stored login (Keychain item and
+    /// credentials file), so a token rotation refreshes the meter at once.
+    login_stamp: Arc<Mutex<Option<String>>>,
 }
 
 impl ClaudeManager {
@@ -84,11 +105,29 @@ impl ClaudeManager {
             client,
             refresh_lock: Arc::new(Mutex::new(())),
             absent_reads: Arc::new(AtomicU32::new(0)),
+            login_stamp: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn snapshot(&self) -> ClaudeState {
         self.state.read().await.clone()
+    }
+
+    /// Whether Claude Code rewrote its stored login since the last check. Reads
+    /// only attributes and file metadata, so it is cheap and never prompts. The
+    /// first call records a baseline and reports no change.
+    pub async fn login_changed(&self) -> bool {
+        let Ok(stamp) = tokio::task::spawn_blocking(login_stamp).await else {
+            return false;
+        };
+        let mut last = self.login_stamp.lock().await;
+        let changed = last.as_ref().is_some_and(|previous| *previous != stamp);
+        *last = Some(stamp);
+        #[cfg(target_os = "macos")]
+        if changed {
+            SECURITY_CLI_BLOCKED.store(false, Ordering::Relaxed);
+        }
+        changed
     }
 
     pub async fn refresh(&self) -> Result<ClaudeState, String> {
@@ -125,7 +164,7 @@ impl ClaudeManager {
                 if hides_tray(has_shown_usage, reads) {
                     self.set_connection(
                         ConnectionState::CliNotFound,
-                        Some("No Claude Code login was found on this Mac".into()),
+                        Some("No Claude Code login was found on this computer".into()),
                     )
                     .await;
                     return Ok(self.snapshot().await);
@@ -144,7 +183,7 @@ impl ClaudeManager {
                 ) {
                     self.set_connection(
                         ConnectionState::CliNotFound,
-                        Some("No Claude Code login was found on this Mac".into()),
+                        Some("No Claude Code login was found on this computer".into()),
                     )
                     .await;
                     return Ok(self.snapshot().await);
@@ -162,7 +201,7 @@ impl ClaudeManager {
         if credentials.is_expired(now_unix_millis()) {
             self.set_connection(
                 ConnectionState::NotAuthenticated,
-                Some("The Claude Code login has expired. It refreshes the next time the `claude` command-line tool runs.".into()),
+                Some("Claude Code's login expired. Run `claude` once in a terminal to renew it; the meter picks it up within seconds.".into()),
             )
             .await;
             return Ok(self.snapshot().await);
@@ -189,7 +228,7 @@ impl ClaudeManager {
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             self.set_connection(
                 ConnectionState::NotAuthenticated,
-                Some("Anthropic rejected the stored Claude Code token. It refreshes the next time the `claude` command-line tool runs.".into()),
+                Some("Anthropic rejected the stored Claude Code token. Run `claude` once in a terminal to renew it; the meter picks it up within seconds.".into()),
             )
             .await;
             return Ok(self.snapshot().await);
@@ -360,7 +399,124 @@ fn classify_keychain_status(code: i32) -> CredentialRead {
     ))
 }
 
+#[cfg(target_os = "macos")]
 fn read_keychain_password(allow_prompt: bool) -> CredentialRead {
+    // A Retry after a blocked CLI read goes straight to the framework lookup,
+    // whose sheet can grant UsageBar its own Always Allow.
+    if !(allow_prompt && SECURITY_CLI_BLOCKED.load(Ordering::Relaxed)) {
+        if let Some(read) = read_with_security_cli() {
+            return read;
+        }
+    }
+    read_with_security_framework(allow_prompt)
+}
+
+/// Reads the item the way Claude Code writes it, through `/usr/bin/security`,
+/// which the item's access list already trusts. `None` means the tool could not
+/// answer without a sheet, so the caller falls back to the framework lookup.
+#[cfg(target_os = "macos")]
+fn read_with_security_cli() -> Option<CredentialRead> {
+    use std::process::{Command, Stdio};
+    if SECURITY_CLI_BLOCKED.load(Ordering::Relaxed) {
+        return None;
+    }
+    let mut child = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < SECURITY_CLI_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            // Still waiting means an access sheet is up; killing the request
+            // takes the sheet down with it.
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                SECURITY_CLI_BLOCKED.store(true, Ordering::Relaxed);
+                return None;
+            }
+        }
+    };
+    if status.code() == Some(SECURITY_CLI_NOT_FOUND) {
+        return Some(CredentialRead::Absent);
+    }
+    if !status.success() {
+        SECURITY_CLI_BLOCKED.store(true, Ordering::Relaxed);
+        return None;
+    }
+    let mut output = String::new();
+    std::io::Read::read_to_string(child.stdout.as_mut()?, &mut output).ok()?;
+    Some(match parse_security_output(&output) {
+        Some(credentials) => CredentialRead::Found(credentials),
+        None => CredentialRead::Absent,
+    })
+}
+
+/// `security -w` prints a printable password as-is and anything else as hex.
+#[cfg(any(target_os = "macos", test))]
+fn parse_security_output(output: &str) -> Option<Credentials> {
+    let trimmed = output.trim();
+    parse_credentials(trimmed).or_else(|| {
+        let bytes = decode_hex(trimmed)?;
+        parse_credentials(&String::from_utf8_lossy(&bytes))
+    })
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    if text.len() % 2 != 0 {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(text.get(index..index + 2)?, 16).ok())
+        .collect()
+}
+
+/// A stamp that changes whenever Claude Code rewrites its login: the Keychain
+/// item's modification date plus the credentials file's mtime. Neither read
+/// touches the secret, so it never shows a sheet.
+fn login_stamp() -> String {
+    let file = credentials_file_path()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|age| age.as_millis().to_string())
+        .unwrap_or_default();
+    format!("{}|{file}", keychain_item_stamp())
+}
+
+#[cfg(target_os = "macos")]
+fn keychain_item_stamp() -> String {
+    let Ok(output) = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", KEYCHAIN_SERVICE])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return String::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|line| line.trim_start().starts_with("\"mdat\""))
+        .map(|line| line.trim().to_owned())
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_item_stamp() -> String {
+    String::new()
+}
+
+#[cfg(target_os = "macos")]
+fn read_with_security_framework(allow_prompt: bool) -> CredentialRead {
     use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
     use security_framework::os::macos::keychain::SecKeychain;
     // Background polls must not pop the "Claude Code credentials" sheet.
@@ -394,6 +550,11 @@ fn read_keychain_password(allow_prompt: bool) -> CredentialRead {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+fn read_keychain_password(_allow_prompt: bool) -> CredentialRead {
+    CredentialRead::Absent
+}
+
 async fn load_from_keychain(allow_prompt: bool) -> CredentialRead {
     match tokio::task::spawn_blocking(move || read_keychain_password(allow_prompt)).await {
         Ok(read) => read,
@@ -403,13 +564,21 @@ async fn load_from_keychain(allow_prompt: bool) -> CredentialRead {
     }
 }
 
+fn credentials_file_path() -> Option<std::path::PathBuf> {
+    let home = crate::platform::home_dir()?;
+    let directory = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    Some(directory.join(".credentials.json"))
+}
+
 async fn load_from_file() -> CredentialRead {
-    let Some(home) = std::env::var_os("HOME") else {
+    let Some(path) = credentials_file_path() else {
         return CredentialRead::Unavailable(
-            "HOME is not set, so the Claude Code credentials file could not be located".to_owned(),
+            "The home directory is unavailable, so the Claude Code credentials file could not be located".to_owned(),
         );
     };
-    let path = std::path::PathBuf::from(home).join(".claude/.credentials.json");
     match tokio::fs::read_to_string(&path).await {
         Ok(contents) => match parse_credentials(&contents) {
             Some(credentials) => CredentialRead::Found(credentials),
@@ -849,5 +1018,19 @@ mod tests {
         assert!(!credentials.is_expired(999));
         assert!(parse_credentials("{}").is_none());
         assert!(parse_credentials("not json").is_none());
+    }
+
+    #[test]
+    fn parses_plain_and_hex_security_output() {
+        let json = r#"{"claudeAiOauth":{"accessToken":"abc","expiresAt":1000}}"#;
+        let plain = parse_security_output(&format!("{json}\n")).expect("plain");
+        assert_eq!(plain.access_token, "abc");
+
+        let hex: String = json.bytes().map(|byte| format!("{byte:02x}")).collect();
+        let decoded = parse_security_output(&hex).expect("hex");
+        assert_eq!(decoded.access_token, "abc");
+
+        assert!(parse_security_output("").is_none());
+        assert!(parse_security_output("abc").is_none());
     }
 }

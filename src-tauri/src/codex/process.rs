@@ -116,12 +116,15 @@ impl CodexManager {
                 command.arg("app-server").arg("--stdio");
                 command
             }
+            #[cfg(target_os = "macos")]
             CodexExecutable::LoginShell => {
                 let mut command = Command::new("/bin/zsh");
                 command.args(["-lc", "exec codex app-server --stdio"]);
                 command
             }
         };
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -386,20 +389,36 @@ impl CodexManager {
 
 enum CodexExecutable {
     Direct(PathBuf),
+    #[cfg(target_os = "macos")]
     LoginShell,
 }
 
 async fn find_codex_cli() -> Result<CodexExecutable, String> {
-    let candidates = [
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut candidates = vec![
+        std::env::var_os("USAGEBAR_CODEX_PATH").map(PathBuf::from),
         which::which("codex").ok(),
         Some(PathBuf::from("/opt/homebrew/bin/codex")),
         Some(PathBuf::from("/usr/local/bin/codex")),
     ];
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(home) = crate::platform::home_dir() {
+            candidates.push(Some(home.join(".local/bin/codex.exe")));
+            candidates.push(Some(home.join(".cargo/bin/codex.exe")));
+        }
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            candidates.push(Some(PathBuf::from(appdata).join("npm/codex.cmd")));
+        }
+    }
     for candidate in candidates.into_iter().flatten() {
         if !candidate.exists() {
             continue;
         }
-        if Command::new(&candidate)
+        let mut probe = Command::new(&candidate);
+        #[cfg(target_os = "windows")]
+        probe.creation_flags(0x08000000);
+        if probe
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -410,19 +429,22 @@ async fn find_codex_cli() -> Result<CodexExecutable, String> {
             return Ok(CodexExecutable::Direct(candidate));
         }
     }
-    let shell_lookup = Command::new("/bin/zsh")
-        .args(["-lc", "command -v codex"])
-        .output()
-        .await
-        .map_err(|error| error.to_string())?;
-    if shell_lookup.status.success()
-        && Command::new("/bin/zsh")
-            .args(["-lc", "codex --version >/dev/null 2>&1"])
-            .status()
-            .await
-            .is_ok_and(|status| status.success())
+    #[cfg(target_os = "macos")]
     {
-        return Ok(CodexExecutable::LoginShell);
+        let shell_lookup = Command::new("/bin/zsh")
+            .args(["-lc", "command -v codex"])
+            .output()
+            .await
+            .map_err(|error| error.to_string())?;
+        if shell_lookup.status.success()
+            && Command::new("/bin/zsh")
+                .args(["-lc", "codex --version >/dev/null 2>&1"])
+                .status()
+                .await
+                .is_ok_and(|status| status.success())
+        {
+            return Ok(CodexExecutable::LoginShell);
+        }
     }
     Err("The official `codex` command could not be executed. Install or repair the Codex CLI, then reconnect.".into())
 }
