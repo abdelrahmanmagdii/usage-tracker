@@ -39,7 +39,7 @@ find_raw() {
 }
 
 media_duration() {
-  ffprobe -v error -show_entries format=duration -of default=nw=1=1:nk=1 "$1"
+  ffprobe -v error -show_entries format=duration -of csv=p=0 "$1"
 }
 
 shrink_gif() {

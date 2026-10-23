@@ -368,7 +368,11 @@ pub fn set_widget_expanded(
         window
             .set_size(tauri::LogicalSize::new(target_width, target_height))
             .map_err(|error| error.to_string())?;
-        crate::platform::position_codex_widget(&app).map_err(|error| error.to_string())?;
+        if crate::demo::enabled() && expanded {
+            crate::demo::place_demo_windows(&app);
+        } else {
+            crate::platform::position_codex_widget(&app).map_err(|error| error.to_string())?;
+        }
     }
     #[cfg(not(target_os = "windows"))]
     let _ = (app, expanded, width, height);

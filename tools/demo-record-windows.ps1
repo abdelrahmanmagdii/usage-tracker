@@ -309,7 +309,8 @@ trim=$trim
 gif_ss=$gifAt
 gif_t=6
 "@
-[System.IO.File]::WriteAllText($shotPath, $shotBody.Replace("`r`n", "`n"))
+$shotBody = $shotBody.Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n") + "`n"
+[System.IO.File]::WriteAllText($shotPath, $shotBody)
 Write-Log "shot pair main=$mainRect widget=$widgetRect trim=$trim"
 
 Start-Sleep -Seconds 1.6

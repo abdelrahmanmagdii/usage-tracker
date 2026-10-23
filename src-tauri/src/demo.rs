@@ -276,8 +276,8 @@ fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) -> String + Send + 'stati
 /// centered window from `tauri.conf.json`.
 ///
 /// macOS: under the menu-bar clock, which is where the status item opens it.
-/// Windows: a right-hand column above the floating meter, so the meter and
-/// the tray are in frame and the meter does not cover the dashboard.
+/// Windows: beside the floating meter, so a crop of each window is the window
+/// itself and the meter does not cover the dashboard.
 pub fn place_popover(window: &tauri::WebviewWindow) {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let Ok(Some(monitor)) = window.current_monitor() else {
@@ -301,22 +301,64 @@ pub fn place_popover(window: &tauri::WebviewWindow) {
     }
     #[cfg(target_os = "windows")]
     {
-        let screen_w = monitor.size().width as f64 / scale;
-        let screen_h = monitor.size().height as f64 / scale;
-        let window_w = 388.0;
-        let window_h = 600.0;
-        let margin = 16.0;
-        // Taskbar plus the expanded Codex meter, so the two do not overlap
-        // when the screen is tall enough to stack them.
-        let reserved_below = 48.0 + 180.0;
-        let x = (screen_w - window_w - margin).max(0.0);
-        let stacked_y = screen_h - reserved_below - 12.0 - window_h;
-        let y = if stacked_y >= margin { stacked_y } else { margin };
-        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+        let _ = (monitor, scale);
+        place_demo_windows(window.app_handle());
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = window;
+    }
+}
+
+/// Centers the dashboard and the Codex meter side by side. The meter is
+/// tall when it is expanded, and a 1080p desktop cannot stack it under the
+/// dashboard without one covering the other.
+#[cfg(target_os = "windows")]
+pub fn place_demo_windows(app: &AppHandle) {
+    use tauri::LogicalPosition;
+
+    // Stop the periodic docker from pulling the meter back to the corner.
+    app.state::<crate::platform::WidgetPlacement>()
+        .manually_moved
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(Some(monitor)) = main.current_monitor() else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    if scale <= f64::EPSILON {
+        return;
+    }
+    let screen_w = monitor.size().width as f64 / scale;
+    let screen_h = monitor.size().height as f64 / scale;
+    let main_size = main.outer_size().ok();
+    let main_w = main_size.map(|size| size.width as f64 / scale).unwrap_or(388.0);
+    let main_h = main_size.map(|size| size.height as f64 / scale).unwrap_or(640.0);
+    let widget = app.get_webview_window("codex-widget");
+    let (widget_w, widget_h) = widget
+        .as_ref()
+        .and_then(|window| window.outer_size().ok())
+        .map(|size| (size.width as f64 / scale, size.height as f64 / scale))
+        .unwrap_or((360.0, 160.0));
+    let gap = 40.0;
+    let group_w = main_w + gap + widget_w;
+    let group_h = main_h.max(widget_h);
+    let origin_x = ((screen_w - group_w) / 2.0).max(12.0);
+    // Stay clear of the taskbar. The crop is the window rect, so the taskbar
+    // is out of frame as long as the windows themselves are.
+    let bottom_limit = screen_h - 72.0;
+    let mut origin_y = ((screen_h - group_h) / 2.0).max(12.0);
+    if origin_y + group_h > bottom_limit {
+        origin_y = (bottom_limit - group_h).max(12.0);
+    }
+    let _ = main.set_position(LogicalPosition::new(origin_x, origin_y));
+    if let Some(widget) = widget {
+        let widget_y = origin_y + (group_h - widget_h).max(0.0);
+        let _ = widget.set_position(LogicalPosition::new(origin_x + main_w + gap, widget_y));
+        let _ = widget.set_always_on_top(true);
     }
 }
 

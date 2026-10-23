@@ -128,8 +128,11 @@ set_display() {
   cat > "$OUT/set-display.swift" <<'SWIFT'
 import CoreGraphics
 let display = CGMainDisplayID()
+func describe(_ mode: CGDisplayMode) -> String {
+  "\(mode.width)x\(mode.height) pixels \(mode.pixelWidth)x\(mode.pixelHeight)"
+}
 if let current = CGDisplayCopyDisplayMode(display) {
-  print("current \(current.width)x\(current.height) pixels \(current.pixelWidth)x\(current.pixelHeight)")
+  print("current \(describe(current))")
 }
 guard let modes = CGDisplayCopyAllDisplayModes(display, nil) as? [CGDisplayMode], !modes.isEmpty else {
   print("no display modes")
@@ -139,21 +142,39 @@ var best: CGDisplayMode?
 var bestPixels = 0
 for mode in modes {
   let pixels = mode.pixelWidth * mode.pixelHeight
-  print("mode \(mode.width)x\(mode.height) pixels \(mode.pixelWidth)x\(mode.pixelHeight)")
-  if mode.pixelWidth >= 1440 && mode.pixelHeight >= 900 && pixels > bestPixels {
+  print("mode \(describe(mode))")
+  // Prefer a retina backing store. A 1x 1920 mode does not add pixels to a
+  // window that is already 388 points wide.
+  let score = pixels * (mode.pixelWidth > mode.width ? 4 : 1)
+  if mode.pixelWidth >= 1440 && mode.pixelHeight >= 900 && score > bestPixels {
     best = mode
-    bestPixels = pixels
+    bestPixels = score
   }
 }
 guard let chosen = best else {
   print("keeping the current mode")
   exit(0)
 }
-let result = CGDisplaySetDisplayMode(display, chosen, nil)
-print("selected \(chosen.pixelWidth)x\(chosen.pixelHeight) status \(result)")
+var config: CGDisplayConfigRef?
+if CGBeginDisplayConfiguration(&config) == .success, let config {
+  let configured = CGConfigureDisplayWithDisplayMode(config, display, chosen, nil)
+  let completed = CGCompleteDisplayConfiguration(config, .permanently)
+  print("configure \(configured.rawValue) complete \(completed.rawValue) \(describe(chosen))")
+} else {
+  let result = CGDisplaySetDisplayMode(display, chosen, nil)
+  print("setDisplayMode \(result.rawValue) \(describe(chosen))")
+}
+if let current = CGDisplayCopyDisplayMode(display) {
+  print("now \(describe(current))")
+}
 SWIFT
   if swiftc -O -o "$OUT/set-display" "$OUT/set-display.swift" 2>"$OUT/set-display-build.log"; then
     "$OUT/set-display" | tee "$OUT/display-modes.txt" || log "display mode change failed"
+    sleep 0.6
+    screencapture -x "$OUT/display-check.png" >/dev/null 2>&1 || true
+    if [[ -s "$OUT/display-check.png" ]]; then
+      log "display check: $(sips -g pixelWidth -g pixelHeight "$OUT/display-check.png" 2>/dev/null | tr '\n' ' ')"
+    fi
   else
     log "could not compile the display helper"
     tail -n 20 "$OUT/set-display-build.log" || true
@@ -196,7 +217,7 @@ PY
 
 media_duration() {
   local file="$1"
-  ffprobe -v error -show_entries format=duration -of default=nw=1=1:nk=1 "$file" 2>/dev/null || echo 0
+  ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null || echo 0
 }
 
 last_frame_pts() {
@@ -212,8 +233,8 @@ log "using bundle $APP_SRC"
 
 log "preparing desktop"
 wake_display
-set_display
 prepare_desktop
+set_display
 grant_tcc
 
 rm -f /tmp/usagebar-demo.log /tmp/usagebar-demo.port
