@@ -243,127 +243,93 @@ Write-Log "show: $(Send-Demo 'SHOW')"
 Start-Sleep -Seconds 1
 Set-CleanDesktop ([uint32]$appProc.Id)
 
-$ffArgs = @(
-  "-y", "-f", "gdigrab", "-framerate", "30", "-draw_mouse", "1", "-i", "desktop",
-  "-t", "$Seconds", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-  (Join-Path $Out "usagebar-windows-raw.mp4")
-)
-Write-Log "recording ${Seconds}s"
-$ff = Start-Process ffmpeg -ArgumentList $ffArgs -PassThru -NoNewWindow
-Start-Sleep -Seconds 2
-
-# Dashboard is already open. Hover the floating meter, then expand it even if
-# the pointer misses the hover target.
-$widget = Send-Demo "GEOMETRY widget"
-Write-Log "widget: $widget"
-$mainEarly = Send-Demo "GEOMETRY main"
-Write-Log "main early: $mainEarly"
-$parts = $widget.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
-if ($parts.Length -ge 7 -and $parts[0] -eq "GEOMETRY") {
-  $cx = [int]$parts[1] + [int]([int]$parts[3] / 2)
-  $cy = [int]$parts[2] + [int]([int]$parts[4] / 2)
-  [DemoMouse]::Move($cx, $cy)
-  Start-Sleep -Milliseconds 700
-}
+# -t is only a backstop. The story quits ffmpeg when the interactions end,
+# so the file does not sit on a frozen last frame.
+if ($Seconds -lt 36) { $Seconds = 36 }
+$raw = Join-Path $Out "usagebar-windows-raw.mp4"
+$ffInfo = New-Object System.Diagnostics.ProcessStartInfo
+$ffInfo.FileName = "ffmpeg"
+$ffInfo.Arguments = "-y -f gdigrab -framerate 30 -draw_mouse 0 -i desktop -t $Seconds -c:v libx264 -preset veryfast -crf 16 -pix_fmt yuv420p `"$raw`""
+$ffInfo.UseShellExecute = $false
+Write-Log "recording until the storyboard ends (backstop ${Seconds}s)"
+$recordStarted = Get-Date
+$ff = [System.Diagnostics.Process]::Start($ffInfo)
+Start-Sleep -Milliseconds 500
 Write-Log "widget expand: $(Send-Demo 'WIDGET EXPAND')"
-Start-Sleep -Seconds 3.2
-Write-Log "widget collapse: $(Send-Demo 'WIDGET COLLAPSE')"
-Start-Sleep -Milliseconds 800
 
+function Convert-Geometry([string]$line) {
+  if (-not $line) { return $null }
+  $p = $line.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
+  if ($p.Length -lt 7 -or $p[0] -ne "GEOMETRY") { return $null }
+  $x = [int][double]$p[1]; $y = [int][double]$p[2]
+  $w = [int][double]$p[3]; $h = [int][double]$p[4]
+  $sw = [int][double]$p[5]; $sh = [int][double]$p[6]
+  if ($x -lt 0) { $w += $x; $x = 0 }
+  if ($y -lt 0) { $h += $y; $y = 0 }
+  if ($x + $w -gt $sw) { $w = $sw - $x }
+  if ($y + $h -gt $sh) { $h = $sh - $y }
+  $w -= $w % 2
+  $h -= $h % 2
+  if ($w -lt 20 -or $h -lt 16) { return $null }
+  return "${w}:${h}:${x}:${y}"
+}
+
+# The window label is codex-widget. A collapsed meter is 26px tall; keep
+# asking until the expanded card is the one we will crop.
+$widgetRect = $null
+$widget = ""
+for ($try = 1; $try -le 8; $try++) {
+  Start-Sleep -Milliseconds 400
+  $widget = Send-Demo "GEOMETRY codex-widget"
+  Write-Log "widget try ${try}: $widget"
+  $widgetRect = Convert-Geometry $widget
+  if ($widgetRect) {
+    $widgetHeight = [int]($widgetRect.Split(":")[1])
+    if ($widgetHeight -ge 100) { break }
+  }
+  Send-Demo "WIDGET EXPAND" | Out-Null
+  $widgetRect = $null
+}
 $main = Send-Demo "GEOMETRY main"
 Write-Log "main: $main"
-$mp = $main.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
-if ($mp.Length -ge 7 -and $mp[0] -eq "GEOMETRY") {
-  $mx = [int]$mp[1] + 80
-  $my = [int]$mp[2] + 160
-  [DemoMouse]::Move($mx, $my)
+$mainRect = Convert-Geometry $main
+if (-not $mainRect -or -not $widgetRect) {
+  throw "window geometry not ready: main=$main widget=$widget"
 }
-foreach ($step in 1..8) {
-  Send-Demo "SCROLL 175" | Out-Null
-  Start-Sleep -Milliseconds 1050
+# Publish from the moment both windows are in their final rectangles, so the
+# clip does not open on the collapsed meter.
+$trim = [math]::Round(((Get-Date) - $recordStarted).TotalSeconds + 0.15, 2)
+$gifAt = [math]::Round($trim + 0.4, 2)
+$shotPath = Join-Path $Out "shot.txt"
+$shotBody = @"
+kind=pair
+main=$mainRect
+widget=$widgetRect
+trim=$trim
+gif_ss=$gifAt
+gif_t=6
+"@
+[System.IO.File]::WriteAllText($shotPath, $shotBody.Replace("`r`n", "`n"))
+Write-Log "shot pair main=$mainRect widget=$widgetRect trim=$trim"
+
+Start-Sleep -Seconds 1.6
+foreach ($step in 1..12) {
+  Send-Demo "SCROLL 150" | Out-Null
+  Start-Sleep -Milliseconds 950
 }
 Start-Sleep -Milliseconds 400
 Write-Log "settings: $(Send-Demo 'SETTINGS')"
-Start-Sleep -Seconds 3.2
+Start-Sleep -Seconds 4.6
 Write-Log "close settings: $(Send-Demo 'CLOSE_SETTINGS')"
-Start-Sleep -Milliseconds 800
+Start-Sleep -Milliseconds 500
 Send-Demo "SCROLL_TOP" | Out-Null
-Start-Sleep -Seconds 1
-
-# Hide the dashboard and bring it back from the tray, which is the same window.
-Write-Log "hide: $(Send-Demo 'HIDE')"
-Start-Sleep -Seconds 1
-$sw = 1024; $sh = 768
-if ($mp.Length -ge 7) { $sw = [int]$mp[5]; $sh = [int]$mp[6] }
-try {
-  Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes -ErrorAction Stop
-  $root = [System.Windows.Automation.AutomationElement]::RootElement
-  $cond = New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::NameProperty, "UsageBar")
-  $btn = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
-  if ($btn) {
-    $rect = $btn.Current.BoundingRectangle
-    $tx = [int]($rect.X + $rect.Width / 2)
-    $ty = [int]($rect.Y + $rect.Height / 2)
-    Write-Log "tray click at $tx,$ty"
-    [DemoMouse]::Click($tx, $ty)
-  } else {
-    Write-Log "tray element not found"
-    [DemoMouse]::Click($sw - 70, $sh - 12)
-  }
-} catch {
-  Write-Log "tray automation failed: $_"
-  [DemoMouse]::Click($sw - 70, $sh - 12)
-}
-Start-Sleep -Seconds 1
-$visible = Send-Demo "VISIBLE"
-Write-Log "visible after tray: $visible"
-if ($visible -ne "VISIBLE 1") {
-  Write-Log "show hook: $(Send-Demo 'SHOW')"
-}
-Start-Sleep -Seconds 2
-
-function Write-CropFile([string]$Main, [string]$Widget) {
-  function Parse-Geo([string]$line) {
-    if (-not $line) { return $null }
-    $p = $line.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
-    if ($p.Length -lt 7 -or $p[0] -ne "GEOMETRY") { return $null }
-    [pscustomobject]@{
-      x = [int][double]$p[1]; y = [int][double]$p[2]
-      w = [int][double]$p[3]; h = [int][double]$p[4]
-      sw = [int][double]$p[5]; sh = [int][double]$p[6]
-    }
-  }
-  $m = Parse-Geo $Main
-  $path = Join-Path $Out "crop.txt"
-  if (-not $m -or $m.sw -le 0 -or $m.sh -le 0) {
-    Set-Content -Path $path -Value "full" -NoNewline
-    Write-Log "crop full (no geometry)"
-    return
-  }
-  $x1 = $m.x; $y1 = $m.y
-  $g = Parse-Geo $Widget
-  if ($g) { $x1 = [Math]::Min($x1, $g.x); $y1 = [Math]::Min($y1, $g.y) }
-  # Right column through the tray, so the meter and dashboard share the frame
-  # and the runner taskbar icons on the left stay out of it.
-  $pad = 32
-  $x1 = [Math]::Max(0, $x1 - $pad)
-  $y1 = [Math]::Max(0, $y1 - $pad)
-  $w = $m.sw - $x1
-  $h = $m.sh - $y1
-  if ($w % 2) { if ($x1 -gt 0) { $x1--; $w++ } else { $w-- } }
-  if ($h % 2) { if ($y1 -gt 0) { $y1--; $h++ } else { $h-- } }
-  if ($w -lt 2 -or $h -lt 2) { Set-Content -Path $path -Value "full" -NoNewline; return }
-  Set-Content -Path $path -Value "${w}:${h}:${x1}:${y1}" -NoNewline
-  Write-Log "crop ${w}:${h}:${x1}:${y1}"
-}
-
-Write-CropFile $mainEarly $widget
+Start-Sleep -Seconds 1.4
+$ended = [math]::Round(((Get-Date) - $recordStarted).TotalSeconds, 2)
+[System.IO.File]::AppendAllText($shotPath, "end=$ended`n")
+Write-Log "story end ${ended}s"
 if (-not $ff.HasExited) { $ff.WaitForExit() }
 try { Send-Demo "QUIT" | Out-Null } catch {}
 Copy-DemoLogs
-
-$raw = Join-Path $Out "usagebar-windows-raw.mp4"
 if (-not (Test-Path $raw) -or (Get-Item $raw).Length -lt 10000) {
   throw "recording missing or tiny: $raw"
 }

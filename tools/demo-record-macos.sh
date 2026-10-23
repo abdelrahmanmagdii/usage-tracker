@@ -121,11 +121,50 @@ end tell
 AS
 }
 
+set_display() {
+  # A larger framebuffer makes the same 388pt popover more pixels, so the
+  # 1080p composite stays sharp. The helper is best-effort: a VM with one
+  # mode keeps it.
+  cat > "$OUT/set-display.swift" <<'SWIFT'
+import CoreGraphics
+let display = CGMainDisplayID()
+if let current = CGDisplayCopyDisplayMode(display) {
+  print("current \(current.width)x\(current.height) pixels \(current.pixelWidth)x\(current.pixelHeight)")
+}
+guard let modes = CGDisplayCopyAllDisplayModes(display, nil) as? [CGDisplayMode], !modes.isEmpty else {
+  print("no display modes")
+  exit(0)
+}
+var best: CGDisplayMode?
+var bestPixels = 0
+for mode in modes {
+  let pixels = mode.pixelWidth * mode.pixelHeight
+  print("mode \(mode.width)x\(mode.height) pixels \(mode.pixelWidth)x\(mode.pixelHeight)")
+  if mode.pixelWidth >= 1440 && mode.pixelHeight >= 900 && pixels > bestPixels {
+    best = mode
+    bestPixels = pixels
+  }
+}
+guard let chosen = best else {
+  print("keeping the current mode")
+  exit(0)
+}
+let result = CGDisplaySetDisplayMode(display, chosen, nil)
+print("selected \(chosen.pixelWidth)x\(chosen.pixelHeight) status \(result)")
+SWIFT
+  if swiftc -O -o "$OUT/set-display" "$OUT/set-display.swift" 2>"$OUT/set-display-build.log"; then
+    "$OUT/set-display" | tee "$OUT/display-modes.txt" || log "display mode change failed"
+  else
+    log "could not compile the display helper"
+    tail -n 20 "$OUT/set-display-build.log" || true
+  fi
+}
+
 write_crop() {
   local geo="$1"
-  python3 - "$geo" "$OUT/crop.txt" "$OUT/geometry.txt" <<'PY'
+  python3 - "$geo" "$OUT/shot.txt" "$OUT/geometry.txt" <<'PY'
 import sys
-geo, crop_path, geom_path = sys.argv[1:]
+geo, shot_path, geom_path = sys.argv[1:]
 parts = geo.split()
 open(geom_path, "w").write(geo + "\n")
 if not parts or parts[0] != "GEOMETRY" or len(parts) < 7:
@@ -133,16 +172,35 @@ if not parts or parts[0] != "GEOMETRY" or len(parts) < 7:
     sys.exit(0)
 x, y, w, h, sw, sh = (int(float(v)) for v in parts[1:7])
 scale = max(1, round(w / 388)) if w else 1
-pad = 160 * scale
-crop_x = max(0, x - pad)
-crop_w = max(2, sw - crop_x)
-crop_h = max(2, min(sh, y + h + 20 * scale))
-# Even dimensions for libx264.
+# The status item sits just left of the popover. Keep that slice of the
+# menu bar and the window, and nothing else on the desktop.
+pad_x = 180 * scale
+pad_y = 8 * scale
+crop_x = max(0, x - pad_x)
+crop_r = min(sw, x + w + 12 * scale)
+crop_b = min(sh, y + h + pad_y)
+crop_w = int(crop_r - crop_x)
+crop_h = int(crop_b)  # y starts at 0 so the menu bar is in frame
 crop_w -= crop_w % 2
 crop_h -= crop_h % 2
-open(crop_path, "w").write(f"{crop_w}:{crop_h}:{crop_x}:0\n")
+open(shot_path, "w").write(
+    "kind=card\n"
+    f"crop={crop_w}:{crop_h}:{crop_x}:0\n"
+    "trim=0\n"
+    "gif_ss=5\n"
+    "gif_t=6\n"
+)
 print(f"crop {crop_w}:{crop_h}:{crop_x}:0 scale={scale} window={w}x{h} at {x},{y} screen={sw}x{sh}")
 PY
+}
+
+media_duration() {
+  local file="$1"
+  ffprobe -v error -show_entries format=duration -of default=nw=1=1:nk=1 "$file" 2>/dev/null || echo 0
+}
+
+last_frame_pts() {
+  ffprobe -v error -select_streams v:0 -show_entries frame=pts_time -of csv=p=0 "$1" 2>/dev/null | tail -1
 }
 
 if [[ -z "$APP_SRC" ]]; then
@@ -154,6 +212,7 @@ log "using bundle $APP_SRC"
 
 log "preparing desktop"
 wake_display
+set_display
 prepare_desktop
 grant_tcc
 
@@ -216,53 +275,153 @@ if [[ ! -s "$OUT/perm-test.png" ]]; then
 fi
 log "probe still: $(sips -g pixelWidth -g pixelHeight "$OUT/perm-test.png" 2>/dev/null | tr '\n' ' ' || true)"
 
-log "recording ${SECS}s"
-screencapture -v -C -V "$SECS" "$MOV" &
-REC_PID=$!
-sleep 1.5
-
-# Menu bar only, then open the popover. A real status-item click when
-# Accessibility allows it; the demo hook shows the same window if it misses.
-sleep 1.5
-click_tray && log "clicked status item" || log "status-item click failed; opening via demo hook"
-sleep 0.7
-visible="$(demo VISIBLE || true)"
-log "visible after click: ${visible:-?}"
-if [[ "$visible" != "VISIBLE 1" ]]; then
-  log "show hook: $(demo SHOW)"
-  sleep 0.8
-fi
-geo="$(demo "GEOMETRY main" || true)"
-log "geometry: $geo"
-write_crop "$geo" || true
-screencapture -x "$OUT/frames/mac-open.png" || true
-
-sleep 0.8
-step=0
-for _ in 1 2 3 4 5 6 7 8; do
-  demo "SCROLL 175" >/dev/null || true
-  step=$((step + 1))
-  if [[ "$step" == 4 ]]; then
-    screencapture -x "$OUT/frames/mac-scroll.png" || true
+# A second screencapture while -V is running stops the movie around the
+# moment of that still and leaves the container duration padded. Stills are
+# extracted from the finished movie instead.
+play_story() {
+  sleep 1.8
+  click_tray && log "clicked status item" || log "status-item click failed; opening via demo hook"
+  sleep 0.6
+  visible="$(demo VISIBLE || true)"
+  log "visible after click: ${visible:-?}"
+  if [[ "$visible" != "VISIBLE 1" ]]; then
+    log "show hook: $(demo SHOW)"
+    sleep 0.7
   fi
-  sleep 1.05
-done
-sleep 0.4
-log "settings: $(demo SETTINGS)"
-sleep 1.2
-screencapture -x "$OUT/frames/mac-settings.png" || true
-sleep 2.0
-log "close settings: $(demo CLOSE_SETTINGS)"
-sleep 0.8
-demo SCROLL_TOP >/dev/null || true
-sleep 1.4
-log "hide: $(demo HIDE)"
-sleep 0.8
-screencapture -x "$OUT/frames/mac-hidden.png" || true
-sleep 0.7
+  geo="$(demo "GEOMETRY main" || true)"
+  log "geometry: $geo"
+  write_crop "$geo" || true
+  sleep 1.2
+  local step
+  for step in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    demo "SCROLL 140" >/dev/null || true
+    sleep 0.95
+  done
+  sleep 0.5
+  log "settings: $(demo SETTINGS)"
+  sleep 5.4
+  log "close settings: $(demo CLOSE_SETTINGS)"
+  sleep 0.6
+  demo SCROLL_TOP >/dev/null || true
+  sleep 2.4
+}
 
-wait "$REC_PID" || { log "screencapture exited $?"; exit 1; }
-screencapture -x "$OUT/after.png" || true
+start_ffmpeg_record() {
+  local ffmpeg dev
+  ffmpeg="$(command -v ffmpeg || true)"
+  [[ -n "$ffmpeg" ]] || return 1
+  grant_tcc
+  # Screen Recording is granted per binary. Point TCC at the real ffmpeg.
+  local real
+  real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ffmpeg")"
+  local db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+  if [[ -f "$db" ]]; then
+    sqlite3 "$db" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, csreq, policy_id, indirect_object_identifier_type, indirect_object_identifier, indirect_object_code_identity, flags, last_modified) VALUES ('kTCCServiceScreenCapture','$real',1,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,CAST(strftime('%s','now') AS INTEGER));" \
+      >/dev/null 2>&1 || log "TCC grant for ffmpeg was rejected"
+  fi
+  "$ffmpeg" -hide_banner -f avfoundation -list_devices true -i "" >"$OUT/avdevices.txt" 2>&1 || true
+  dev="$(python3 - "$OUT/avdevices.txt" <<'PY'
+import re, sys
+text = open(sys.argv[1], errors="replace").read()
+match = re.search(r"\[(\d+)\] Capture screen", text)
+print(match.group(1) if match else "")
+PY
+)"
+  [[ -n "$dev" ]] || { log "no avfoundation screen device"; return 1; }
+  log "recording ${SECS}s with ffmpeg avfoundation device $dev"
+  MOV="$OUT/usagebar-macos-raw.mp4"
+  "$ffmpeg" -y -f avfoundation -framerate 30 -capture_cursor 1 -i "${dev}:none" \
+    -t "$SECS" -c:v libx264 -preset veryfast -crf 16 -pix_fmt yuv420p \
+    "$MOV" >"$OUT/ffmpeg-record.log" 2>&1 &
+  REC_PID=$!
+}
+
+start_screencapture_record() {
+  log "recording ${SECS}s with screencapture"
+  MOV="$OUT/usagebar-macos-raw.mov"
+  screencapture -v -C -V "$SECS" "$MOV" &
+  REC_PID=$!
+}
+
+finish_recording() {
+  local label="$1"
+  wait "$REC_PID" || log "$label recorder exited $?"
+  if [[ ! -s "$MOV" ]]; then
+    log "$label recording is empty"
+    return 1
+  fi
+  local duration last luma
+  duration="$(media_duration "$MOV")"
+  last="$(last_frame_pts "$MOV")"
+  log "$label duration=${duration:-?} last_frame=${last:-?} size=$(du -h "$MOV" | awk '{print $1}')"
+  python3 - "$duration" "$last" "$SECS" <<'PY'
+import sys
+duration, last, want = (float(v or 0) for v in sys.argv[1:4])
+# Frames have to keep coming until the storyboard is over. A container that
+# claims the full length with its last frame several seconds earlier is the
+# frozen-ending failure.
+if last < want - 5:
+    raise SystemExit(2)
+PY
+  if command -v ffmpeg >/dev/null 2>&1; then
+    luma="$(ffmpeg -v error -ss 2 -i "$MOV" -frames:v 1 -f rawvideo -pix_fmt gray - | python3 -c 'import sys; d=sys.stdin.buffer.read(); print(0 if not d else sum(d)/len(d))')"
+    log "frame luma ${luma:-0}"
+    python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1]) > 12 else 3)' "${luma:-0}"
+  fi
+}
+
+# The storyboard is about 26s. The cap is a little longer so a slow click
+# still finishes inside the file. postprocess cuts at the story end written
+# below, which drops the idle tail instead of publishing a frozen frame.
+if (( SECS > 36 )); then
+  log "capping recording at 36s"
+  SECS=36
+elif (( SECS < 32 )); then
+  log "recording 32s so the storyboard can finish"
+  SECS=32
+fi
+
+note_story_end() {
+  [[ -f "$OUT/shot.txt" ]] || return 0
+  local ended
+  ended="$(python3 -c 'import time,sys; print(round(time.time()-float(sys.argv[1]), 2))' "$RECORD_STARTED")"
+  grep -v '^end=' "$OUT/shot.txt" >"$OUT/shot.txt.tmp" || true
+  mv "$OUT/shot.txt.tmp" "$OUT/shot.txt"
+  printf 'end=%s\n' "$ended" >>"$OUT/shot.txt"
+  log "story end ${ended}s"
+}
+
+RECORD_STARTED="$(python3 -c 'import time; print(time.time())')"
+REC_LABEL="ffmpeg"
+if ! start_ffmpeg_record; then
+  REC_LABEL="screencapture"
+  start_screencapture_record
+fi
+sleep 0.4
+play_story
+note_story_end
+if ! finish_recording "$REC_LABEL"; then
+  log "capture looks short; recording once more with screencapture"
+  rm -f "$MOV"
+  if [[ -n "${REC_PID:-}" ]] && kill -0 "$REC_PID" 2>/dev/null; then
+    kill "$REC_PID" 2>/dev/null || true
+    wait "$REC_PID" 2>/dev/null || true
+  fi
+  demo HIDE >/dev/null 2>&1 || true
+  sleep 0.4
+  REC_LABEL="screencapture"
+  RECORD_STARTED="$(python3 -c 'import time; print(time.time())')"
+  start_screencapture_record
+  sleep 0.4
+  play_story
+  note_story_end
+  finish_recording "$REC_LABEL" || log "second capture is still short; keeping it"
+fi
+if [[ ! -f "$OUT/shot.txt" ]]; then
+  log "shot.txt was not written; the popover geometry never arrived"
+  exit 1
+fi
+
 demo QUIT >/dev/null 2>&1 || true
 wait "$APP_PID" 2>/dev/null || true
 
@@ -270,4 +429,4 @@ if [[ ! -s "$MOV" ]]; then
   log "recording is empty"
   exit 1
 fi
-log "wrote $MOV ($(du -h "$MOV" | awk '{print $1}'))"
+log "wrote $MOV"

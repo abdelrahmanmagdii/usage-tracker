@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: demo-recording-v3-${{ github.ref }}
+  group: demo-recording-v4-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -46,6 +46,8 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - name: ffmpeg for screen capture
+        run: command -v ffmpeg >/dev/null || brew install ffmpeg
       # Updater artifacts need the release signing key, which this job does not have.
       - run: npm run tauri build -- --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - name: Record menu bar
@@ -97,7 +99,7 @@ jobs:
     needs: [record-macos, record-windows]
     if: always() && (needs.record-macos.result == 'success' || needs.record-windows.result == 'success')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
