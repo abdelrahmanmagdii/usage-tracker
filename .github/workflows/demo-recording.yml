@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: demo-recording-v2-${{ github.ref }}
+  group: demo-recording-v3-${{ github.ref }}
   cancel-in-progress: true
 
 env:

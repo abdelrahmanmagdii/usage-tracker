@@ -23,11 +23,12 @@ OUT="${OUT:-processed}"
 mkdir -p "$OUT/frames"
 
 GIF_W="${GIF_W:-800}"
-GIF_FPS="${GIF_FPS:-12}"
+GIF_H="${GIF_H:-1400}"
+GIF_FPS="${GIF_FPS:-10}"
 MAC_GIF_SS="${MAC_GIF_SS:-6}"
-MAC_GIF_T="${MAC_GIF_T:-7}"
+MAC_GIF_T="${MAC_GIF_T:-6}"
 WIN_GIF_SS="${WIN_GIF_SS:-2}"
-WIN_GIF_T="${WIN_GIF_T:-7}"
+WIN_GIF_T="${WIN_GIF_T:-6}"
 LI_T="${LI_T:-26}"
 RD_T="${RD_T:-60}"
 
@@ -55,29 +56,37 @@ crop_filter() {
 }
 
 try_gif() {
-  local raw="$1" gif="$2" ss="$3" t="$4" width="$5" colors="$6" cropf="$7"
+  local raw="$1" gif="$2" ss="$3" t="$4" colors="$5" cropf="$6"
+  # Fit inside GIF_W x GIF_H so a tall Windows column does not become a
+  # 1600px-tall README image, while a menu-bar popover stays near 800px wide.
   ffmpeg -v error -y -ss "$ss" -t "$t" -i "$raw" -filter_complex \
-    "[0:v]${cropf}fps=${GIF_FPS},scale=${width}:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=${colors}:stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle" \
+    "[0:v]${cropf}fps=${GIF_FPS},scale=${GIF_W}:${GIF_H}:force_original_aspect_ratio=decrease:flags=lanczos,split[a][b];[a]palettegen=max_colors=${colors}:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" \
     -loop 0 "$gif"
+}
+
+shrink_gif() {
+  local gif="$1"
+  command -v gifsicle >/dev/null 2>&1 || return 0
+  local size lossy
+  size="$(stat -c%s "$gif")"
+  if (( size < 2000000 )); then
+    gifsicle -O3 -o "$gif.opt" "$gif" && mv "$gif.opt" "$gif"
+    return 0
+  fi
+  for lossy in 60 100 160; do
+    gifsicle -O3 --lossy="$lossy" --colors 128 -o "$gif.opt" "$gif" || return 0
+    mv "$gif.opt" "$gif"
+    size="$(stat -c%s "$gif")"
+    (( size < 2000000 )) && return 0
+  done
 }
 
 make_gif() {
   local raw="$1" gif="$2" ss="$3" t="$4" cropf="$5"
-  if ! try_gif "$raw" "$gif" "$ss" "$t" "$GIF_W" 128 "$cropf"; then
-    try_gif "$raw" "$gif" 0 "$t" "$GIF_W" 128 "$cropf"
+  if ! try_gif "$raw" "$gif" "$ss" "$t" 128 "$cropf"; then
+    try_gif "$raw" "$gif" 0 "$t" 96 "$cropf"
   fi
-  local size
-  size="$(stat -c%s "$gif")"
-  if (( size >= 2000000 )); then
-    try_gif "$raw" "$gif" "$ss" "$t" 720 96 "$cropf" || true
-  fi
-  size="$(stat -c%s "$gif")"
-  if (( size >= 2000000 )); then
-    try_gif "$raw" "$gif" "$ss" "$t" 640 64 "$cropf" || true
-  fi
-  if command -v gifsicle >/dev/null 2>&1 && (( $(stat -c%s "$gif") >= 2000000 )); then
-    gifsicle -O3 --lossy=40 -b "$gif" || true
-  fi
+  shrink_gif "$gif"
 }
 
 encode_mp4() {
