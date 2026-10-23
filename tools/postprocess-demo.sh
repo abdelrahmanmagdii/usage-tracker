@@ -14,6 +14,7 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   sudo apt-get install -y -qq ffmpeg
 fi
 command -v gifsicle >/dev/null 2>&1 || sudo apt-get install -y -qq gifsicle >/dev/null 2>&1 || true
+python3 -c 'import PIL' >/dev/null 2>&1 || sudo apt-get install -y -qq python3-pil >/dev/null 2>&1 || python3 -m pip install --user pillow >/dev/null 2>&1
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAC_DIR="${1:-}"
@@ -135,7 +136,7 @@ grab() {
   ffmpeg -v error -y -ss "$ss" -i "$src" -frames:v 1 -update 1 "$dest" || true
 }
 grab "$mac_wide" 8 "$OUT/frames/macos-popover.png"
-grab "$mac_wide" 18 "$OUT/frames/macos-settings.png"
+grab "$mac_wide" 21 "$OUT/frames/macos-settings.png"
 grab "$win_wide" 0.7 "$OUT/frames/windows-dashboard.png"
 grab "$win_wide" 16 "$OUT/frames/windows-settings.png"
 
