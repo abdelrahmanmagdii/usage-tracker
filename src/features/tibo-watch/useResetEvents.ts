@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ResetEvent } from "../../types/codex";
+import { demoMode } from "../../lib/demo";
 import { CombinedResetEventProvider } from "./provider";
 
 const REFRESH_MS = 5 * 60 * 1000;
@@ -59,11 +60,16 @@ export function useResetEvents(): ResetEvent[] {
     const onVisibility = () => {
       if (document.visibilityState === "visible") nudge();
     };
-    load();
-    const interval = window.setInterval(() => load(), TICK_MS);
-    window.addEventListener("focus", nudge);
-    window.addEventListener("online", nudge);
-    document.addEventListener("visibilitychange", onVisibility);
+    // Demo mode is sample quotas only: do not call the reset feed or Bluesky.
+    let interval = 0;
+    void demoMode().then((demo) => {
+      if (!active || demo) return;
+      load();
+      interval = window.setInterval(() => load(), TICK_MS);
+      window.addEventListener("focus", nudge);
+      window.addEventListener("online", nudge);
+      document.addEventListener("visibilitychange", onVisibility);
+    });
     return () => {
       active = false;
       window.clearInterval(interval);

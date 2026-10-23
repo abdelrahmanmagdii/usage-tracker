@@ -101,7 +101,7 @@ impl ClaudeManager {
             .expect("reqwest client construction is infallible with these options");
         Self {
             app,
-            state: Arc::new(RwLock::new(ClaudeState::default())),
+            state: Arc::new(RwLock::new(crate::demo::initial_claude())),
             client,
             refresh_lock: Arc::new(Mutex::new(())),
             absent_reads: Arc::new(AtomicU32::new(0)),
@@ -117,6 +117,10 @@ impl ClaudeManager {
     /// only attributes and file metadata, so it is cheap and never prompts. The
     /// first call records a baseline and reports no change.
     pub async fn login_changed(&self) -> bool {
+        // Demo mode must not touch the keychain or the credentials file.
+        if crate::demo::enabled() {
+            return false;
+        }
         let Ok(stamp) = tokio::task::spawn_blocking(login_stamp).await else {
             return false;
         };
@@ -144,6 +148,9 @@ impl ClaudeManager {
         &self,
         allow_keychain_prompt: bool,
     ) -> Result<ClaudeState, String> {
+        if crate::demo::enabled() {
+            return Ok(self.snapshot().await);
+        }
         if !self
             .app
             .state::<crate::prefs::PrefsStore>()

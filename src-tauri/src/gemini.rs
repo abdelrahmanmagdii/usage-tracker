@@ -31,10 +31,8 @@ use crate::provider::{
 };
 use crate::tray;
 
-const QUOTA_URL: &str =
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
-const CODE_ASSIST_URL: &str =
-    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+const QUOTA_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+const CODE_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 /// Refresh a minute before expiry so a poll does not race the token out.
 const EXPIRY_SKEW_SECS: f64 = 60.0;
 
@@ -80,7 +78,7 @@ impl GeminiManager {
     pub fn new(app: AppHandle) -> Self {
         Self {
             app,
-            state: Arc::new(RwLock::new(ProviderState::default())),
+            state: Arc::new(RwLock::new(crate::demo::initial_gemini())),
             client: http_client(),
             refresh_lock: Arc::new(Mutex::new(())),
             token_cache: Arc::new(Mutex::new(None)),
@@ -92,6 +90,9 @@ impl GeminiManager {
     }
 
     pub async fn refresh(&self) -> Result<ProviderState, String> {
+        if crate::demo::enabled() {
+            return Ok(self.snapshot().await);
+        }
         if !self
             .app
             .state::<crate::prefs::PrefsStore>()
@@ -144,9 +145,15 @@ impl GeminiManager {
         };
 
         // Project and tier are nice-to-have; quota answers without them.
-        let identity = self.load_code_assist(&access_token).await.unwrap_or_default();
+        let identity = self
+            .load_code_assist(&access_token)
+            .await
+            .unwrap_or_default();
 
-        match self.fetch_quota(&access_token, identity.project.as_deref()).await {
+        match self
+            .fetch_quota(&access_token, identity.project.as_deref())
+            .await
+        {
             Ok(payload) => self.publish(identity.plan.as_deref(), &payload).await?,
             Err(QuotaFetch::Unauthorized) => {
                 // Includes the consumer-tier shutdown signal: this Mac's
@@ -187,7 +194,9 @@ impl GeminiManager {
             state.updated_at = Some(now_unix_seconds());
         }
         if let Some(alerts) = self.app.try_state::<crate::alerts::UsageAlerts>() {
-            alerts.observe(&self.app, "Gemini", &normalized.rate_limits).await;
+            alerts
+                .observe(&self.app, "Gemini", &normalized.rate_limits)
+                .await;
         }
         self.emit_state().await;
         Ok(())
@@ -204,9 +213,7 @@ impl GeminiManager {
             }
         }
         if !token.is_expired(now) {
-            let expires_at = token
-                .expires_at
-                .unwrap_or(now + 3_600.0);
+            let expires_at = token.expires_at.unwrap_or(now + 3_600.0);
             *self.token_cache.lock().await = Some(CachedAccessToken {
                 access_token: token.access_token.clone(),
                 expires_at,
@@ -253,7 +260,11 @@ impl GeminiManager {
         Some(CodeAssistIdentity {
             project: first_string(
                 &body,
-                &["cloudaicompanionProject", "cloudaicompanion_project", "project"],
+                &[
+                    "cloudaicompanionProject",
+                    "cloudaicompanion_project",
+                    "project",
+                ],
             ),
             plan: plan_label(&body),
         })
@@ -272,9 +283,7 @@ impl GeminiManager {
             .json(&json!({ "project": project.unwrap_or(" ") }))
             .send()
             .await
-            .map_err(|error| {
-                QuotaFetch::Failed(format!("Gemini quota request failed: {error}"))
-            })?;
+            .map_err(|error| QuotaFetch::Failed(format!("Gemini quota request failed: {error}")))?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(QuotaFetch::Unauthorized);
@@ -417,7 +426,13 @@ fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
 }
 
 fn first_expiry(value: &Value) -> Option<f64> {
-    for key in ["expiry_date", "expiryDate", "expires_at", "expiresAt", "expiry"] {
+    for key in [
+        "expiry_date",
+        "expiryDate",
+        "expires_at",
+        "expiresAt",
+        "expiry",
+    ] {
         if let Some(number) = finite_f64(value.get(key)) {
             // Millisecond epochs are bigger than any second timestamp this app
             // will live to see; normalize to seconds.
@@ -485,14 +500,11 @@ struct NormalizedUsage {
 /// Flash, and Other families; the family meter mirrors the worst bucket, and
 /// its reset is that bucket's own reset time.
 fn normalize_quota(raw: &Value) -> Option<NormalizedUsage> {
-    let buckets = raw
-        .get("buckets")
-        .and_then(Value::as_array)
-        .or_else(|| {
-            raw.get("response")
-                .and_then(|value| value.get("buckets"))
-                .and_then(Value::as_array)
-        })?;
+    let buckets = raw.get("buckets").and_then(Value::as_array).or_else(|| {
+        raw.get("response")
+            .and_then(|value| value.get("buckets"))
+            .and_then(Value::as_array)
+    })?;
 
     let mut families: std::collections::BTreeMap<&'static str, Family> =
         std::collections::BTreeMap::new();
@@ -582,7 +594,9 @@ fn bucket_disabled(bucket: &Value) -> bool {
 
 fn remaining_fraction(bucket: &Value) -> Option<f64> {
     for key in ["remainingFraction", "remaining_fraction", "remaining"] {
-        if let Some(value) = finite_f64(bucket.get(key)).filter(|v| v.is_finite() && (0.0..=1.0).contains(v)) {
+        if let Some(value) =
+            finite_f64(bucket.get(key)).filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        {
             return Some(value);
         }
     }
@@ -617,15 +631,11 @@ mod tests {
 
     #[test]
     fn parses_expired_and_rfc3339_expiries() {
-        let expired = parse_oauth_value(
-            br#"{"access_token":"t","expiry_date":1700000000000}"#,
-        )
-        .expect("token");
+        let expired = parse_oauth_value(br#"{"access_token":"t","expiry_date":1700000000000}"#)
+            .expect("token");
         assert!(expired.is_expired(1_800_000_000.0));
-        let iso = parse_oauth_value(
-            br#"{"access_token":"t","expiry":"2099-01-01T00:00:00Z"}"#,
-        )
-        .expect("token");
+        let iso = parse_oauth_value(br#"{"access_token":"t","expiry":"2099-01-01T00:00:00Z"}"#)
+            .expect("token");
         assert!(!iso.is_expired(1_700_000_000.0));
         assert!(parse_oauth_value(b"{}").is_none());
         assert!(parse_oauth_value(b"").is_none());
@@ -672,10 +682,7 @@ mod tests {
             by_id["pro"].pointer("/primary/usedPercent"),
             Some(&json!(90.0))
         );
-        assert_eq!(
-            by_id["pro"].get("windowLabel"),
-            Some(&json!("Pro models"))
-        );
+        assert_eq!(by_id["pro"].get("windowLabel"), Some(&json!("Pro models")));
         assert_eq!(
             by_id["flash"].pointer("/secondary/usedPercent"),
             Some(&json!(10.0))
@@ -697,10 +704,7 @@ mod tests {
         });
         let normalized = normalize_quota(&payload).expect("families");
         let pro = &normalized.rate_limits["rateLimitsByLimitId"]["pro"];
-        assert_eq!(
-            pro.pointer("/primary/usedPercent"),
-            Some(&json!(100.0))
-        );
+        assert_eq!(pro.pointer("/primary/usedPercent"), Some(&json!(100.0)));
         assert_eq!(
             pro.get("rateLimitReachedType"),
             Some(&json!("limit_reached"))

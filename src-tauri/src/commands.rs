@@ -89,7 +89,19 @@ pub async fn refresh_gemini(manager: State<'_, GeminiManager>) -> Result<Provide
 
 #[tauri::command]
 pub fn get_app_prefs(prefs: State<'_, crate::prefs::PrefsStore>) -> crate::prefs::AppPrefs {
-    prefs.get()
+    let mut prefs = prefs.get();
+    if crate::demo::enabled() {
+        // Session-only: the walkthrough would cover the sample meters. This
+        // copy is not written, so a later launch without --demo is unchanged.
+        prefs.onboarding_complete = true;
+    }
+    prefs
+}
+
+/// True only for an explicit `--demo` / `USAGEBAR_DEMO=1` launch.
+#[tauri::command]
+pub fn is_demo_mode() -> bool {
+    crate::demo::enabled()
 }
 
 #[derive(serde::Serialize)]
@@ -441,6 +453,10 @@ pub fn show_dashboard(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         #[cfg(target_os = "macos")]
         crate::activate_app();
+        if crate::demo::enabled() {
+            crate::demo::place_popover(&window);
+            let _ = window.set_always_on_top(true);
+        }
         window.show().map_err(|error| error.to_string())?;
         window.unminimize().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;

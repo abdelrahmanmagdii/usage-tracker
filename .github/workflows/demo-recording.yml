@@ -1,0 +1,123 @@
+# Records the real UsageBar app (menu bar on macOS, tray + floating meter on
+# Windows) with sample quotas. Demo mode is opt-in (`--demo` / USAGEBAR_DEMO=1)
+# and is off for every other launch.
+#
+# workflow_dispatch works once this file is on the default branch. Until then,
+# a push to the recording branch runs it — GitHub will not dispatch a workflow
+# that exists only on a feature branch.
+name: Demo recording
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Recording length in seconds
+        default: "40"
+        required: false
+  push:
+    branches:
+      - cursor/demo-recording-ad81
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-recording-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The release profile's LTO is for shipping size, not for pixels. Turning it
+  # off here only shortens the recording build.
+  CARGO_PROFILE_RELEASE_LTO: "false"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "8"
+
+jobs:
+  record-macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      # Updater artifacts need the release signing key, which this job does not have.
+      - run: npm run tauri build -- --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Record menu bar
+        shell: bash
+        run: bash tools/demo-record-macos.sh "${{ github.event.inputs.seconds || 40 }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: usagebar-macos-raw
+          path: out/
+          if-no-files-found: warn
+          retention-days: 14
+
+  record-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Install ffmpeg
+        shell: pwsh
+        run: |
+          $zip = "$env:TEMP\ffmpeg-gpl.zip"
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:TEMP\ffmpeg" -Force
+          $bin = Get-ChildItem "$env:TEMP\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          echo "$($bin.DirectoryName)" >> $env:GITHUB_PATH
+      - run: npm run windows:build
+      - name: Record tray and dashboard
+        shell: pwsh
+        run: pwsh -File tools/demo-record-windows.ps1 -Seconds ${{ github.event.inputs.seconds || 40 }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: usagebar-windows-raw
+          path: out/
+          if-no-files-found: warn
+          retention-days: 14
+
+  postprocess:
+    needs: [record-macos, record-windows]
+    if: always() && (needs.record-macos.result == 'success' || needs.record-windows.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        if: needs.record-macos.result == 'success'
+        with:
+          name: usagebar-macos-raw
+          path: raw/macos
+      - uses: actions/download-artifact@v4
+        if: needs.record-windows.result == 'success'
+        with:
+          name: usagebar-windows-raw
+          path: raw/windows
+      - name: GIF and social MP4s
+        run: bash tools/postprocess-demo.sh raw/macos raw/windows
+        env:
+          OUT: processed
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: usagebar-demo-processed
+          path: processed/
+          if-no-files-found: warn
+          retention-days: 14

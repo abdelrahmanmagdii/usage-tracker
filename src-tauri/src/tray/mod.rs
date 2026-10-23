@@ -105,6 +105,10 @@ fn toggle_main_window(app: &AppHandle) {
             // window ordered in while the app is hidden stays off-screen.
             #[cfg(target_os = "macos")]
             crate::activate_app();
+            if crate::demo::enabled() {
+                crate::demo::place_popover(&window);
+                let _ = window.set_always_on_top(true);
+            }
             let _ = window.show();
             let _ = window.unminimize();
             let _ = window.set_focus();
