@@ -34,6 +34,7 @@
 
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+html[data-demo] .brand-row p { color: var(--accent-deep); }
 html[data-preview] .content-scroll,
 html[data-preview] .settings-body { scrollbar-width: none; }
 html[data-preview] .content-scroll::-webkit-scrollbar,

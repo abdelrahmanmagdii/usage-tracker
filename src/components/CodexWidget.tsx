@@ -555,6 +555,7 @@ function formatCompactTime(resetsAt?: number, nowMs = Date.now()): string {
     }
   }, [collapsedWidth]);
 
+  const changeExpandedRef = useRef<(next: boolean) => void>(() => {});
   const changeExpanded = (next: boolean) => {
     clearTimeout(collapseTimer.current);
     clearTimeout(expandTimer.current);
@@ -570,6 +571,24 @@ function formatCompactTime(resetsAt?: number, nowMs = Date.now()): string {
       }).catch(() => undefined);
     }
   };
+  changeExpandedRef.current = changeExpanded;
+
+  useEffect(() => {
+    if (
+      !("__TAURI_INTERNALS__" in window) ||
+      typeof (window as unknown as { __TAURI_INTERNALS__?: { transformCallback?: unknown } })
+        .__TAURI_INTERNALS__?.transformCallback !== "function"
+    ) {
+      return;
+    }
+    const unlisten = listen<{ action: string }>("usagebar://demo", (event) => {
+      if (event.payload.action === "widget-expand") changeExpandedRef.current(true);
+      if (event.payload.action === "widget-collapse") changeExpandedRef.current(false);
+    });
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
 
   useEffect(
     () => () => {

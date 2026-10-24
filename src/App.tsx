@@ -28,6 +28,7 @@ import { useResetEvents } from "./features/tibo-watch/useResetEvents";
 import { upcomingReset } from "./features/tibo-watch/provider";
 import { notifyFreshResets } from "./features/tibo-watch/notifications";
 import { formatCountdown, windowDurationLabel } from "./lib/rateLimits";
+import { demoMode } from "./lib/demo";
 import { previewPrefs, previewResetEvent } from "./lib/preview";
 import type { RateLimitBucket } from "./types/codex";
 import { deviceName, isWindows, trayName } from "./lib/platform";
@@ -56,6 +57,7 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
+  const [demo, setDemo] = useState(false);
   const liveResetEvents = useResetEvents();
   const resetEvents = useMemo(() => {
     const preview = previewResetEvent(Date.now(), window.location.search);
@@ -66,6 +68,38 @@ export default function App() {
     if (previewPrefs(window.location.search)) {
       document.documentElement.dataset.preview = "";
     }
+  }, []);
+
+  // Recording scripts drive the real window over `usagebar://demo`. The
+  // listener is inert unless the process was started in demo mode.
+  useEffect(() => {
+    let active = true;
+    void demoMode().then((on) => {
+      if (!active) return;
+      setDemo(on);
+      if (on) document.documentElement.dataset.demo = "";
+    });
+    if (!("__TAURI_INTERNALS__" in window)) {
+      return () => {
+        active = false;
+      };
+    }
+    const unlisten = listen<{ action: string; amount?: number | null }>("usagebar://demo", (event) => {
+      const { action, amount } = event.payload;
+      if (action === "settings") setSettingsOpen(true);
+      else if (action === "close-settings") setSettingsOpen(false);
+      else if (action === "scroll" || action === "scroll-top") {
+        const scroller = document.querySelector(".content-scroll");
+        if (!(scroller instanceof HTMLElement)) return;
+        if (action === "scroll-top") scroller.scrollTo({ top: 0, behavior: "smooth" });
+        else scroller.scrollBy({ top: amount ?? 200, behavior: "smooth" });
+      }
+    });
+    return () => {
+      active = false;
+      delete document.documentElement.dataset.demo;
+      void unlisten.then((off) => off());
+    };
   }, []);
 
   // First run shows the walkthrough; the tray's Setup Guide item reopens it.
@@ -214,7 +248,7 @@ export default function App() {
             <MeterMark />
               <div data-tauri-drag-region>
                 <h1 data-tauri-drag-region>UsageBar</h1>
-                <p data-tauri-drag-region>Usage meter</p>
+                <p data-tauri-drag-region>{demo ? "Demo data" : "Usage meter"}</p>
             </div>
           </div>
           <span className="toolbar-divider" aria-hidden="true" />

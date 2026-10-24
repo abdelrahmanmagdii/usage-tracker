@@ -4,6 +4,7 @@ mod claude;
 mod codex;
 mod commands;
 mod cursor;
+mod demo;
 mod devin;
 mod gemini;
 mod opencode;
@@ -234,7 +235,14 @@ pub fn run() {
                     }
                 });
             }
-            updates::spawn_periodic_checks(&app.handle());
+            if demo::enabled() {
+                // Sample quotas only. The updater would call the network, and
+                // the provider tasks below no-op inside their refresh paths.
+                demo::log_enablement();
+                demo::spawn_control(app.handle().clone());
+            } else {
+                updates::spawn_periodic_checks(&app.handle());
+            }
 
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
@@ -266,6 +274,10 @@ pub fn run() {
             #[cfg(any(debug_assertions, target_os = "windows"))]
             if !cfg!(target_os = "windows") || !std::env::args_os().any(|arg| arg == "--startup") {
                 if let Some(window) = app.get_webview_window("main") {
+                    if demo::enabled() {
+                        demo::place_popover(&window);
+                        let _ = window.set_always_on_top(true);
+                    }
                     window.show()?;
                     window.set_focus()?;
                 }
@@ -561,6 +573,7 @@ pub fn run() {
             commands::drag_codex_widget,
             commands::hide_codex_widget,
             commands::reset_widget_position,
+            commands::is_demo_mode,
             commands::quit_app
         ])
         .run(tauri::generate_context!())

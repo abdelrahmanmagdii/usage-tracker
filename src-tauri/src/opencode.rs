@@ -37,7 +37,7 @@ impl OpenCodeManager {
     pub fn new(app: AppHandle) -> Self {
         Self {
             app,
-            state: Arc::new(RwLock::new(ProviderState::default())),
+            state: Arc::new(RwLock::new(crate::demo::initial_opencode())),
             client: http_client(),
             refresh_lock: Arc::new(Mutex::new(())),
         }
@@ -48,6 +48,9 @@ impl OpenCodeManager {
     }
 
     pub async fn refresh(&self) -> Result<ProviderState, String> {
+        if crate::demo::enabled() {
+            return Ok(self.snapshot().await);
+        }
         if !self
             .app
             .state::<crate::prefs::PrefsStore>()

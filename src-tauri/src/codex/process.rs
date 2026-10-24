@@ -75,7 +75,7 @@ impl CodexManager {
     pub fn new(app: AppHandle) -> Self {
         Self {
             app,
-            state: Arc::new(RwLock::new(CodexState::default())),
+            state: Arc::new(RwLock::new(crate::demo::initial_codex())),
             stdin: Arc::new(Mutex::new(None)),
             child: Arc::new(Mutex::new(None)),
             pending: Arc::new(Mutex::new(HashMap::new())),
@@ -91,6 +91,10 @@ impl CodexManager {
     }
 
     pub async fn start(&self) -> Result<CodexState, String> {
+        // Sample snapshot only. Demo mode must not spawn the Codex CLI.
+        if crate::demo::enabled() {
+            return Ok(self.snapshot().await);
+        }
         let _guard = self.start_lock.lock().await;
         if self.snapshot().await.connection == ConnectionState::Connected {
             return Ok(self.snapshot().await);
@@ -177,6 +181,9 @@ impl CodexManager {
     }
 
     pub async fn refresh_or_start(&self) -> Result<CodexState, String> {
+        if crate::demo::enabled() {
+            return Ok(self.snapshot().await);
+        }
         if self.snapshot().await.connection == ConnectionState::Connected {
             match self.refresh_data().await {
                 Ok(state) => Ok(state),
@@ -196,6 +203,9 @@ impl CodexManager {
     }
 
     pub async fn refresh_data(&self) -> Result<CodexState, String> {
+        if crate::demo::enabled() {
+            return Ok(self.snapshot().await);
+        }
         let _guard = self.refresh_lock.lock().await;
         let account = self
             .request("account/read", Some(json!({ "refreshToken": false })))

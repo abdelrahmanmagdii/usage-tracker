@@ -58,7 +58,7 @@ impl AntigravityManager {
     pub fn new(app: AppHandle) -> Self {
         Self {
             app,
-            state: Arc::new(RwLock::new(ProviderState::default())),
+            state: Arc::new(RwLock::new(crate::demo::initial_antigravity())),
             client: http_client(),
             refresh_lock: Arc::new(Mutex::new(())),
             token_cache: Arc::new(Mutex::new(None)),
@@ -71,6 +71,9 @@ impl AntigravityManager {
     }
 
     pub async fn should_poll_local_launch(&self) -> bool {
+        if crate::demo::enabled() {
+            return false;
+        }
         if !self
             .app
             .state::<crate::prefs::PrefsStore>()
@@ -98,6 +101,9 @@ impl AntigravityManager {
         &self,
         allow_keychain_prompt: bool,
     ) -> Result<ProviderState, String> {
+        if crate::demo::enabled() {
+            return Ok(self.snapshot().await);
+        }
         if !self
             .app
             .state::<crate::prefs::PrefsStore>()
