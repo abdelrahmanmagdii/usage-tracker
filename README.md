@@ -6,13 +6,13 @@ UsageBar is a small, local-first macOS menu-bar app (with a [Windows beta](#wind
 
 The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset countdown for each provider — how much you have left, matching what the official apps show, so the numbers always agree. By default each meter follows whichever window is most used — for Claude that is often a per-model weekly limit like Fable — and you can pin a specific window in Settings. The tooltip always names the window on display. The popover is built with a native macOS glass (vibrancy) look, and Tibo Watch watches [@thsottiaux](https://x.com/thsottiaux) for surprise-reset announcements and sends a local notification when a fresh one lands.
 
-![UsageBar showing an announced reset before it lands](docs/usagebar-demo.gif)
+<img src="docs/usagebar-demo.gif" width="640" alt="UsageBar menu bar and popover scrolling provider quotas">
 
 | Codex meters & reset radar | Claude Code meters |
 | :---: | :---: |
 | ![Codex quota windows in the popover](docs/usagebar-popover.png) | ![Claude Code quota windows in the popover](docs/usagebar-claude.png) |
 
-*Demo and screenshots use preview data.*
+*The GIFs are the real app with sample quotas. The stills use preview data.*
 
 By default visible providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude) — the **Compact** layout, which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **Extended** (one icon per provider), choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — toggle **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), **Reset Alerts** (Tibo's announcements, with a **Send test notification** button to confirm macOS will show them), **Compact cards** (one row per quota window), and **Launch at Login**. Each tool shows when it last refreshed and flags readings older than 15 minutes, and a window you're burning through quickly shows when it will run out at the current pace.
 
@@ -63,6 +63,8 @@ the menu bar, opens the dashboard as a normal window, and adds a small Codex
 meter that docks above the taskbar (drag it anywhere, or hide it from the tray
 menu). It reads the same tool logins from their Windows locations; there is no
 Keychain step.
+
+<img src="docs/usagebar-demo-windows.gif" width="320" alt="UsageBar on Windows: the dashboard with sample quotas">
 
 The Windows build is not in the GitHub releases yet and is not code-signed, so
 SmartScreen warns on first launch, and it does not auto-update — install a newer
