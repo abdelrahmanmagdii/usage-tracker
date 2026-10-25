@@ -134,6 +134,7 @@ code {
   color: var(--faint);
   cursor: default;
 }
+.btn.secondary em,
 .btn.disabled em {
   font-style: normal;
   font-size: 11px;
@@ -337,9 +338,9 @@ h1 {
 /* ---------- Download ---------- */
 .platforms {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
-  max-width: 36em;
+  max-width: 56em;
 }
 .platform {
   display: flex;

@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>UsageBar — Codex, Claude, Cursor, OpenCode, Devin, Antigravity &amp; Gemini quotas in the Mac menu bar</title>
-  <meta name="description" content="A small Mac menu bar app for leftover Codex, Claude, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI quota, plus when each window resets. Same numbers as the official apps. I don't run a server." />
+  <title>UsageBar — Codex, Claude, Cursor, OpenCode, Devin, Antigravity &amp; Gemini quotas in the Mac menu bar and Windows tray</title>
+  <meta name="description" content="A small Mac menu bar app (with a Windows tray beta) for leftover Codex, Claude, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI quota, plus when each window resets. Same numbers as the official apps. I don't run a server." />
   <link rel="canonical" href="https://abdelrahmanmagdii.github.io/usage-tracker/" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="UsageBar" />
@@ -26,8 +26,8 @@
     "@type": "SoftwareApplication",
     "name": "UsageBar",
     "applicationCategory": "DeveloperApplication",
-    "operatingSystem": "macOS 10.15 or later",
-    "description": "Mac menu bar app that shows leftover Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI quota with reset countdowns.",
+    "operatingSystem": "macOS 10.15 or later; Windows 10 or 11 (beta)",
+    "description": "Mac menu bar app, with a Windows tray beta, that shows leftover Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI quota with reset countdowns.",
     "url": "https://abdelrahmanmagdii.github.io/usage-tracker/",
     "downloadUrl": "https://github.com/abdelrahmanmagdii/usage-tracker/releases",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
@@ -41,7 +41,7 @@
       {
         "@type": "Question",
         "name": "What is UsageBar?",
-        "acceptedAnswer": { "@type": "Answer", "text": "UsageBar is a small macOS menu bar app that shows how much AI coding quota you have left — Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI — plus when each limit resets." }
+        "acceptedAnswer": { "@type": "Answer", "text": "UsageBar is a small macOS menu bar app, with a Windows beta, that shows how much AI coding quota you have left — Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI — plus when each limit resets." }
       },
       {
         "@type": "Question",
@@ -51,7 +51,7 @@
       {
         "@type": "Question",
         "name": "Is UsageBar free?",
-        "acceptedAnswer": { "@type": "Answer", "text": "Yes. It is free and open source, distributed as a signed and notarized .dmg from GitHub Releases." }
+        "acceptedAnswer": { "@type": "Answer", "text": "Yes. It is free and open source. The Mac version is a signed and notarized .dmg and the Windows beta is a -setup.exe installer, both on GitHub Releases." }
       },
       {
         "@type": "Question",
@@ -81,7 +81,7 @@
         <a href="support.html">Support</a>
       </nav>
       <span class="spacer"></span>
-      <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Download</a>
+      <a class="btn primary" href="#download">Download</a>
     </div>
   </header>
   <main id="main">
@@ -89,7 +89,7 @@
       <div>
         <h1>Your AI coding quota, in&nbsp;the&nbsp;menu&nbsp;bar.</h1>
         <p class="lede">
-          UsageBar is a small macOS app that shows how much Codex, Claude Code,
+          UsageBar is a small macOS menu-bar app, now with a Windows beta, that shows how much Codex, Claude Code,
           Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI quota you have left — and when each limit
           resets. Same numbers the official apps show.
         </p>
@@ -103,10 +103,10 @@
           <li class="gemini">Gemini CLI</li>
         </ul>
         <div class="cta-row">
-          <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Download for Mac</a>
-          <a class="btn secondary" href="https://github.com/abdelrahmanmagdii/usage-tracker">View on GitHub</a>
+          <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases/latest">Download for Mac</a>
+          <a class="btn secondary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases/latest/download/UsageBar_windows_x64-setup.exe">Download for Windows <em>Beta</em></a>
         </div>
-        <p class="fine">macOS 10.15 or later · Signed and notarized · No account, no server, no telemetry</p>
+        <p class="fine">macOS 10.15 or later, signed and notarized · Windows 10/11 beta · No account, no server, no telemetry</p>
       </div>
       <div class="shot">
         <img src="screens/popover-codex.png" alt="UsageBar popover showing Codex 5-hour and weekly quota windows" width="980" height="1324" />
@@ -221,7 +221,7 @@
       <ul class="faq">
         <li>
           <h3>What is UsageBar?</h3>
-          <p>A small macOS menu bar app that shows how much AI coding quota you have left — Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI — plus when each limit resets.</p>
+          <p>A small macOS menu bar app, with a Windows beta, that shows how much AI coding quota you have left — Codex, Claude Code, Cursor, OpenCode Go, Devin, Antigravity, and Gemini CLI — plus when each limit resets.</p>
         </li>
         <li>
           <h3>Does UsageBar send my data or credentials anywhere?</h3>
@@ -229,7 +229,7 @@
         </li>
         <li>
           <h3>Is UsageBar free?</h3>
-          <p>Yes — free and open source, distributed as a signed and notarized <code>.dmg</code> from GitHub Releases.</p>
+          <p>Yes — free and open source. The Mac version is a signed and notarized <code>.dmg</code>; the Windows beta is a <code>-setup.exe</code> installer. Both are on GitHub Releases.</p>
         </li>
         <li>
           <h3>How does it get the quota numbers?</h3>
@@ -246,18 +246,26 @@
       </ul>
     </section>
 
-    <section class="section">
+    <section class="section" id="download">
       <div class="section-head">
         <h2>Download</h2>
       </div>
       <div class="platforms">
         <article class="platform">
           <header>
-            <h3>GitHub Releases</h3>
+            <h3>macOS</h3>
             <span class="status live">Available</span>
           </header>
-          <p>Signed and notarized <code>.dmg</code>. Drag UsageBar to Applications. macOS 10.15 or newer.</p>
-          <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases">Download the .dmg</a>
+          <p>Signed and notarized <code>.dmg</code>. Drag UsageBar to Applications. macOS 10.15 or newer. Updates itself.</p>
+          <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases/latest">Download the .dmg</a>
+        </article>
+        <article class="platform">
+          <header>
+            <h3>Windows</h3>
+            <span class="status review">Beta</span>
+          </header>
+          <p>Per-user installer for Windows 10 and 11 (x64). Lives in the system tray, with a small Codex meter above the taskbar. Not code-signed yet, so SmartScreen asks once (More info → Run anyway). No auto-update: install a newer build over the old one.</p>
+          <a class="btn primary" href="https://github.com/abdelrahmanmagdii/usage-tracker/releases/latest/download/UsageBar_windows_x64-setup.exe">Download the .exe</a>
         </article>
       </div>
     </section>
