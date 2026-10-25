@@ -3,8 +3,14 @@ name: Windows build
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach the installer to (e.g. v0.2.4). Empty builds without publishing."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -14,6 +20,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -31,3 +39,37 @@ jobs:
           name: UsageBar-Windows
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
+
+  # A pushed v* tag or a dispatched tag publishes; branches and PRs only build.
+  # Attaches the installer to the GitHub release the macOS job publishes. The
+  # fixed-name copy lets the website link to releases/latest/download/... .
+  publish:
+    needs: windows
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.tag != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: UsageBar-Windows
+          path: dist
+      - name: Wait for the release to exist
+        # The macOS release job creates the release; on a tag push it may still
+        # be signing and notarizing when this build finishes.
+        run: |
+          for attempt in $(seq 1 60); do
+            gh release view "$RELEASE_TAG" >/dev/null 2>&1 && exit 0
+            sleep 30
+          done
+          echo "::error::Release $RELEASE_TAG did not appear within 30 minutes"
+          exit 1
+      - name: Upload the installer
+        run: |
+          installer=$(ls dist/*-setup.exe | head -n 1)
+          cp "$installer" dist/UsageBar_windows_x64-setup.exe
+          gh release upload "$RELEASE_TAG" "$installer" dist/UsageBar_windows_x64-setup.exe --clobber

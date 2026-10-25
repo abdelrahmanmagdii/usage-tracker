@@ -66,6 +66,11 @@ jobs:
           releaseBody: |
             Signed and notarized build. Download the `.dmg`, open it, and drag
             UsageBar to Applications.
+
+            Windows (beta): the `-setup.exe` installer is attached by the
+            Windows workflow a few minutes later. It is not code-signed yet, so
+            SmartScreen asks once (More info → Run anyway), and it does not
+            auto-update.
           # Publish straight away: tests gate the job above, and installed
           # copies only see `latest.json` once the release is public.
           releaseDraft: false
