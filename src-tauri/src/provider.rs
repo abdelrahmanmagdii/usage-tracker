@@ -16,6 +16,10 @@ use crate::codex::process::ConnectionState;
 /// `-128` is `errSecUserCanceled`. A background poll disables the keychain
 /// sheet, and macOS reports that disabled sheet as a cancel.
 /// `-25308` is `errSecInteractionNotAllowed`.
+///
+/// Only the macOS keychain paths call this; it is compiled everywhere so its
+/// tests run on every platform's CI.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn keychain_login_absent(code: i32) -> bool {
     matches!(code, -25300 | -128 | -25308)
 }
@@ -134,6 +138,16 @@ mod tests {
         assert!(!keep_last_meter(ConnectionState::Connected, false));
         assert!(keep_last_meter(ConnectionState::Connected, true));
         assert!(keep_last_meter(ConnectionState::Error, true));
+    }
+
+    #[test]
+    fn only_missing_or_unreachable_keychain_items_count_as_signed_out() {
+        assert!(keychain_login_absent(-25300));
+        assert!(keychain_login_absent(-128));
+        assert!(keychain_login_absent(-25308));
+        // errSecAuthFailed and success are not "no login".
+        assert!(!keychain_login_absent(-25293));
+        assert!(!keychain_login_absent(0));
     }
 
     #[test]

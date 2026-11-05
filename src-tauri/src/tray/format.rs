@@ -17,9 +17,9 @@ pub struct TrayWindow {
 
 pub fn window_duration_label(minutes: Option<f64>) -> String {
     match minutes {
-        Some(m) if m == 300.0 => "5-hour".to_owned(),
-        Some(m) if m == 1_440.0 => "Daily".to_owned(),
-        Some(m) if m == 10_080.0 => "Weekly".to_owned(),
+        Some(300.0) => "5-hour".to_owned(),
+        Some(1_440.0) => "Daily".to_owned(),
+        Some(10_080.0) => "Weekly".to_owned(),
         Some(m) if m > 0.0 && m % 10_080.0 == 0.0 => format!("{}-week", (m / 10_080.0) as u64),
         Some(m) if m > 0.0 && m % 1_440.0 == 0.0 => format!("{}-day", (m / 1_440.0) as u64),
         Some(m) if m > 0.0 && m % 60.0 == 0.0 => format!("{}-hour", (m / 60.0) as u64),
