@@ -108,7 +108,7 @@ impl DevinManager {
             }))
             .send()
             .await
-            .map_err(|error| format!("Devin usage request failed: {error}"));
+            .map_err(request_failure);
         let response = match response {
             Ok(response) => response,
             Err(message) => {
@@ -271,12 +271,27 @@ fn user_status_url(api_server_url: &str) -> String {
     format!("{}{USER_STATUS_PATH}", api_server_url.trim_end_matches('/'))
 }
 
+/// The server comes from the CLI's own file, but it ends up in requests and,
+/// through reqwest errors, in diagnostics. Accept only a plain https origin
+/// (optionally with a path): no embedded `user:password@`, query, or fragment.
 fn clean_api_server_url(value: String) -> Option<String> {
     let value = value.trim().trim_end_matches('/');
-    if !value.starts_with("https://") || value.len() <= "https://".len() {
+    if !value.starts_with("https://") {
         return None;
     }
-    Some(value.to_owned())
+    let url = reqwest::Url::parse(value).ok()?;
+    let plain = url.host_str().is_some_and(|host| !host.is_empty())
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none();
+    plain.then(|| value.to_owned())
+}
+
+/// reqwest's error text embeds the request URL. The diagnostic is shown in
+/// the UI, so keep the cause and drop the URL.
+fn request_failure(error: reqwest::Error) -> String {
+    format!("Devin usage request failed: {}", error.without_url())
 }
 
 /// Pulls a top-level TOML string without taking a toml crate dependency.
@@ -559,6 +574,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(insecure.api_server_url, DEFAULT_API_SERVER);
+    }
+
+    #[test]
+    fn the_api_server_must_be_a_plain_https_origin() {
+        let server = |url: &str| clean_api_server_url(url.to_owned());
+        assert_eq!(
+            server(" https://server.codeium.com/ ").as_deref(),
+            Some("https://server.codeium.com")
+        );
+        assert_eq!(
+            server("https://eu.windsurf.example/api").as_deref(),
+            Some("https://eu.windsurf.example/api")
+        );
+        for rejected in [
+            "https://",
+            "http://server.codeium.com",
+            "https://user:secret@server.codeium.com",
+            "https://server.codeium.com/?token=secret",
+            "https://server.codeium.com/#secret",
+            "server.codeium.com",
+        ] {
+            assert_eq!(server(rejected), None, "{rejected}");
+        }
+    }
+
+    #[test]
+    fn request_failures_do_not_repeat_the_url() {
+        // Nothing listens on port 9 of this machine, so the send fails.
+        let error = tauri::async_runtime::block_on(async {
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("client")
+                .post("http://127.0.0.1:9/exa.seat_management_pb.SeatManagementService/GetUserStatus?trace=marker")
+                .send()
+                .await
+                .expect_err("nothing listens on the discard port")
+        });
+        let message = request_failure(error);
+        assert!(message.starts_with("Devin usage request failed"));
+        assert!(!message.contains("marker"), "{message}");
+        assert!(!message.contains("127.0.0.1"), "{message}");
     }
 
     #[test]
