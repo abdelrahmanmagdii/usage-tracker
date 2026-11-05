@@ -150,6 +150,28 @@ pub fn home_dir() -> Option<PathBuf> {
     })
 }
 
+/// Credential files the providers read are a few kilobytes. Anything past
+/// this is not a login file, and reading it whole would only waste memory.
+pub const CREDENTIAL_FILE_LIMIT: u64 = 1024 * 1024;
+
+/// Reads a small file without trusting its size. A file over `limit` bytes
+/// is an `InvalidData` error, which callers report as unreadable rather than
+/// as a missing login.
+pub async fn read_capped(path: &std::path::Path, limit: u64) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let file = tokio::fs::File::open(path).await?;
+    let mut bytes = Vec::new();
+    // One byte past the limit tells "exactly at the limit" from "over it".
+    file.take(limit + 1).read_to_end(&mut bytes).await?;
+    if bytes.len() as u64 > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("file is larger than {limit} bytes"),
+        ));
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +196,21 @@ mod tests {
             widget_origin((-2000, 500, 300, 120), (-1920, 0, 0, 1040), true),
             (-1920, 500)
         );
+    }
+
+    #[test]
+    fn capped_reads_refuse_oversized_files() {
+        let path =
+            std::env::temp_dir().join(format!("usagebar-capped-read-{}.json", std::process::id()));
+        std::fs::write(&path, b"0123456789").expect("write");
+        tauri::async_runtime::block_on(async {
+            assert_eq!(read_capped(&path, 10).await.expect("fits"), b"0123456789");
+            let error = read_capped(&path, 9).await.expect_err("too large");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            let _ = std::fs::remove_file(&path);
+            let missing = read_capped(&path, 10).await.expect_err("missing");
+            assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+        });
     }
 
     #[test]
