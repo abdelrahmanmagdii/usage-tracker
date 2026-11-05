@@ -1243,6 +1243,36 @@ mod tests {
         assert!(indigo[2] > indigo[0] + 80);
     }
 
+    #[test]
+    fn every_showing_tool_gets_its_own_bar() {
+        // All seven tools in the title used to fall through to the four-slot
+        // layout, dropping the last three colors from the icon.
+        for count in 1..=Provider::ALL.len() + 2 {
+            let slots = bar_slots(count);
+            assert_eq!(slots.len(), count.max(1), "{count} tools");
+            for (x0, x1, top, bottom) in &slots {
+                assert!(*x0 >= 0.0 && *x1 <= 20.0 && x0 < x1);
+                assert!(top < bottom && *bottom <= 18.0);
+            }
+            for pair in slots.windows(2) {
+                assert!(pair[0].1 <= pair[1].0, "bars overlap for {count} tools");
+            }
+        }
+
+        let icon = combined_tray_icon(&Provider::ALL);
+        let rgba = icon.rgba();
+        let (x0, x1, _, bottom) = *bar_slots(7).last().unwrap();
+        let x = ((x0 + x1) / 2.0) as usize;
+        let y = bottom as usize - 2;
+        let gemini = &rgba[(y * 20 + x) * 4..(y * 20 + x) * 4 + 4];
+        assert!(gemini[3] > 200);
+        let color = Provider::Gemini.info().color;
+        assert_eq!(
+            gemini[..3],
+            [color[0] as u8, color[1] as u8, color[2] as u8]
+        );
+    }
+
     fn reading(connection: ConnectionState) -> Reading {
         Reading {
             connection,
