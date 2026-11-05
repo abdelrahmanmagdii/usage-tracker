@@ -22,7 +22,7 @@ tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 time = { version = "0.3", features = ["parsing"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 which = "8"
 
 [target."cfg(not(target_os = \"macos\"))".dependencies]

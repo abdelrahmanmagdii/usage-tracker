@@ -233,15 +233,26 @@ impl CodexManager {
             return Ok(self.snapshot().await);
         }
         if self.snapshot().await.connection == ConnectionState::Connected {
+            let generation = self.generation.load(Ordering::SeqCst);
             match self.refresh_data().await {
                 Ok(state) => Ok(state),
                 Err(error) => {
                     // A request that fails while "connected" usually means the
                     // app-server hung (commonly after system sleep). Retrying
                     // over the same pipe never recovers, so restart the child.
-                    self.stop_child().await;
-                    self.set_connection(ConnectionState::Disconnected, Some(error))
-                        .await;
+                    //
+                    // Two callers can fail on the same hung server at once.
+                    // Only the server this request ran on is stopped, under
+                    // the start lock: the slower caller must not kill the
+                    // replacement the faster one just started.
+                    {
+                        let _guard = self.start_lock.lock().await;
+                        if self.generation.load(Ordering::SeqCst) == generation {
+                            self.stop_child().await;
+                            self.set_connection(ConnectionState::Disconnected, Some(error))
+                                .await;
+                        }
+                    }
                     self.start().await
                 }
             }
