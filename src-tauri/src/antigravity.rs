@@ -335,9 +335,7 @@ async fn probe_endpoints(
             continue;
         }
         return Some(LocalUsage {
-            plan: status
-                .as_ref()
-                .map_or_else(|| plan_from_status(&Value::Null), plan_from_status),
+            plan: plan_from_status(status.as_ref().unwrap_or(&Value::Null)),
             payload: quota,
         });
     }
