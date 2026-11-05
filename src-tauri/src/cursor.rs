@@ -326,17 +326,17 @@ fn normalize_period_usage(raw: &Value) -> Option<Value> {
         .get("planUsage")
         .or_else(|| raw.pointer("/individualUsage/plan"))
         .unwrap_or(raw);
-    let used = finite_number(plan.get("totalPercentUsed"))
-        .or_else(|| finite_number(plan.get("percentUsed")))
+    let used = finite_f64(plan.get("totalPercentUsed"))
+        .or_else(|| finite_f64(plan.get("percentUsed")))
         .or_else(|| percent_from_spend(plan))?;
-    let auto = finite_number(plan.get("autoPercentUsed"));
-    let api = finite_number(plan.get("apiPercentUsed"));
-    let resets_at = parse_cursor_timestamp(
+    let auto = finite_f64(plan.get("autoPercentUsed"));
+    let api = finite_f64(plan.get("apiPercentUsed"));
+    let resets_at = parse_reset_timestamp(
         raw.get("billingCycleEnd")
             .or_else(|| plan.get("billingCycleEnd"))
             .or_else(|| raw.pointer("/planInfo/billingCycleEnd")),
     );
-    let start = parse_cursor_timestamp(
+    let start = parse_reset_timestamp(
         raw.get("billingCycleStart")
             .or_else(|| plan.get("billingCycleStart")),
     );
@@ -381,43 +381,21 @@ fn normalize_period_usage(raw: &Value) -> Option<Value> {
 }
 
 fn percent_from_spend(plan: &Value) -> Option<f64> {
-    let limit = finite_number(plan.get("limit")).filter(|limit| *limit > 0.0)?;
+    let limit = finite_f64(plan.get("limit")).filter(|limit| *limit > 0.0)?;
     // Protobuf JSON drops zero-valued fields, so a fresh billing cycle sends
     // the plan's `limit` with no spend at all. That is 0% used, not "no meter".
-    let used = finite_number(plan.get("totalSpend"))
-        .or_else(|| finite_number(plan.get("includedSpend")))
+    let used = finite_f64(plan.get("totalSpend"))
+        .or_else(|| finite_f64(plan.get("includedSpend")))
         .unwrap_or(0.0);
     Some((used / limit) * 100.0)
 }
 
-/// `finite_f64` also parses the strings "NaN" and "inf", which would reach
-/// the renderer as a null percentage.
-fn finite_number(value: Option<&Value>) -> Option<f64> {
-    finite_f64(value).filter(|number| number.is_finite())
-}
-
-/// Cursor's dashboard service speaks Connect (protobuf JSON), which sends
-/// int64 epochs as strings, here in milliseconds (`"1756684800000"`); the
-/// legacy endpoint uses RFC3339. Accept both, plus bare numbers in seconds or
-/// milliseconds: a millisecond string used to fail the RFC3339 parse and drop
-/// the reset time, and a millisecond number put it tens of millennia out.
-/// Zero is protobuf's "unset", not 1970.
-fn parse_cursor_timestamp(value: Option<&Value>) -> Option<f64> {
-    let value = value?;
-    let seconds = match finite_number(Some(value)) {
-        Some(number) if number > 10_000_000_000.0 => number / 1_000.0,
-        Some(number) => number,
-        None => parse_reset_timestamp(Some(value))?,
-    };
-    (seconds > 0.0).then_some(seconds)
-}
-
 fn normalize_legacy_usage(raw: &Value) -> Option<Value> {
     let gpt4 = raw.get("gpt-4")?;
-    let used = finite_number(gpt4.get("numRequests"))?;
-    let limit = finite_number(gpt4.get("maxRequestUsage")).filter(|limit| *limit > 0.0)?;
+    let used = finite_f64(gpt4.get("numRequests"))?;
+    let limit = finite_f64(gpt4.get("maxRequestUsage")).filter(|limit| *limit > 0.0)?;
     let resets_at =
-        parse_cursor_timestamp(raw.get("startOfMonth")).map(|start| start + 30.0 * 86_400.0);
+        parse_reset_timestamp(raw.get("startOfMonth")).map(|start| start + 30.0 * 86_400.0);
     Some(rate_limits_map(vec![limit_entry(
         "premium",
         "Monthly",
@@ -594,21 +572,21 @@ mod tests {
     #[test]
     fn timestamps_accept_seconds_milliseconds_and_rfc3339() {
         assert_eq!(
-            parse_cursor_timestamp(Some(&json!(1_788_220_800))),
+            parse_reset_timestamp(Some(&json!(1_788_220_800))),
             Some(1_788_220_800.0)
         );
         assert_eq!(
-            parse_cursor_timestamp(Some(&json!(1_788_220_800_000_i64))),
+            parse_reset_timestamp(Some(&json!(1_788_220_800_000_i64))),
             Some(1_788_220_800.0)
         );
         assert_eq!(
-            parse_cursor_timestamp(Some(&json!("2026-09-01T00:00:00.000Z"))),
+            parse_reset_timestamp(Some(&json!("2026-09-01T00:00:00.000Z"))),
             Some(1_788_220_800.0)
         );
-        assert_eq!(parse_cursor_timestamp(Some(&json!("0"))), None);
-        assert_eq!(parse_cursor_timestamp(Some(&json!("NaN"))), None);
-        assert_eq!(parse_cursor_timestamp(Some(&json!("soon"))), None);
-        assert_eq!(parse_cursor_timestamp(None), None);
+        assert_eq!(parse_reset_timestamp(Some(&json!("0"))), None);
+        assert_eq!(parse_reset_timestamp(Some(&json!("NaN"))), None);
+        assert_eq!(parse_reset_timestamp(Some(&json!("soon"))), None);
+        assert_eq!(parse_reset_timestamp(None), None);
     }
 
     #[test]

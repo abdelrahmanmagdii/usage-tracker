@@ -14,7 +14,8 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::codex::process::ConnectionState;
 use crate::provider::{
-    finite_f64, http_client, now_unix_seconds, rate_limits_map, window_snapshot, ProviderState,
+    finite_f64, http_client, now_unix_seconds, parse_reset_timestamp, rate_limits_map,
+    window_snapshot, ProviderState,
 };
 use crate::tray;
 
@@ -392,11 +393,11 @@ fn normalize_usage(raw: &Value) -> Option<NormalizedUsage> {
     let hide_daily =
         bool_value(field_in(plan_info, &["hideDailyQuota", "hide_daily_quota"])).unwrap_or(false);
 
-    let daily_reset = parse_unix(field(
+    let daily_reset = parse_reset_timestamp(field(
         plan_status,
         &["dailyQuotaResetAtUnix", "daily_quota_reset_at_unix"],
     ));
-    let weekly_reset = parse_unix(field(
+    let weekly_reset = parse_reset_timestamp(field(
         plan_status,
         &["weeklyQuotaResetAtUnix", "weekly_quota_reset_at_unix"],
     ));
@@ -529,18 +530,7 @@ fn bool_value(value: Option<&Value>) -> Option<bool> {
 /// moment it mattered most. A window that has a reset time is a real window,
 /// so its missing remainder is 0%.
 fn remaining_percent(value: Option<&Value>, resets_at: Option<f64>) -> Option<f64> {
-    finite_f64(value)
-        .filter(|number| number.is_finite())
-        .or(resets_at.map(|_| 0.0))
-}
-
-fn parse_unix(value: Option<&Value>) -> Option<f64> {
-    let number = finite_f64(value).filter(|number| number.is_finite() && *number > 0.0)?;
-    if number > 10_000_000_000.0 {
-        Some(number / 1_000.0)
-    } else {
-        Some(number)
-    }
+    finite_f64(value).or(resets_at.map(|_| 0.0))
 }
 
 #[cfg(test)]

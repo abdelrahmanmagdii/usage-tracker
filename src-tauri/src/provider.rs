@@ -17,9 +17,9 @@ use crate::codex::process::ConnectionState;
 /// sheet, and macOS reports that disabled sheet as a cancel.
 /// `-25308` is `errSecInteractionNotAllowed`.
 ///
-/// Only the macOS keychain paths call this; it is compiled everywhere so its
-/// tests run on every platform's CI.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// Only the macOS keychain paths call this (Claude and Antigravity); tests
+/// still compile it everywhere so they run on every platform's CI.
+#[cfg(any(target_os = "macos", test))]
 pub fn keychain_login_absent(code: i32) -> bool {
     matches!(code, -25300 | -128 | -25308)
 }
@@ -61,17 +61,25 @@ pub fn now_unix_seconds() -> u64 {
         .as_secs()
 }
 
+/// A reset (or expiry) time as unix seconds, from whichever form a vendor
+/// sends: a number or numeric string in seconds or milliseconds (Connect /
+/// protobuf JSON sends int64 epochs as strings, often in milliseconds), or an
+/// RFC3339 string. Anything past 10^10 is read as milliseconds, since that is
+/// the year 2286 in seconds. Zero, negatives and non-finite values are "not
+/// reported" (protobuf's unset), never 1970.
 pub fn parse_reset_timestamp(value: Option<&Value>) -> Option<f64> {
-    match value? {
-        Value::Number(number) => number.as_f64(),
-        Value::String(text) => {
-            let parsed =
-                time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
-                    .ok()?;
-            Some(parsed.unix_timestamp() as f64)
+    let value = value?;
+    let seconds = match finite_f64(Some(value)) {
+        Some(number) if number > 10_000_000_000.0 => number / 1_000.0,
+        Some(number) => number,
+        None => {
+            let text = value.as_str()?;
+            time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
+                .ok()?
+                .unix_timestamp() as f64
         }
-        _ => None,
-    }
+    };
+    (seconds > 0.0).then_some(seconds)
 }
 
 pub fn window_snapshot(
@@ -118,12 +126,16 @@ pub fn conceal_provider(state: &mut ProviderState, diagnostic: Option<String>) {
     state.updated_at = None;
 }
 
+/// A number from a JSON number or numeric string. `str::parse` also accepts
+/// "NaN" and "inf", which would reach the renderer as a null percentage, so
+/// only finite values count.
 pub fn finite_f64(value: Option<&Value>) -> Option<f64> {
     match value? {
         Value::Number(number) => number.as_f64(),
-        Value::String(text) if !text.trim().is_empty() => text.parse().ok(),
+        Value::String(text) if !text.trim().is_empty() => text.trim().parse().ok(),
         _ => None,
     }
+    .filter(|number: &f64| number.is_finite())
 }
 
 #[cfg(test)]
@@ -148,6 +160,48 @@ mod tests {
         // errSecAuthFailed and success are not "no login".
         assert!(!keychain_login_absent(-25293));
         assert!(!keychain_login_absent(0));
+    }
+
+    #[test]
+    fn reset_timestamps_accept_every_vendor_form() {
+        let at = 1_788_220_800.0;
+        assert_eq!(parse_reset_timestamp(Some(&json!(1_788_220_800))), Some(at));
+        assert_eq!(
+            parse_reset_timestamp(Some(&json!(1_788_220_800_000_i64))),
+            Some(at)
+        );
+        assert_eq!(
+            parse_reset_timestamp(Some(&json!("1788220800000"))),
+            Some(at)
+        );
+        assert_eq!(parse_reset_timestamp(Some(&json!("1788220800"))), Some(at));
+        assert_eq!(
+            parse_reset_timestamp(Some(&json!("2026-09-01T00:00:00.000Z"))),
+            Some(at)
+        );
+        assert_eq!(
+            parse_reset_timestamp(Some(&json!(1_788_220_800.5))),
+            Some(at + 0.5)
+        );
+        // Unset, nonsense and non-finite values are "not reported".
+        assert_eq!(parse_reset_timestamp(Some(&json!(0))), None);
+        assert_eq!(parse_reset_timestamp(Some(&json!("0"))), None);
+        assert_eq!(parse_reset_timestamp(Some(&json!(-5))), None);
+        assert_eq!(parse_reset_timestamp(Some(&json!("NaN"))), None);
+        assert_eq!(parse_reset_timestamp(Some(&json!("soon"))), None);
+        assert_eq!(parse_reset_timestamp(Some(&Value::Null)), None);
+        assert_eq!(parse_reset_timestamp(None), None);
+    }
+
+    #[test]
+    fn only_finite_numbers_count() {
+        assert_eq!(finite_f64(Some(&json!(41.5))), Some(41.5));
+        assert_eq!(finite_f64(Some(&json!(" 12 "))), Some(12.0));
+        assert_eq!(finite_f64(Some(&json!("NaN"))), None);
+        assert_eq!(finite_f64(Some(&json!("inf"))), None);
+        assert_eq!(finite_f64(Some(&json!("-infinity"))), None);
+        assert_eq!(finite_f64(Some(&json!(""))), None);
+        assert_eq!(finite_f64(Some(&json!(true))), None);
     }
 
     #[test]
