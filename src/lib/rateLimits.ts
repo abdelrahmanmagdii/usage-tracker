@@ -139,13 +139,23 @@ export function formatCountdown(resetsAt?: number, nowMs = Date.now()): string {
 export function formatLocalReset(resetsAt?: number, now = new Date()): string {
   if (!resetsAt) return "";
   const reset = new Date(resetsAt * 1000);
+  if (Number.isNaN(reset.getTime())) return "";
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const target = new Date(reset.getFullYear(), reset.getMonth(), reset.getDate());
+  // Rounding absorbs the 23- or 25-hour day around a DST change.
   const dayDelta = Math.round((target.getTime() - today.getTime()) / 86_400_000);
   let dayLabel: string;
   if (dayDelta === 0) dayLabel = reset.getHours() >= 17 ? "Tonight" : "Today";
   else if (dayDelta === 1) dayLabel = "Tomorrow";
-  else dayLabel = reset.toLocaleDateString(undefined, { weekday: "long" });
+  else if (dayDelta === -1) dayLabel = "Yesterday";
+  // A bare weekday only names the next six days. A monthly window ("Friday"
+  // three weeks out) or a reset time already behind us ("Friday" meaning
+  // last Friday) would read as the coming one, so those get a date.
+  else if (dayDelta > 1 && dayDelta < 7) {
+    dayLabel = reset.toLocaleDateString(undefined, { weekday: "long" });
+  } else {
+    dayLabel = reset.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  }
   const time = reset.toLocaleTimeString(undefined, {
     hour: "numeric",
     minute: "2-digit",

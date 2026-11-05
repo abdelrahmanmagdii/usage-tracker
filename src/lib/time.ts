@@ -1,6 +1,10 @@
 export function relativeTime(isoDate?: string, nowMs = Date.now()): string {
   if (!isoDate) return "No reset sightings yet";
-  const elapsed = Math.max(0, nowMs - Date.parse(isoDate));
+  const at = Date.parse(isoDate);
+  // A malformed timestamp (hand-edited feed entry, corrupt cache) used to
+  // render as "NaNm ago"; treat it like a missing one.
+  if (!Number.isFinite(at)) return "No reset sightings yet";
+  const elapsed = Math.max(0, nowMs - at);
   const hours = Math.floor(elapsed / 3_600_000);
   const days = Math.floor(hours / 24);
   if (days > 0) return `${days}d ${hours % 24}h ago`;
@@ -27,6 +31,8 @@ export function describeAge(updatedAtSeconds?: number | null, nowMs = Date.now()
 
 /** Compact human lead time, e.g. "45m", "2h 15m", "2 days". */
 export function formatLeadTime(ms: number): string {
+  // Callers subtract parsed timestamps; never print "NaNm" for a bad one.
+  if (!Number.isFinite(ms)) return "soon";
   const minutes = Math.max(1, Math.round(ms / 60_000));
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
