@@ -7,7 +7,9 @@ import {
   parseLeadTimeMinutes,
   parseOccursAt,
   parsePlans,
+  parseStoredFeed,
   toResetEvent,
+  tweetKey,
 } from "./lib.mjs";
 
 const SAMPLE_BSKY_FEED = JSON.stringify({
@@ -247,6 +249,44 @@ describe("mergeEvents", () => {
     const { events, added } = mergeEvents(null, []);
     assert.deepEqual(events, []);
     assert.equal(added, 0);
+  });
+
+  it("does not store a scraped mirror of a hand-written entry a second time", () => {
+    const { events, added } = mergeEvents(
+      [{ id: "manual-2026-08-10", announcedAt: "2026-08-10T18:20:00Z", source: "manual" }],
+      [{ id: "tibo-bsky-x", announcedAt: "2026-08-10T18:20:00.000Z", source: "tibo" }],
+    );
+    assert.equal(added, 0);
+    assert.deepEqual(events.map((event) => event.id), ["manual-2026-08-10"]);
+  });
+});
+
+describe("tweetKey", () => {
+  it("matches a tweet whatever the timestamp's formatting", () => {
+    assert.equal(tweetKey("2026-08-10T18:20:00Z"), tweetKey("2026-08-10T18:20:00.000Z"));
+    assert.equal(tweetKey("2026-08-10T20:20:00+02:00"), "2026-08-10T18:20:00.000Z");
+    assert.notEqual(tweetKey("2026-08-10T18:20:01Z"), tweetKey("2026-08-10T18:20:00Z"));
+  });
+
+  it("keeps unparseable values distinct rather than collapsing them together", () => {
+    assert.equal(tweetKey("not a date"), "not a date");
+    assert.notEqual(tweetKey("bad-1"), tweetKey("bad-2"));
+  });
+});
+
+describe("parseStoredFeed", () => {
+  it("reads a stored feed", () => {
+    const feed = parseStoredFeed(JSON.stringify({ updatedAt: "2026-10-01T00:00:00Z", events: [{ id: "a" }] }));
+    assert.equal(feed.updatedAt, "2026-10-01T00:00:00Z");
+    assert.deepEqual(feed.events, [{ id: "a" }]);
+  });
+
+  it("refuses a corrupt or reshaped file instead of reading it as empty", () => {
+    // Read as empty, the checker would rewrite resets.json with only the
+    // current scrape and silently drop every older and manual entry.
+    assert.throws(() => parseStoredFeed('{ "events": [ {"id": "a"} '));
+    assert.throws(() => parseStoredFeed(JSON.stringify({ events: "oops" })));
+    assert.throws(() => parseStoredFeed("null"));
   });
 });
 

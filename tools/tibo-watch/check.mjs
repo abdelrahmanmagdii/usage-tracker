@@ -25,6 +25,7 @@ import {
   bskyFeedUrl,
   mergeEvents,
   parseBskyFeed,
+  parseStoredFeed,
   toResetEvent,
 } from "./lib.mjs";
 
@@ -107,20 +108,33 @@ async function fetchTimeline() {
   return items;
 }
 
+/**
+ * Only a missing file starts an empty feed. Any other failure (unreadable,
+ * invalid JSON from a bad hand edit) stops the run: treating it as empty
+ * would overwrite every stored and manual entry with just this scrape.
+ */
 async function readFeed() {
+  let text;
   try {
-    const parsed = JSON.parse(await readFile(DATA_FILE, "utf8"));
-    return { updatedAt: parsed.updatedAt ?? null, events: Array.isArray(parsed.events) ? parsed.events : [] };
-  } catch {
-    return { updatedAt: null, events: [] };
+    text = await readFile(DATA_FILE, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return { updatedAt: null, events: [] };
+    throw error;
   }
+  return parseStoredFeed(text);
 }
 
 const items = await fetchTimeline();
 if (!items) process.exit(0);
 
 const resets = items.map(toResetEvent).filter(Boolean);
-const feed = await readFeed();
+let feed;
+try {
+  feed = await readFeed();
+} catch (error) {
+  console.error(`tibo-watch: refusing to overwrite ${DATA_FILE}: ${error.message}`);
+  process.exit(1);
+}
 const { events, added } = mergeEvents(feed.events, resets);
 console.log(`tibo-watch: ${resets.length} reset tweets in timeline, ${added} new, ${events.length} total stored`);
 
