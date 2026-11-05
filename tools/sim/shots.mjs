@@ -431,7 +431,12 @@ writeFileSync(join(outDir, "report.json"), JSON.stringify(report, null, 2));
 if (copyTo && copyTo !== true) {
   const target = resolve(String(copyTo));
   mkdirSync(target, { recursive: true });
-  cpSync(outDir, target, { recursive: true, filter: (src) => !src.includes(`${outDir}/.`) });
+  // Only this run's output (sim-shots/ may also hold sim:linux builds).
+  for (const path of [...files, join(outDir, "report.json")]) {
+    const dest = join(target, path.slice(outDir.length + 1));
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(path, dest);
+  }
 }
 
 console.log(`\n${files.length} files in ${outDir}`);
