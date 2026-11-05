@@ -464,6 +464,7 @@ pub fn show_dashboard(app: AppHandle) -> Result<(), String> {
         window.show().map_err(|error| error.to_string())?;
         window.unminimize().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
+        crate::claude::refresh_on_open(&app);
     }
     Ok(())
 }

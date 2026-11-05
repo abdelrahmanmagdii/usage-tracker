@@ -371,9 +371,13 @@ pub fn run() {
             });
             let claude_refresher = claude_manager.clone();
             tauri::async_runtime::spawn(async move {
-                // A shorter tick than the other providers: each one checks only
-                // whether Claude Code rewrote its login, and a rewrite (a token
-                // rotation or a fresh sign-in) refreshes the meter right away.
+                // A shorter tick than the other providers: each one checks
+                // whether Claude Code rewrote its login (a token rotation or a
+                // fresh sign-in refreshes the meter right away) and whether
+                // Claude Code has been used since the last reading. Claude has
+                // no push channel like Codex's App Server, so without the
+                // second check the meter trailed `/usage` by up to five
+                // minutes during a busy session.
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 let mut last_attempt = now_unix_seconds();
@@ -389,7 +393,11 @@ pub fn run() {
                     let login_changed = claude_refresher.login_changed().await;
                     if login_changed {
                         failures = 0;
-                    } else if !should_refresh(now, before, last_attempt, failures) {
+                    } else if !should_refresh(now, before, last_attempt, failures)
+                        && !claude_refresher
+                            .active_refresh_due(now, before, last_attempt, failures)
+                            .await
+                    {
                         continue;
                     }
                     last_attempt = now;

@@ -112,6 +112,7 @@ fn toggle_main_window(app: &AppHandle) {
             let _ = window.show();
             let _ = window.unminimize();
             let _ = window.set_focus();
+            crate::claude::refresh_on_open(app);
         }
     }
 }
