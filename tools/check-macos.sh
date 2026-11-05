@@ -4,7 +4,7 @@
 # the macOS SDK:
 #
 #   npm run check:macos            # clippy for aarch64-apple-darwin
-#   npm run check:macos -- -- -D clippy::correctness   # extra clippy args
+#   npm run check:macos -- -- -D warnings   # extra clippy args (CI enforces this)
 #
 # `cargo clippy` never links, but a few dependencies (objc2-exception-helper,
 # ring, mac-notification-sys) compile Objective-C/C in their build scripts and

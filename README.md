@@ -98,7 +98,7 @@ npm run typecheck
 npm test                 # Vitest, plus node --test for tools/
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D clippy::correctness -D clippy::suspicious
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 npm run check:macos      # lint the macOS-only Rust code from Linux
 npm run tauri build -- --debug
 ```
@@ -112,7 +112,7 @@ Linux machine too. It needs `rustup target add aarch64-apple-darwin`, `clang`,
 and `llvm-ar`, but no macOS SDK: the few dependencies that compile C or
 Objective-C get empty stand-in objects, which is fine because Clippy never
 links. On a Mac it is plain `cargo clippy`. Extra Clippy flags go after a
-second `--`, e.g. `npm run check:macos -- -- -D clippy::correctness`.
+second `--`, e.g. `npm run check:macos -- -- -D warnings` (what CI enforces).
 
 ## How it works
 

@@ -56,7 +56,7 @@ jobs:
 
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
-      # Correctness and suspicious lints fail the build. Style lints are
-      # reported but not enforced yet, since the codebase still carries some.
+      # Every Clippy warning fails the build: the crate is warning-free on
+      # macOS and Linux, and this keeps it that way.
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D clippy::correctness -D clippy::suspicious
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
