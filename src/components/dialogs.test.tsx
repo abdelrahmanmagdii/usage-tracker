@@ -6,6 +6,7 @@ import type { AppPrefs } from "../lib/providers";
 const backend = vi.hoisted(() => ({
   prefs: null as unknown as AppPrefs,
   failing: new Set<string>(),
+  autostart: false,
   handlers: [] as Array<(event: { payload: AppPrefs }) => void>,
   prefsReads: [] as Array<(prefs: AppPrefs) => void>,
   deferPrefsRead: false,
@@ -31,7 +32,7 @@ const invoke = vi.hoisted(() =>
           gemini: [],
         };
       case "get_autostart":
-        return false;
+        return backend.autostart;
       default:
         return undefined;
     }
@@ -73,6 +74,7 @@ const commands = (name: string) => invoke.mock.calls.filter(([command]) => comma
 beforeEach(() => {
   backend.prefs = { ...DEFAULT_PREFS, providers: {} };
   backend.failing.clear();
+  backend.autostart = false;
   backend.handlers = [];
   backend.prefsReads = [];
   backend.deferPrefsRead = false;
@@ -162,6 +164,17 @@ describe("SettingsModal", () => {
     broadcast({ ...DEFAULT_PREFS, providers: { codex: { visible: false } }, denseLayout: true });
     expect(screen.getByRole("switch", { name: /^Codex/ }).getAttribute("aria-checked")).toBe("false");
     expect(screen.getByRole("switch", { name: /Compact cards/ }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("follows Launch at Login toggled from the tray menu while open", async () => {
+    await openSettings();
+    const toggle = () => screen.getByRole("switch", { name: /Launch at login/i });
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    // The tray toggle changes the OS setting, then broadcasts prefs.
+    backend.autostart = true;
+    broadcast({ ...DEFAULT_PREFS, providers: {} });
+    await act(async () => {});
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
   });
 
   it("does not let a slow initial read roll back a newer broadcast", async () => {

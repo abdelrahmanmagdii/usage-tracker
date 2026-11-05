@@ -238,6 +238,10 @@ export function SettingsModal({
     const unlisten = listen<AppPrefs>("usagebar://prefs", (event) => {
       broadcastSeen = true;
       setPrefs(normalizePrefs(event.payload));
+      // Launch at Login lives with the OS, not in the prefs payload, but the
+      // tray menu's toggle also broadcasts prefs: re-read it so an open sheet
+      // follows a change made from the menu bar.
+      void invoke<boolean>("get_autostart").then(setAutostart).catch(() => undefined);
     });
     return () => {
       void unlisten.then((off) => off());
