@@ -40,7 +40,11 @@ npm install
 npm run tauri build
 ```
 
-The app lands in `src-tauri/target/release/bundle/macos/`.
+The app lands in `src-tauri/target/release/bundle/macos.noindex/` (moved out of
+`bundle/macos/` so Spotlight only lists the installed copy) and the `.dmg` in
+`bundle/dmg/`. Without the release signing key (`TAURI_SIGNING_PRIVATE_KEY`),
+the build skips the signed auto-update bundle and prints a note saying so;
+everything else is the same.
 
 Maintainers: see [docs/RELEASING.md](docs/RELEASING.md) for how signed releases are cut.
 
@@ -65,7 +69,7 @@ the `-setup.exe` lands in `src-tauri/target/release/bundle/nsis/`.
 - macOS 10.15 or newer, or Windows 10/11 x64 with WebView2 (beta)
 - A working, authenticated `codex` CLI for the Codex meter
 - Optional: signed-in Claude Code, Cursor, OpenCode Go, Devin CLI, Antigravity, and/or Gemini CLI for those meters
-- Node.js 20+ and Rust for development
+- Node.js 22.22+ or 24 LTS (the test DOM, jsdom, needs it; CI uses 24) and Rust for development
 
 ## Run locally
 
@@ -85,14 +89,30 @@ npm run app:install
 
 That builds the app bundle, quits the running copy, replaces `/Applications/UsageBar.app`, and relaunches it.
 
-Useful checks:
+Useful checks (the CI workflow runs the first six on macOS for every pull
+request):
 
 ```sh
+npm run versions:check   # the eight version fields agree
 npm run typecheck
-npm test
+npm test                 # Vitest, plus node --test for tools/
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D clippy::correctness -D clippy::suspicious
+npm run check:macos      # lint the macOS-only Rust code from Linux
 npm run tauri build -- --debug
 ```
+
+`npm run versions:set -- 0.2.5` rewrites every version field at once (see
+[docs/RELEASING.md](docs/RELEASING.md)).
+
+`npm run check:macos` runs Clippy for `aarch64-apple-darwin`, so the Keychain,
+AppKit, and vibrancy code that only compiles for macOS gets type-checked on a
+Linux machine too. It needs `rustup target add aarch64-apple-darwin`, `clang`,
+and `llvm-ar`, but no macOS SDK: the few dependencies that compile C or
+Objective-C get empty stand-in objects, which is fine because Clippy never
+links. On a Mac it is plain `cargo clippy`. Extra Clippy flags go after a
+second `--`, e.g. `npm run check:macos -- -- -D clippy::correctness`.
 
 ## How it works
 
@@ -139,7 +159,7 @@ The app is split into:
 - `src/features` — Tibo Watch (feed provider, notifications)
 - `src/lib` — defensive parsing, formatting, persistence, and reset detection
 - `src-tauri/src/codex` — process lifecycle and JSONL protocol routing
-- `src-tauri/src/tray.rs` — menu-bar meter: quota-aware pill icon plus `% · countdown` title
+- `src-tauri/src/tray/` — menu-bar meter: quota-aware pill icon plus `% · countdown` title
 - `tools/tibo-watch` — the zero-cost scraper behind the public reset feed
 - `data/resets.json` — the canonical reset event store (edit this to backfill)
 

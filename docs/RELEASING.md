@@ -140,11 +140,19 @@ export APPLE_API_KEY=... APPLE_API_ISSUER=... APPLE_API_KEY_PATH=/path/to/key.p8
 npm run tauri build
 ```
 
-Check the result:
+Without `TAURI_SIGNING_PRIVATE_KEY` in the environment, `npm run tauri build`
+(via `tools/tauri.mjs`) turns `bundle.createUpdaterArtifacts` off for that
+build and says so, since Tauri otherwise refuses to bundle. Export the key (and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) to also produce the `.app.tar.gz` and
+`.sig` updater bundle. The fallback is off in CI (`CI=true`), so a release
+missing the key fails instead of shipping without `latest.json`.
+
+After the build, `tools/tauri.mjs` moves the `.app` into `bundle/macos.noindex/`
+so Spotlight only lists the installed copy. Check the result:
 
 ```bash
-codesign -dv --verbose=4 src-tauri/target/release/bundle/macos/UsageBar.app
-spctl -a -vvv -t install src-tauri/target/release/bundle/macos/UsageBar.app
+codesign -dv --verbose=4 src-tauri/target/release/bundle/macos.noindex/UsageBar.app
+spctl -a -vvv -t install src-tauri/target/release/bundle/macos.noindex/UsageBar.app
 ```
 
 `spctl` should report **accepted** with source *Notarized Developer ID*. That

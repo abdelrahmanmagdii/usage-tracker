@@ -6,7 +6,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TARGET="$ROOT/src-tauri/target"
+# Follow CARGO_TARGET_DIR like install-app.sh does; otherwise a redirected
+# build stays in bundle/macos/, where Spotlight lists it.
+TARGET="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target}"
 MACOS="$TARGET/release/bundle/macos/UsageBar.app"
 NOINDEX_DIR="$TARGET/release/bundle/macos.noindex"
 NOINDEX="$NOINDEX_DIR/UsageBar.app"
