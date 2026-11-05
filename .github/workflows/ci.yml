@@ -60,3 +60,77 @@ jobs:
       # macOS and Linux, and this keeps it that way.
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  # The unmodified frontend against the simulated Tauri backend (src/sim),
+  # screenshotted in headless Chromium: every scenario × light/dark ×
+  # roomy/dense, Settings, onboarding and the widget. Fails on a page error,
+  # a console error, an IPC command the simulator does not know, or (in the
+  # production run) a CSP report. See docs/SIMULATION.md.
+  #
+  # Pull requests get the same full set as main: it takes about a minute and
+  # a half, and a pull request is where a broken screen should be caught.
+  simulator:
+    name: Simulator screenshots
+    # Pinned rather than ubuntu-latest: Playwright's --with-deps supports this
+    # release, and its fonts-inter / DejaVu packages are the ones the shots
+    # were checked against. Move it deliberately, not when "latest" moves.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # The browser's zone and locale are pinned per page (UTC, en-US) by
+      # tools/sim/shots.mjs; these cover Node and Vite.
+      TZ: UTC
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Only the headless shell (what a headless chromium.launch() runs), at
+      # the revision the locked Playwright version expects. Not cached:
+      # restoring it takes about as long as downloading it, and the system
+      # packages have to be installed either way.
+      # The app's UI font stack is -apple-system … Inter, sans-serif; without
+      # fonts-inter Linux falls back to DejaVu Sans and the captures look
+      # nothing like a Mac.
+      - name: Chromium and fonts
+        id: browser
+        run: |
+          npx playwright install --with-deps --only-shell chromium
+          sudo apt-get install -y --no-install-recommends fonts-inter
+
+      # Dev mode is where React reports its own mistakes (keys, DOM nesting)
+      # as console errors; a production build strips them. One theme and no
+      # full-height captures: those checks do not depend on either.
+      - name: Simulator (Vite dev)
+        run: npm run sim:shots -- --out sim-shots/dev --themes light --no-full
+
+      # The full set against a production build, served with the app's CSP
+      # as report-only (so every violation is listed) and --strict-csp (so any
+      # fails the job). Runs even if the dev pass failed, so both are known.
+      - name: Simulator (production build, CSP)
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: npm run sim:shots -- --prod --strict-csp
+
+      - name: Summary
+        if: ${{ always() }}
+        run: node tools/sim/contact-sheet.mjs --summary sim-shots sim-shots/dev >> "$GITHUB_STEP_SUMMARY"
+
+      # Open index.html from the unzipped artifact: the contact sheet, with
+      # every issue next to its capture. contact-sheet.png is the same page as
+      # one image. upload-artifact leaves out hidden folders (the .dist build).
+      # PNGs are already compressed, so zipping them again only costs time.
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: sim-shots
+          path: sim-shots/
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 1

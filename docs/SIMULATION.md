@@ -5,7 +5,7 @@ Three ways to see the app run without a Mac, real logins, or real quota:
 | What | Command | Runs | Good for |
 | --- | --- | --- | --- |
 | Browser simulation | `npm run sim`, then open `/sim.html` | the unmodified React app in any browser, with a simulated backend | UI work, any scenario, time travel |
-| Screenshot suite | `npm run sim:shots` | the same page in headless Chromium (Playwright) | visual review, CI-style smoke test, CSP check |
+| Screenshot suite | `npm run sim:shots` | the same page in headless Chromium (Playwright) | visual review, the CI smoke test, CSP check |
 | Real app on Linux | `npm run sim:linux` | the real Tauri binary (Rust backend + WebKitGTK) under Xvfb, demo mode | checking the real webview and backend wiring |
 
 Everything writes to `sim-shots/` (gitignored).
@@ -87,6 +87,7 @@ the simulated time (plus anything you trigger through `__sim`). With a fixed
 `seed` and `start` and `speed=0` the page renders identically every time;
 activity uses UTC hours so it does not depend on the machine's time zone
 (the app's own "Tonight · 5:12 PM" labels do — `sim:shots` pins `UTC`).
+`sim:shots` also stops CSS animations for each capture (see below).
 
 ### Scenarios (`?scenario=`)
 
@@ -190,7 +191,17 @@ Starts Vite on a free port (no clash with a running `npm run dev`), opens
   sign-out, Settings, dense layout;
 - `report.json` — per capture: page errors, console errors/warnings, CSP
   reports, failed requests, blocked network requests, unhandled IPC
-  commands, the simulated tray title.
+  commands, the simulated tray title; for the run: options, Chromium
+  version, and the fonts the UI and the numbers were actually drawn with;
+- `index.html` — the contact sheet: scenario × theme × density grid,
+  Settings / onboarding / widget rows, every issue printed under the
+  capture that logged it, full-height captures one click away. Relative
+  links, so it opens straight from an unzipped CI artifact;
+- `contact-sheet.png` — the same page as one image.
+
+`node tools/sim/contact-sheet.mjs DIR…` rebuilds `index.html` from
+`report.json`; with `--summary` it prints the Markdown CI puts in the job
+summary.
 
 Exit code is 1 if any capture threw, logged a page error or console error,
 or invoked an unknown IPC command. `--prod` builds `sim.html` for production
@@ -203,8 +214,56 @@ Note: "dark" captures use Chromium's `prefers-color-scheme: dark`. The app
 currently pins `color-scheme: light` and has no dark styles, so they only
 differ in the simulated wallpaper behind the window.
 
-Playwright is resolved with `require("playwright")` (a global install works;
-it is not a devDependency). ffmpeg is optional.
+Screenshots are taken with Playwright's `animations: "disabled"`:
+transitions are finished and infinite animations (the danger-dot pulse, the
+meter sheen, spinners) stop on their first frame. Without it the pulsing
+Reset Radar dot made `busy` captures differ from run to run; with it two runs
+on the same machine are byte-identical, and dev and `--prod` captures match.
+
+Playwright is a devDependency, pinned exactly (`1.63.0`): each Playwright
+release drives one Chromium revision, so the version decides which browser
+build CI runs. After `npm ci`, download that browser once with
+`npx playwright install chromium` (`--only-shell` is enough; on Linux add
+`--with-deps` for the system libraries). A global Playwright install also
+works; `PLAYWRIGHT_BROWSERS_PATH` is honoured as usual. ffmpeg is optional.
+
+**Fonts.** The app has no web fonts: the UI uses
+`-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif`
+and numbers `ui-monospace, SFMono-Regular, Menlo, monospace`. On a Mac that is
+SF Pro and SF Mono / Menlo; on Linux it is whatever is installed, so install
+Inter (`fonts-inter` on Debian/Ubuntu) or the UI falls back to DejaVu Sans
+and looks nothing like the real app. `report.json` → `fonts` and the last
+line of the run say what was used (CI: Inter and DejaVu Sans Mono). Pixels
+from different machines are not comparable; captures from one machine are.
+
+### In CI
+
+The `simulator` job in `.github/workflows/ci.yml` runs on every pull request,
+on pushes to `main`, and from the Actions tab (`ubuntu-24.04`, about 4–5
+minutes in all):
+
+1. `npx playwright install --with-deps --only-shell chromium`, plus
+   `fonts-inter`;
+2. `npm run sim:shots -- --out sim-shots/dev --themes light --no-full` —
+   the Vite dev server, where React reports its own mistakes (missing keys,
+   invalid nesting) as console errors that a production build strips;
+3. `npm run sim:shots -- --prod --strict-csp` — the full set against a
+   production build with the app's CSP; any CSP report fails the job. Runs
+   even if step 2 failed;
+4. `node tools/sim/contact-sheet.mjs --summary sim-shots sim-shots/dev` into
+   the job summary: pass/fail per capture, the failures' first lines, fonts;
+5. `sim-shots/` (both runs, `index.html`, `contact-sheet.png`,
+   `report.json`) uploaded as the `sim-shots` artifact, also when a step
+   failed. Download it from the run page and open `index.html`.
+
+The job runs with `TZ=UTC` and `LANG=C.UTF-8`; the pages themselves are
+pinned to UTC / `en-US`, seed 7 and a frozen clock at
+`2026-11-05T15:00:00Z`. To reproduce a CI failure locally, run the same
+command; to see the captures as CI does, use the artifact.
+
+There is deliberately no pixel-baseline comparison: an intended UI change
+would fail it, and font and antialiasing differences between machines make
+baselines brittle. Review the contact sheet instead.
 
 ## 3. Real app on Linux (`npm run sim:linux`)
 

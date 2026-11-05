@@ -89,8 +89,8 @@ npm run app:install
 
 That builds the app bundle, quits the running copy, replaces `/Applications/UsageBar.app`, and relaunches it.
 
-Useful checks (the CI workflow runs the first six on macOS for every pull
-request):
+Useful checks (the CI workflow runs the first six on macOS and the
+simulator on Linux for every pull request):
 
 ```sh
 npm run versions:check   # the eight version fields agree
@@ -99,9 +99,20 @@ npm test                 # Vitest, plus node --test for tools/
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+npm run sim:shots -- --prod --strict-csp   # every screen against a simulated backend
 npm run check:macos      # lint the macOS-only Rust code from Linux
 npm run tauri build -- --debug
 ```
+
+`npm run sim:shots` screenshots the real frontend in headless Chromium
+against a simulated Tauri backend (every scenario, light/dark, roomy/dense,
+Settings, onboarding, the widget) and fails on a page error, a console
+error, an IPC command the simulator does not know, or, with
+`--strict-csp`, a CSP report. Open `sim-shots/index.html` for the contact
+sheet; on a pull request, the `sim-shots` artifact of the CI run has the
+same. It needs Chromium for the locked Playwright version once:
+`npx playwright install chromium`. See
+[docs/SIMULATION.md](docs/SIMULATION.md).
 
 `npm run versions:set -- 0.2.5` rewrites every version field at once (see
 [docs/RELEASING.md](docs/RELEASING.md)).
