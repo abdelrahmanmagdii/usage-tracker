@@ -1,7 +1,14 @@
 import type { ResetEvent } from "../../types/codex";
 import { readDetectedEvents } from "../../lib/history";
 import { isRecord } from "../../lib/rateLimits";
-import { BSKY_ACTORS, bskyFeedUrl, mergeEvents, parseBskyFeed, toResetEvent } from "../../../tools/tibo-watch/lib.mjs";
+import {
+  BSKY_ACTORS,
+  bskyFeedUrl,
+  mergeEvents,
+  parseBskyFeed,
+  toResetEvent,
+  tweetKey,
+} from "../../../tools/tibo-watch/lib.mjs";
 
 export interface ResetEventProvider {
   readonly id: string;
@@ -180,9 +187,14 @@ export class CombinedResetEventProvider implements ResetEventProvider {
     const announced = new Set<string>();
     for (const event of lists.flat()) {
       if (byId.has(event.id)) continue;
-      if (event.source === "tibo") {
-        if (announced.has(event.announcedAt)) continue;
-        announced.add(event.announcedAt);
+      // Compare instants, not strings: the hosted feed can hold a hand-written
+      // "…:00Z" (source "manual") for the tweet a relay reports as
+      // "…:00.000Z". Locally detected jumps are not posts, so they never
+      // collapse into an announcement.
+      if (event.source !== "detected") {
+        const key = tweetKey(event.announcedAt);
+        if (announced.has(key)) continue;
+        announced.add(key);
       }
       byId.set(event.id, event);
     }
@@ -199,13 +211,44 @@ export function upcomingReset(events: ResetEvent[], nowMs = Date.now()): ResetEv
     .sort((a, b) => Date.parse(a.occursAt as string) - Date.parse(b.occursAt as string))[0];
 }
 
+/**
+ * When a reset took effect: the recorded time if there is one, else the
+ * announced effective time once it has passed, else the announcement
+ * itself (a surprise reset "has been reset" lands as it is posted).
+ * NaN while an announced reset is still on its way.
+ */
+export function landedAtMs(event: ResetEvent, nowMs = Date.now()): number {
+  if (event.occurredAt) return Date.parse(event.occurredAt);
+  const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
+  if (Number.isFinite(occursAt)) return occursAt <= nowMs ? occursAt : Number.NaN;
+  return Date.parse(event.announcedAt);
+}
+
+/**
+ * The reset that most recently took effect. The feed is sorted by
+ * announcement, so its first entry can be a reset still on its way, or an
+ * older announcement whose scheduled time only just passed.
+ */
+export function latestLandedReset(
+  events: ResetEvent[],
+  nowMs = Date.now(),
+): { event: ResetEvent; at: number } | undefined {
+  let best: { event: ResetEvent; at: number } | undefined;
+  for (const event of events) {
+    const at = landedAtMs(event, nowMs);
+    if (!Number.isFinite(at) || at > nowMs) continue;
+    if (!best || at > best.at) best = { event, at };
+  }
+  return best;
+}
+
 export function tiboStatus(events: ResetEvent[], nowMs = Date.now()) {
   if (upcomingReset(events, nowMs)) {
     return { tone: "danger", label: "Reset incoming" } as const;
   }
-  const latest = events[0];
-  if (!latest) return { tone: "warning", label: "Watching for resets" } as const;
-  const ageDays = (nowMs - Date.parse(latest.occurredAt ?? latest.announcedAt)) / 86_400_000;
+  if (events.length === 0) return { tone: "warning", label: "Watching for resets" } as const;
+  const landed = latestLandedReset(events, nowMs);
+  const ageDays = landed ? (nowMs - landed.at) / 86_400_000 : Number.POSITIVE_INFINITY;
   if (ageDays <= 3) return { tone: "success", label: "Recently reset" } as const;
   return { tone: "warning", label: "No recent resets" } as const;
 }

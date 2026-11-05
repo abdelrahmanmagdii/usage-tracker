@@ -5,6 +5,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import type { ResetEvent } from "../../types/codex";
 import { formatLeadTime } from "../../lib/time";
+import { tweetKey } from "../../../tools/tibo-watch/lib.mjs";
 
 const NOTIFIED_KEY = "codex-meter.notified-events.v1";
 // Announcements stay notifiable for half a day: posts can take hours to
@@ -36,8 +37,11 @@ function writeNotified(ids: Iterable<string>): void {
 /**
  * Each relay mirrors a tweet under its own post id but keeps the tweet's
  * timestamp, so the timestamp also dedupes notifications across mirrors.
+ * It is normalized, so the hosted feed's "…:00Z" copy of a tweet already
+ * announced from a relay's "…:00.000Z" one is not announced twice. Relay
+ * timestamps are already in that form, so keys stored before this match.
  */
-export const announcedKey = (event: ResetEvent): string => `announced:${event.announcedAt}`;
+export const announcedKey = (event: ResetEvent): string => `announced:${tweetKey(event.announcedAt)}`;
 
 const wasNotified = (event: ResetEvent, notified: Set<string>): boolean =>
   notified.has(event.id) || (event.source !== "detected" && notified.has(announcedKey(event)));
@@ -48,14 +52,22 @@ export function selectFreshResetNotifications(
   nowMs = Date.now(),
 ): ResetEvent[] {
   const notified = new Set(notifiedIds);
+  const picked = new Set<string>();
   return events.filter((event) => {
     if (event.sample || wasNotified(event, notified)) return false;
     const announced = Date.parse(event.announcedAt);
     if (!Number.isFinite(announced) || announced > nowMs) return false;
     const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
     // A scheduled reset ("landing tomorrow 10am") is news until it lands.
-    if (Number.isFinite(occursAt) && occursAt > nowMs) return true;
-    return nowMs - announced <= ANNOUNCED_WINDOW_MS;
+    const fresh =
+      (Number.isFinite(occursAt) && occursAt > nowMs) || nowMs - announced <= ANNOUNCED_WINDOW_MS;
+    if (!fresh) return false;
+    // Two mirrors of one tweet in the same list are one announcement.
+    if (event.source !== "detected") {
+      if (picked.has(announcedKey(event))) return false;
+      picked.add(announcedKey(event));
+    }
+    return true;
   });
 }
 
@@ -109,16 +121,32 @@ export function resetNotificationBody(event: ResetEvent, nowMs = Date.now()): st
     : "A surprise reset was announced.";
 }
 
+// Calls run one after another. The app calls this whenever the event list or
+// the reset-alert pref changes, and a call can sit on the permission prompt
+// for seconds; a second call reading the delivered ids before the first
+// wrote them used to send the same announcement twice.
+let notifyQueue: Promise<void> = Promise.resolve();
+
 /**
  * Sends a macOS notification for fresh public announcements and locally
  * detected surprise resets. Only notifications accepted by the native bridge
  * are recorded as delivered; denied permission is remembered for the batch so
  * the app does not repeatedly ask about the same event.
  */
-export async function notifyFreshResets(
+export function notifyFreshResets(
   events: ResetEvent[],
   nowMs = Date.now(),
-  { enabled = true }: { enabled?: boolean } = {},
+  options: { enabled?: boolean } = {},
+): Promise<void> {
+  const run = notifyQueue.then(() => deliverFreshResets(events, nowMs, options));
+  notifyQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function deliverFreshResets(
+  events: ResetEvent[],
+  nowMs: number,
+  { enabled = true }: { enabled?: boolean },
 ): Promise<void> {
   if (!enabled || !("__TAURI_INTERNALS__" in window)) return;
   const notified = new Set(readNotified());
