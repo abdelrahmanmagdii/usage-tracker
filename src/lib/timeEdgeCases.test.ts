@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatLeadTime, freshness, relativeTime } from "./time";
+import { formatLeadTime, freshness, isLiveReading, relativeTime } from "./time";
 import { formatCountdown, formatLocalReset, windowDurationLabel } from "./rateLimits";
 
 describe("time helpers on malformed input", () => {
@@ -95,5 +95,17 @@ describe("formatLocalReset", () => {
     expect(formatLocalReset(undefined, now)).toBe("");
     expect(formatLocalReset(Number.NaN, now)).toBe("");
     expect(formatLocalReset(1e20, now)).toBe("");
+  });
+});
+
+describe("isLiveReading", () => {
+  const now = Date.parse("2026-11-05T15:00:00Z");
+  it("is live only when connected with a reading under 15 minutes old", () => {
+    expect(isLiveReading("connected", now / 1000 - 60, now)).toBe(true);
+    expect(isLiveReading("connected", now / 1000 - 15 * 60, now)).toBe(false);
+    expect(isLiveReading("error", now / 1000 - 60, now)).toBe(false);
+    expect(isLiveReading("not_authenticated", now / 1000 - 60, now)).toBe(false);
+    expect(isLiveReading("connected", undefined, now)).toBe(false);
+    expect(isLiveReading("connected", null, now)).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import { QuotaSection } from "./QuotaSection";
 import { Freshness } from "./Freshness";
 import { useNow } from "../hooks/useNow";
 import { isRecord } from "../lib/rateLimits";
-import { describeAge } from "../lib/time";
+import { describeAge, isLiveReading } from "../lib/time";
 import type { CodexBackendState } from "../types/codex";
 
 function planLabel(account: unknown): string | null {
@@ -79,7 +79,14 @@ export function ProviderSection({
       {buckets.length ? (
         <div className="quota-list provider-quota-list">
           {buckets.map((bucket) => (
-            <QuotaSection key={bucket.id} provider={id} bucket={bucket} now={now} dense={dense} />
+            <QuotaSection
+              key={bucket.id}
+              provider={id}
+              bucket={bucket}
+              now={now}
+              dense={dense}
+              live={isLiveReading(state.connection, state.updatedAt, now)}
+            />
           ))}
         </div>
       ) : null}

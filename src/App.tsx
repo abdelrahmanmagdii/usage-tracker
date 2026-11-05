@@ -32,6 +32,7 @@ import { upcomingReset } from "./features/tibo-watch/provider";
 import { notifyFreshResets } from "./features/tibo-watch/notifications";
 import { formatCountdown, windowDurationLabel } from "./lib/rateLimits";
 import { demoMode } from "./lib/demo";
+import { isLiveReading } from "./lib/time";
 import { previewPrefs, previewResetEvent } from "./lib/preview";
 import type { RateLimitBucket } from "./types/codex";
 import { deviceName, trayName } from "./lib/platform";
@@ -307,7 +308,16 @@ function Popover() {
                     <Freshness updatedAt={state.updatedAt} now={now} />
                   </div>
                   <div className="quota-list">
-                    {buckets.map((bucket) => <QuotaSection key={bucket.id} provider="codex" bucket={bucket} now={now} dense={prefs.denseLayout} />)}
+                    {buckets.map((bucket) => (
+                      <QuotaSection
+                        key={bucket.id}
+                        provider="codex"
+                        bucket={bucket}
+                        now={now}
+                        dense={prefs.denseLayout}
+                        live={isLiveReading(state.connection, state.updatedAt, now)}
+                      />
+                    ))}
                   </div>
                 </>
               )}

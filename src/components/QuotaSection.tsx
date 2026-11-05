@@ -27,11 +27,15 @@ export function QuotaSection({
   bucket,
   now,
   dense = false,
+  live = true,
 }: {
   provider: string;
   bucket: RateLimitBucket;
   now: number;
   dense?: boolean;
+  /** False when the provider is failing, signed out or stale: the recorded
+   * history still shows, but no "runs out in" projection is made from it. */
+  live?: boolean;
 }) {
   const used = Math.round(bucket.usedPercent);
   const remaining = Math.round(bucket.remainingPercent);
@@ -52,8 +56,8 @@ export function QuotaSection({
   // it keeps both from recomputing on every one-second tick.
   const minute = Math.floor(now / 60_000);
   const runOut = useMemo(
-    () => projectedRunOut(history, bucket, minute * 60_000),
-    [history, bucket, minute],
+    () => (live ? projectedRunOut(history, bucket, minute * 60_000) : null),
+    [live, history, bucket, minute],
   );
   const timeline = useMemo(
     () => buildTimeline(history, bucket, minute * 60_000, runOut),

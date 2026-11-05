@@ -45,6 +45,23 @@ export function formatLeadTime(ms: number): string {
 /** Matches the tray's stale marker (`TRAY_STALE_AFTER_SECS`). */
 export const STALE_AFTER_SECS = 15 * 60;
 
+/**
+ * Whether a provider's numbers describe usage right now: it is connected and
+ * its last reading is not stale. A pace projection from anything else
+ * extrapolates a burn rate the app can no longer see (a failing refresh, a
+ * signed-out tool, a reading from an hour ago) and would read as a warning
+ * about the present.
+ */
+export function isLiveReading(
+  connection: string,
+  updatedAtSeconds: number | null | undefined,
+  nowMs: number,
+): boolean {
+  if (connection !== "connected") return false;
+  const age = freshness(updatedAtSeconds, nowMs);
+  return age !== null && !age.stale;
+}
+
 /** "Updated 2m ago", flagged stale once a reading is older than 15 minutes. */
 export function freshness(
   updatedAtSeconds?: number | null,

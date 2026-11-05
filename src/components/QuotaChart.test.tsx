@@ -52,6 +52,16 @@ describe("QuotaChart in a quota tile", () => {
     expect(container.querySelector(".quota-chart-axis")?.textContent).toContain("even pace");
   });
 
+  it("projects nothing from a reading that is not live", () => {
+    // The same burn as above, but the provider is failing or stale: the
+    // history still draws, the run-out guess does not.
+    seed([sample(110, 5), sample(60, 20), sample(30, 40), sample(1, 60)]);
+    const { container } = render(<QuotaSection provider="codex" bucket={bucket} now={now} live={false} />);
+    expect(container.querySelector(".quota-chart-line")).toBeTruthy();
+    expect(container.querySelector(".quota-chart-projection")).toBeNull();
+    expect(screen.queryByText(/At this pace, runs out in/)).toBeNull();
+  });
+
   it("shows the guide and the current point before anything is recorded", () => {
     const { container } = render(<QuotaSection provider="codex" bucket={bucket} now={now} />);
     expect(container.querySelector(".quota-chart-even")).toBeTruthy();
