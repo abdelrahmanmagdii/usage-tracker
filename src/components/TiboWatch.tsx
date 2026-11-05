@@ -2,11 +2,26 @@ import { invoke } from "@tauri-apps/api/core";
 import { ExternalLink, Radio } from "lucide-react";
 import type { ResetEvent } from "../types/codex";
 import { formatLeadTime, relativeTime } from "../lib/time";
-import { tiboStatus, upcomingReset } from "../features/tibo-watch/provider";
+import { latestLandedReset, tiboStatus, upcomingReset } from "../features/tibo-watch/provider";
 
 const MAX_POST_CHARS = 140;
 
+// Mirrors the backend's `open_post_url` allowlist. The feed and the relays
+// are untrusted: a link the backend would refuse gets no button at all,
+// rather than one that silently does nothing (or, in a browser preview,
+// opens whatever scheme the post supplied).
+const POST_URL_PREFIXES = ["https://bsky.app/", "https://x.com/", "https://twitter.com/"];
+
+export function isOpenablePostUrl(url: string | undefined): url is string {
+  return (
+    typeof url === "string" &&
+    POST_URL_PREFIXES.some((prefix) => url.startsWith(prefix)) &&
+    !/[\s\p{Cc}]/u.test(url)
+  );
+}
+
 function openPost(url: string) {
+  if (!isOpenablePostUrl(url)) return;
   if ("__TAURI_INTERNALS__" in window) void invoke("open_post_url", { url }).catch(() => undefined);
   else window.open(url, "_blank", "noopener");
 }
@@ -15,6 +30,9 @@ export function TiboWatch({ now, events }: { now: number; events: ResetEvent[] }
   const status = tiboStatus(events, now);
   const upcoming = upcomingReset(events, now);
   const latest = events[0];
+  // "Last reset" is the one that most recently took effect, not the newest
+  // announcement, which may still be on its way.
+  const lastLanded = latestLandedReset(events, now);
   // The post worth reading: the one about to land, else the most recent.
   const post = upcoming ?? latest;
   const thisMonth = events.filter((event) => {
@@ -23,6 +41,7 @@ export function TiboWatch({ now, events }: { now: number; events: ResetEvent[] }
     return date.getMonth() === current.getMonth() && date.getFullYear() === current.getFullYear();
   }).length;
   const text = post?.text && post.source !== "detected" ? post.text : null;
+  const postUrl = isOpenablePostUrl(post?.sourceUrl) ? post.sourceUrl : null;
 
   return (
     <section className="tibo-watch" aria-labelledby="tibo-heading">
@@ -44,11 +63,11 @@ export function TiboWatch({ now, events }: { now: number; events: ResetEvent[] }
           <footer>
             {post?.plansAffected?.length ? (
               <span className="tibo-plans">
-                {post.plansAffected.map((plan) => <span key={plan} className="plan-chip">{plan}</span>)}
+                {[...new Set(post.plansAffected)].map((plan) => <span key={plan} className="plan-chip">{plan}</span>)}
               </span>
             ) : <span />}
-            {post?.sourceUrl ? (
-              <button type="button" className="tibo-link" onClick={() => openPost(post.sourceUrl!)}>
+            {postUrl ? (
+              <button type="button" className="tibo-link" onClick={() => openPost(postUrl)}>
                 View post <ExternalLink size={11} aria-hidden="true" />
               </button>
             ) : null}
@@ -57,7 +76,13 @@ export function TiboWatch({ now, events }: { now: number; events: ResetEvent[] }
       ) : null}
       <div className="tibo-meta">
         <span>Last reset</span>
-        <strong>{latest ? relativeTime(latest.occurredAt ?? latest.announcedAt, now) : "Watching for Tibo's posts"}</strong>
+        <strong>
+          {lastLanded
+            ? relativeTime(new Date(lastLanded.at).toISOString(), now)
+            : latest
+              ? "Not yet landed"
+              : "Watching for Tibo's posts"}
+        </strong>
       </div>
       <div className="tibo-meta">
         <span>Recorded this month</span>
