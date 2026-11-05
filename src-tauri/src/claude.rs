@@ -14,7 +14,7 @@
 
 use std::{
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         Arc,
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -42,6 +42,21 @@ const KEYCHAIN_ITEM_NOT_FOUND: i32 = -25300;
 /// Consecutive empty reads required before the menu-bar meter disappears, once
 /// it has shown a number at least once.
 const ABSENT_READS_BEFORE_HIDING: u32 = 2;
+/// While Claude Code is in use, the meter refreshes this often instead of
+/// waiting out the five-minute idle cadence. Claude has no push channel like
+/// the Codex App Server, so recent transcript writes stand in for one.
+pub const ACTIVE_REFRESH_SECS: u64 = 60;
+/// Opening the popover refreshes a reading older than this.
+pub const OPEN_REFRESH_MAX_AGE_SECS: u64 = 30;
+/// How often the transcript tree is rescanned in full. Between scans only the
+/// most recently written transcript is checked, which keeps the 10-second
+/// watchdog tick down to a single `stat`.
+const FULL_ACTIVITY_SCAN_SECS: u64 = 30;
+/// Bounds for honoring `Retry-After` on HTTP 429. A missing or unparseable
+/// header waits out the steady cadence.
+const RATE_LIMIT_DEFAULT_SECS: u64 = 4 * 60;
+const RATE_LIMIT_MIN_SECS: u64 = 60;
+const RATE_LIMIT_MAX_SECS: u64 = 30 * 60;
 /// `security` exits with this when the item does not exist.
 #[cfg(target_os = "macos")]
 const SECURITY_CLI_NOT_FOUND: i32 = 44;
@@ -90,6 +105,13 @@ pub struct ClaudeManager {
     /// Last seen modification stamp of the stored login (Keychain item and
     /// credentials file), so a token rotation refreshes the meter at once.
     login_stamp: Arc<Mutex<Option<String>>>,
+    /// Unix seconds of the last usage request, successful or not, so opening
+    /// the popover repeatedly does not re-send a request that just failed.
+    last_request: Arc<AtomicU64>,
+    /// Unix seconds before which no usage request is sent, set from an HTTP
+    /// 429 so a faster cadence never turns into hammering a rate limit.
+    rate_limited_until: Arc<AtomicU64>,
+    activity: Arc<std::sync::Mutex<ActivityScan>>,
 }
 
 impl ClaudeManager {
@@ -106,7 +128,49 @@ impl ClaudeManager {
             refresh_lock: Arc::new(Mutex::new(())),
             absent_reads: Arc::new(AtomicU32::new(0)),
             login_stamp: Arc::new(Mutex::new(None)),
+            last_request: Arc::new(AtomicU64::new(0)),
+            rate_limited_until: Arc::new(AtomicU64::new(0)),
+            activity: Arc::new(std::sync::Mutex::new(ActivityScan::default())),
         }
+    }
+
+    /// Whether Claude Code has been used since the meter last landed, so the
+    /// watchdog should refresh at the active cadence. Cheap preconditions run
+    /// first; the transcript check itself is one `stat` on most ticks.
+    pub async fn active_refresh_due(
+        &self,
+        now: u64,
+        updated_at: Option<u64>,
+        last_attempt: u64,
+        consecutive_failures: u32,
+    ) -> bool {
+        if crate::demo::enabled()
+            || !active_lane_open(now, updated_at, last_attempt, consecutive_failures)
+            || now < self.rate_limited_until.load(Ordering::Relaxed)
+        {
+            return false;
+        }
+        let Some(projects) = claude_config_dir().map(|dir| dir.join("projects")) else {
+            return false;
+        };
+        let activity = self.activity.clone();
+        let latest = tokio::task::spawn_blocking(move || {
+            activity
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .latest(&projects, now)
+        })
+        .await
+        .ok()
+        .flatten();
+        used_since_last_reading(latest, updated_at)
+    }
+
+    /// Refreshes only when the reading (or the last attempt) is older than
+    /// `max_age_secs`. Used when the popover opens, so the numbers on screen
+    /// are current without a request per click.
+    pub async fn refresh_if_older_than(&self, max_age_secs: u64) -> Result<ClaudeState, String> {
+        self.refresh_inner(false, Some(max_age_secs)).await
     }
 
     pub async fn snapshot(&self) -> ClaudeState {
@@ -135,18 +199,19 @@ impl ClaudeManager {
     }
 
     pub async fn refresh(&self) -> Result<ClaudeState, String> {
-        self.refresh_with_prompt(false).await
+        self.refresh_inner(false, None).await
     }
 
     /// User-initiated refresh (Retry). May show a Keychain sheet once if the
     /// CLI file is stale and macOS has not already granted Always Allow.
     pub async fn refresh_from_user(&self) -> Result<ClaudeState, String> {
-        self.refresh_with_prompt(true).await
+        self.refresh_inner(true, None).await
     }
 
-    async fn refresh_with_prompt(
+    async fn refresh_inner(
         &self,
         allow_keychain_prompt: bool,
+        max_age_secs: Option<u64>,
     ) -> Result<ClaudeState, String> {
         if crate::demo::enabled() {
             return Ok(self.snapshot().await);
@@ -160,6 +225,24 @@ impl ClaudeManager {
             return Ok(self.snapshot().await);
         }
         let _guard = self.refresh_lock.lock().await;
+        // Checked under the lock: a watchdog refresh that just finished makes
+        // a queued popover-open refresh redundant.
+        if let Some(max_age) = max_age_secs {
+            let newest = self
+                .snapshot()
+                .await
+                .updated_at
+                .unwrap_or(0)
+                .max(self.last_request.load(Ordering::Relaxed));
+            if now_unix_seconds().saturating_sub(newest) < max_age {
+                return Ok(self.snapshot().await);
+            }
+        }
+        // Anthropic asked us to back off. The last numbers and the
+        // rate-limit diagnostic stay on screen until the wait is over.
+        if now_unix_seconds() < self.rate_limited_until.load(Ordering::Relaxed) {
+            return Ok(self.snapshot().await);
+        }
         let credentials = match load_credentials(allow_keychain_prompt).await {
             CredentialRead::Found(credentials) => {
                 self.absent_reads.store(0, Ordering::Relaxed);
@@ -214,6 +297,8 @@ impl ClaudeManager {
             return Ok(self.snapshot().await);
         }
 
+        self.last_request
+            .store(now_unix_seconds(), Ordering::Relaxed);
         let response = self
             .client
             .get(USAGE_URL)
@@ -239,6 +324,20 @@ impl ClaudeManager {
             )
             .await;
             return Ok(self.snapshot().await);
+        }
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let wait = rate_limit_wait_secs(
+                response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok()),
+            );
+            self.rate_limited_until
+                .store(now_unix_seconds().saturating_add(wait), Ordering::Relaxed);
+            let message = "Anthropic is rate-limiting usage requests right now; UsageBar will try again shortly".to_owned();
+            self.set_connection(ConnectionState::Error, Some(message.clone()))
+                .await;
+            return Err(message);
         }
         if !status.is_success() {
             let message = format!("Claude usage endpoint returned HTTP {status}");
@@ -571,13 +670,145 @@ async fn load_from_keychain(allow_prompt: bool) -> CredentialRead {
     }
 }
 
+fn claude_config_dir() -> Option<std::path::PathBuf> {
+    if let Some(directory) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|value| !value.is_empty())
+    {
+        return Some(std::path::PathBuf::from(directory));
+    }
+    Some(crate::platform::home_dir()?.join(".claude"))
+}
+
 fn credentials_file_path() -> Option<std::path::PathBuf> {
-    let home = crate::platform::home_dir()?;
-    let directory = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| home.join(".claude"));
-    Some(directory.join(".credentials.json"))
+    Some(claude_config_dir()?.join(".credentials.json"))
+}
+
+/// The cheap half of the active-use check: the meter is healthy (failures go
+/// through the normal backoff instead), has a reading to compare against,
+/// and the active cadence has elapsed since the last attempt.
+fn active_lane_open(
+    now: u64,
+    updated_at: Option<u64>,
+    last_attempt: u64,
+    consecutive_failures: u32,
+) -> bool {
+    consecutive_failures == 0
+        && updated_at.is_some()
+        && now.saturating_sub(last_attempt) >= ACTIVE_REFRESH_SECS
+}
+
+/// Whether Claude Code wrote a transcript at or after the last reading. The
+/// same second counts: a write that lands while the request is in flight may
+/// not be reflected in the numbers yet, and it costs at most one extra fetch.
+fn used_since_last_reading(latest_activity: Option<u64>, updated_at: Option<u64>) -> bool {
+    match (latest_activity, updated_at) {
+        (Some(activity), Some(updated)) => activity >= updated,
+        _ => false,
+    }
+}
+
+/// Seconds to wait after HTTP 429. Only the delta-seconds form of
+/// `Retry-After` is read; anything else waits out the steady cadence.
+fn rate_limit_wait_secs(retry_after: Option<&str>) -> u64 {
+    retry_after
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(RATE_LIMIT_DEFAULT_SECS)
+        .clamp(RATE_LIMIT_MIN_SECS, RATE_LIMIT_MAX_SECS)
+}
+
+/// Tracks the newest Claude Code transcript write. Claude Code appends to
+/// `projects/<project>/<session>.jsonl` throughout every turn, so its mtime is
+/// a local, credential-free signal that usage just moved.
+#[derive(Default)]
+struct ActivityScan {
+    /// The most recently written transcript seen by the last full scan.
+    hot: Option<std::path::PathBuf>,
+    newest: Option<u64>,
+    scanned_at: u64,
+}
+
+impl ActivityScan {
+    fn latest(&mut self, projects: &std::path::Path, now: u64) -> Option<u64> {
+        let quick =
+            self.hot.is_some() && now.saturating_sub(self.scanned_at) < FULL_ACTIVITY_SCAN_SECS;
+        if quick {
+            if let Some(modified) = self
+                .hot
+                .as_deref()
+                .and_then(|path| modified_secs(path, now))
+            {
+                self.newest = self.newest.max(Some(modified));
+            }
+            return self.newest;
+        }
+        let (hot, newest) = newest_transcript(projects, now);
+        self.hot = hot;
+        self.newest = newest;
+        self.scanned_at = now;
+        self.newest
+    }
+}
+
+/// A file's mtime in unix seconds. A stamp from the future (clock skew, a
+/// restored backup) is ignored, or it would read as activity forever.
+fn modified_secs(path: &std::path::Path, now: u64) -> Option<u64> {
+    let secs = std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    (secs <= now.saturating_add(5)).then_some(secs)
+}
+
+/// The newest `*.jsonl` directly inside each project folder. Subagent
+/// transcripts nest deeper, but their parent session file is written too.
+fn newest_transcript(
+    projects: &std::path::Path,
+    now: u64,
+) -> (Option<std::path::PathBuf>, Option<u64>) {
+    let mut best: (Option<std::path::PathBuf>, Option<u64>) = (None, None);
+    let Ok(project_dirs) = std::fs::read_dir(projects) else {
+        return best;
+    };
+    for project in project_dirs.flatten() {
+        if !project.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(project.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().is_none_or(|ext| ext != "jsonl") {
+                continue;
+            }
+            let Some(modified) = modified_secs(&path, now) else {
+                continue;
+            };
+            if best.1.is_none_or(|newest| modified > newest) {
+                best = (Some(path), Some(modified));
+            }
+        }
+    }
+    best
+}
+
+/// Opening the popover shows current Claude numbers: a reading older than
+/// `OPEN_REFRESH_MAX_AGE_SECS` is refreshed in the background, and the
+/// renderer picks it up from the `claude://state` event.
+pub fn refresh_on_open(app: &AppHandle) {
+    let Some(manager) = app
+        .try_state::<ClaudeManager>()
+        .map(|state| state.inner().clone())
+    else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        let _ = manager
+            .refresh_if_older_than(OPEN_REFRESH_MAX_AGE_SECS)
+            .await;
+    });
 }
 
 async fn load_from_file() -> CredentialRead {
@@ -782,6 +1013,10 @@ fn now_unix_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn now_unix_seconds() -> u64 {
+    now_unix_millis() / 1_000
 }
 
 #[cfg(test)]
@@ -1039,5 +1274,99 @@ mod tests {
 
         assert!(parse_security_output("").is_none());
         assert!(parse_security_output("abc").is_none());
+    }
+
+    #[test]
+    fn the_active_lane_needs_a_healthy_meter_and_the_active_spacing() {
+        let now = 1_000_000;
+        assert!(active_lane_open(
+            now,
+            Some(now - 90),
+            now - ACTIVE_REFRESH_SECS,
+            0
+        ));
+        // Too soon after the last attempt.
+        assert!(!active_lane_open(now, Some(now - 90), now - 10, 0));
+        // Failures stay in the normal backoff instead of the fast lane.
+        assert!(!active_lane_open(now, Some(now - 90), now - 600, 1));
+        // Nothing to compare against yet: the startup refresh owns that case.
+        assert!(!active_lane_open(now, None, now - 600, 0));
+    }
+
+    #[test]
+    fn only_a_transcript_write_since_the_last_reading_counts_as_use() {
+        assert!(used_since_last_reading(Some(200), Some(100)));
+        assert!(used_since_last_reading(Some(100), Some(100)));
+        assert!(!used_since_last_reading(Some(99), Some(100)));
+        assert!(!used_since_last_reading(None, Some(100)));
+        assert!(!used_since_last_reading(Some(200), None));
+    }
+
+    #[test]
+    fn rate_limit_waits_follow_retry_after_within_bounds() {
+        assert_eq!(rate_limit_wait_secs(Some("120")), 120);
+        assert_eq!(rate_limit_wait_secs(Some(" 90 ")), 90);
+        assert_eq!(rate_limit_wait_secs(Some("1")), RATE_LIMIT_MIN_SECS);
+        assert_eq!(rate_limit_wait_secs(Some("86400")), RATE_LIMIT_MAX_SECS);
+        assert_eq!(
+            rate_limit_wait_secs(Some("Wed, 21 Oct 2026 07:28:00 GMT")),
+            RATE_LIMIT_DEFAULT_SECS
+        );
+        assert_eq!(rate_limit_wait_secs(None), RATE_LIMIT_DEFAULT_SECS);
+    }
+
+    #[test]
+    fn activity_scan_finds_the_newest_transcript_and_rechecks_it_cheaply() {
+        let root = std::env::temp_dir().join(format!(
+            "usagebar-activity-{}-{}",
+            std::process::id(),
+            now_unix_millis()
+        ));
+        let projects = root.join("projects");
+        let alpha = projects.join("-Users-me-alpha");
+        let beta = projects.join("-Users-me-beta");
+        std::fs::create_dir_all(&alpha).expect("alpha dir");
+        std::fs::create_dir_all(beta.join("session").join("subagents")).expect("beta dir");
+        let old = alpha.join("old.jsonl");
+        let live = beta.join("live.jsonl");
+        std::fs::write(&old, "{}\n").expect("old transcript");
+        std::fs::write(&live, "{}\n").expect("live transcript");
+        std::fs::write(alpha.join("notes.txt"), "ignored").expect("other file");
+        let set_mtime = |path: &std::path::Path, secs: u64| {
+            std::fs::File::options()
+                .append(true)
+                .open(path)
+                .expect("open")
+                .set_modified(UNIX_EPOCH + Duration::from_secs(secs))
+                .expect("set mtime");
+        };
+        set_mtime(&old, 1_000);
+        set_mtime(&live, 2_000);
+
+        let now = 10_000;
+        let mut scan = ActivityScan::default();
+        assert_eq!(scan.latest(&projects, now), Some(2_000));
+        assert_eq!(scan.hot.as_deref(), Some(live.as_path()));
+
+        // Between full scans only the hot file is checked.
+        set_mtime(&live, 3_000);
+        assert_eq!(scan.latest(&projects, now + 1), Some(3_000));
+        set_mtime(&old, 4_000);
+        assert_eq!(scan.latest(&projects, now + 2), Some(3_000));
+        // The next full scan picks up the other project.
+        assert_eq!(
+            scan.latest(&projects, now + FULL_ACTIVITY_SCAN_SECS),
+            Some(4_000)
+        );
+        assert_eq!(scan.hot.as_deref(), Some(old.as_path()));
+
+        // A stamp from the future is not activity.
+        set_mtime(&live, now + 3_600);
+        set_mtime(&old, 1_000);
+        assert_eq!(newest_transcript(&projects, now).1, Some(1_000));
+
+        // No projects folder (Claude Code never ran) means no activity.
+        assert_eq!(newest_transcript(&root.join("missing"), now), (None, None));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

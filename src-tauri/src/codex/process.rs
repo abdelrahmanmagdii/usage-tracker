@@ -69,6 +69,11 @@ pub struct CodexManager {
     start_lock: Arc<Mutex<()>>,
     refresh_lock: Arc<Mutex<()>>,
     shutting_down: Arc<AtomicBool>,
+    /// Bumped whenever an App Server process is spawned or stopped. Each
+    /// stdout reader remembers the generation it was started for, so a
+    /// reader for a process that was already replaced cannot tear down the
+    /// pipes of its successor when its own pipe finally closes.
+    generation: Arc<AtomicU64>,
 }
 
 impl CodexManager {
@@ -83,6 +88,7 @@ impl CodexManager {
             start_lock: Arc::new(Mutex::new(())),
             refresh_lock: Arc::new(Mutex::new(())),
             shutting_down: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -99,11 +105,17 @@ impl CodexManager {
         if self.snapshot().await.connection == ConnectionState::Connected {
             return Ok(self.snapshot().await);
         }
-        self.set_connection(ConnectionState::Starting, None).await;
-
+        // An App Server that is still running (say, signed out) is reused
+        // without flashing "Connecting…". If it stopped answering, it is
+        // replaced below: the next watchdog tick would otherwise reach the
+        // same hung pipe and leave the meter stuck on the old state.
         if self.stdin.lock().await.is_some() {
-            return self.refresh_data().await;
+            match self.refresh_data().await {
+                Ok(state) => return Ok(state),
+                Err(_) => self.stop_child().await,
+            }
         }
+        self.set_connection(ConnectionState::Starting, None).await;
 
         let cli = match find_codex_cli().await {
             Ok(cli) => cli,
@@ -147,10 +159,11 @@ impl CodexManager {
             .stderr
             .take()
             .ok_or("Codex App Server stderr was unavailable")?;
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self.stdin.lock().await = Some(stdin);
         *self.child.lock().await = Some(child);
 
-        self.spawn_stdout_reader(stdout);
+        self.spawn_stdout_reader(stdout, generation);
         self.spawn_stderr_reader(stderr);
 
         let initialize = json!({
@@ -287,7 +300,7 @@ impl CodexManager {
         pipe.flush().await.map_err(|error| error.to_string())
     }
 
-    fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
+    fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout, generation: u64) {
         let manager = self.clone();
         tauri::async_runtime::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
@@ -323,7 +336,7 @@ impl CodexManager {
                 }
             }
             manager
-                .handle_disconnect("Codex App Server exited unexpectedly")
+                .handle_disconnect(generation, "Codex App Server exited unexpectedly")
                 .await;
         });
     }
@@ -338,12 +351,15 @@ impl CodexManager {
         });
     }
 
-    async fn handle_disconnect(&self, message: &str) {
-        *self.stdin.lock().await = None;
-        let pending = std::mem::take(&mut *self.pending.lock().await);
-        for (_, sender) in pending {
-            let _ = sender.send(Err(message.to_owned()));
+    async fn handle_disconnect(&self, generation: u64, message: &str) {
+        // A reader for a process that `stop_child` already replaced: its
+        // requests were failed there, and the pipes now belong to a newer
+        // process.
+        if generation != self.generation.load(Ordering::SeqCst) {
+            return;
         }
+        *self.stdin.lock().await = None;
+        self.fail_pending(message).await;
         if !self.shutting_down.load(Ordering::Relaxed) {
             self.set_connection(ConnectionState::Disconnected, Some(message.to_owned()))
                 .await;
@@ -384,10 +400,21 @@ impl CodexManager {
     }
 
     async fn stop_child(&self) {
+        // Retire the current generation first, so its reader ignores the
+        // pipe closing below instead of racing the next `start`.
+        self.generation.fetch_add(1, Ordering::SeqCst);
         *self.stdin.lock().await = None;
+        self.fail_pending("Codex App Server was restarted").await;
         if let Some(mut child) = self.child.lock().await.take() {
             let _ = child.kill().await;
             let _ = child.wait().await;
+        }
+    }
+
+    async fn fail_pending(&self, message: &str) {
+        let pending = std::mem::take(&mut *self.pending.lock().await);
+        for (_, sender) in pending {
+            let _ = sender.send(Err(message.to_owned()));
         }
     }
 

@@ -8,7 +8,7 @@ export interface ResetEventProvider {
   listEvents(): Promise<ResetEvent[]>;
 }
 
-const DEFAULT_FEED_URL =
+export const DEFAULT_FEED_URL =
   "https://raw.githubusercontent.com/abdelrahmanmagdii/usage-tracker/main/data/resets.json";
 const FEED_URL =
   (import.meta.env.VITE_TIBO_FEED_URL as string | undefined) || DEFAULT_FEED_URL;

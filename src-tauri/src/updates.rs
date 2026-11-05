@@ -54,6 +54,19 @@ pub async fn check_for_update(app: AppHandle, manual: bool) {
         }
         return;
     }
+    // An update already downloaded and installed only needs a relaunch.
+    // Checking again would download the same build every six hours and
+    // announce it as ready each time.
+    if let Some(version) = app.state::<UpdateStatus>().pending_version() {
+        if manual {
+            notify(
+                &app,
+                &format!("UsageBar {version} is ready"),
+                "Restart UsageBar from the menu-bar menu to finish updating.",
+            );
+        }
+        return;
+    }
     let updater = match app.updater() {
         Ok(updater) => updater,
         Err(error) => {

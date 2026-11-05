@@ -335,8 +335,12 @@ pub fn place_demo_windows(app: &AppHandle) {
     let screen_w = monitor.size().width as f64 / scale;
     let screen_h = monitor.size().height as f64 / scale;
     let main_size = main.outer_size().ok();
-    let main_w = main_size.map(|size| size.width as f64 / scale).unwrap_or(388.0);
-    let main_h = main_size.map(|size| size.height as f64 / scale).unwrap_or(640.0);
+    let main_w = main_size
+        .map(|size| size.width as f64 / scale)
+        .unwrap_or(388.0);
+    let main_h = main_size
+        .map(|size| size.height as f64 / scale)
+        .unwrap_or(640.0);
     let widget = app.get_webview_window("codex-widget");
     let (widget_w, widget_h) = widget
         .as_ref()

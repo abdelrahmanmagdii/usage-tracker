@@ -86,12 +86,17 @@ auto-updating (those users land back on manual downloads).
 
 ## Cutting a release
 
+The version lives in eight fields across seven files (`package.json`,
+`package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
+`src-tauri/tauri.conf.json`, and both casks). Set them all at once:
+
 ```bash
-npm version 0.1.0 --no-git-tag-version
+npm run versions:set -- 0.1.0
 ```
 
-Then match that version in `src-tauri/tauri.conf.json` and
-`src-tauri/Cargo.toml`, commit, and tag:
+`npm run versions:check` confirms they agree; CI runs it on every pull
+request, and the Release workflow also fails if the pushed tag does not match.
+Commit, and tag:
 
 ```bash
 git tag v0.1.0 && git push origin main --tags
@@ -115,8 +120,11 @@ users can then install with:
 brew install --cask abdelrahmanmagdii/usagebar/usagebar
 ```
 
-The tap needs one edit per release: bump `version`, and ideally replace
-`sha256 :no_check` with the real digest of the published dmg:
+Once `HOMEBREW_TAP_REPO` and `HOMEBREW_TAP_TOKEN` are configured (see
+`homebrew-tap/SETUP.md`), the Release workflow keeps the tap current on every
+tag: it downloads the published dmg, and writes the tag's version and the
+dmg's real SHA-256 into the tap's cask. The `sha256 :no_check` in this repo's
+copy is only the template. To check a digest by hand:
 
 ```bash
 curl -sL "https://github.com/abdelrahmanmagdii/usage-tracker/releases/download/v$VERSION/UsageBar_${VERSION}_universal.dmg" | shasum -a 256

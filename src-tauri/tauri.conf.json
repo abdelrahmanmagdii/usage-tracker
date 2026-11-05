@@ -38,7 +38,19 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self'",
+        "img-src": "'self' data:",
+        "font-src": "'self'",
+        "connect-src": "'self' ipc: http://ipc.localhost https://raw.githubusercontent.com https://public.api.bsky.app",
+        "object-src": "'none'",
+        "frame-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'"
+      },
+      "devCsp": null
     }
   },
   "plugins": {
@@ -61,8 +73,8 @@
     ],
     "category": "DeveloperTool",
     "copyright": "Copyright © 2026 Abdelrahman Amer. All rights reserved.",
-    "shortDescription": "Codex, Claude, Cursor, OpenCode, Devin, and Antigravity quotas in the Mac menu bar.",
-    "longDescription": "UsageBar sits in the Mac menu bar and shows remaining Codex, Claude Code, Cursor, OpenCode, Devin, and Antigravity quota plus when each window resets. Usage stays on this Mac.",
+    "shortDescription": "Codex, Claude, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI quotas in the Mac menu bar.",
+    "longDescription": "UsageBar sits in the Mac menu bar and shows remaining Codex, Claude Code, Cursor, OpenCode, Devin, Antigravity, and Gemini CLI quota plus when each window resets. Usage stays on this Mac.",
     "macOS": {
       "minimumSystemVersion": "10.15"
     }
