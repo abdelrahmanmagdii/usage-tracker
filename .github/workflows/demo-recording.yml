@@ -1,10 +1,6 @@
 # Records the real UsageBar app (menu bar on macOS, tray + floating meter on
 # Windows) with sample quotas. Demo mode is opt-in (`--demo` / USAGEBAR_DEMO=1)
-# and is off for every other launch.
-#
-# workflow_dispatch works once this file is on the default branch. Until then,
-# a push to the recording branch runs it — GitHub will not dispatch a workflow
-# that exists only on a feature branch.
+# and is off for every other launch. Run it from the Actions tab.
 name: Demo recording
 
 on:
@@ -14,9 +10,6 @@ on:
         description: Recording length in seconds
         default: "40"
         required: false
-  push:
-    branches:
-      - cursor/demo-recording-ad81
 
 permissions:
   contents: read

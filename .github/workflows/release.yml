@@ -6,11 +6,19 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
+    # The release is named and tagged after github.ref_name, so a manual run
+    # on a branch would publish a public "latest" release tagged e.g. `main`
+    # and serve it to every installed copy's updater. Dispatch on a v* tag to
+    # re-run a release.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest
+    # Creates the GitHub release and uploads its assets.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -40,9 +48,13 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
       # notarytool reads the App Store Connect key from a file on disk.
+      # Through env rather than an inline expression, so the shell never parses the
+      # key's contents.
       - name: Write App Store Connect API key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
-          printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" > "$RUNNER_TEMP/asc-api-key.p8"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/asc-api-key.p8"
           chmod 600 "$RUNNER_TEMP/asc-api-key.p8"
 
       - uses: tauri-apps/tauri-action@v0
@@ -58,8 +70,10 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ runner.temp }}/asc-api-key.p8
-          # Updater artifact signing (minisign). Without this the CLI still
-          # builds the app but emits no `latest.json`, so self-updates stay off.
+          # Updater artifact signing (minisign). Required: tauri.conf.json
+          # ships the updater pubkey with createUpdaterArtifacts on, so the
+          # CLI refuses to bundle without it (tools/tauri.mjs only relaxes
+          # that outside CI).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
@@ -89,6 +103,9 @@ jobs:
   cask:
     needs: release
     runs-on: ubuntu-latest
+    # Reads the release; pushes to the tap with its own token.
+    permissions:
+      contents: read
     # Tag pushes only: a manual run on a branch has no release to checksum.
     if: vars.HOMEBREW_TAP_REPO != '' && startsWith(github.ref, 'refs/tags/v')
     env:

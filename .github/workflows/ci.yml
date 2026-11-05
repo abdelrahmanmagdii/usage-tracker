@@ -12,13 +12,16 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes the old run. Runs on main all
+# finish, so every merge gets a result.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   macos:
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -31,9 +34,13 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # Only main saves the Rust cache. Pull requests restore it, but saving
+      # one multi-GB macOS cache per PR branch would evict main's from the
+      # repository's 10 GB cache quota.
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: npm ci
 
