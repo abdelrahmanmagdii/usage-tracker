@@ -705,6 +705,8 @@ fn parse_log_http_port(line: &str) -> Option<u16> {
     None
 }
 
+// lsof parsing serves macOS (and tests); Windows scans with PowerShell.
+#[cfg(any(not(target_os = "windows"), test))]
 fn parse_lsof_bases(output: &str) -> Vec<String> {
     let mut language_server = Vec::new();
     let mut other = Vec::new();
@@ -736,6 +738,7 @@ fn parse_lsof_bases(output: &str) -> Vec<String> {
     language_server
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProcessKind {
     LanguageServer,
@@ -743,6 +746,7 @@ enum ProcessKind {
     Other,
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn process_kind(command: &str) -> ProcessKind {
     let command = command.trim().to_ascii_lowercase();
     if command.contains("language_server") {
@@ -754,6 +758,7 @@ fn process_kind(command: &str) -> ProcessKind {
     }
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn loopback_base(address: &str) -> Option<String> {
     let (host, port) = split_host_port(address)?;
     let port: u16 = port.parse().ok()?;
@@ -766,6 +771,7 @@ fn loopback_base(address: &str) -> Option<String> {
     loopback.then(|| format!("http://127.0.0.1:{port}"))
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn split_host_port(address: &str) -> Option<(&str, &str)> {
     if let Some(rest) = address.strip_prefix('[') {
         let (host, port) = rest.split_once("]:")?;
