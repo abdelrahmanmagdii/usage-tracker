@@ -180,6 +180,8 @@ In every case the credential is **never written or rotated**, never shown in the
 
 Heads-up: several of these usage endpoints are unofficial (they are what the tools themselves use, not documented public APIs), so a vendor change could break a meter until this app is updated. Parsers are defensive and degrade to hiding the section rather than misreporting.
 
+Crash reports are written only to a local file and never uploaded; see [Troubleshooting](#troubleshooting).
+
 Local history is stored in WebView local storage and records only observed percentages and reset timestamps. It is used to flag a **possible** surprise reset when quota jumps substantially before the expected reset time; it never attributes that reset to a person with certainty.
 
 ## Tibo Watch
@@ -212,6 +214,24 @@ Knobs, all optional:
 - `VITE_TIBO_FEED_URL` — point the app at a forked/self-hosted feed (build-time)
 
 Run the scraper yourself with `node tools/tibo-watch/check.mjs` (`--dry-run` to preview).
+
+## Troubleshooting
+
+### UsageBar disappeared from the menu bar
+
+If UsageBar quits unexpectedly, it saves a short crash report on your machine and, on the next launch, posts one notification about it. While a report exists, the menu bar menu (tray menu on Windows) has **Show Crash Report…**, which reveals the file:
+
+| OS | Crash report |
+| --- | --- |
+| macOS | `~/Library/Logs/com.abdelrahmanamer.usagebar/crash-report.log` |
+| Windows | `%LOCALAPPDATA%\com.abdelrahmanamer.usagebar\logs\crash-report.log` |
+| Linux (dev builds) | `~/.local/share/com.abdelrahmanamer.usagebar/logs/crash-report.log` (or under `$XDG_DATA_HOME`) |
+
+Each report has the time (UTC), app version, OS and CPU architecture, the thread, the panic message and source location, and a backtrace (release builds are stripped, so frames are mostly unnamed). The newest five reports are kept. Attach the file to a [GitHub issue](https://github.com/abdelrahmanmagdii/usage-tracker/issues) if you want to report the crash; read it first, it is plain text.
+
+Nothing is sent anywhere: UsageBar has no telemetry. Before a report is written, anything resembling a credential (bearer tokens, `sk-…` keys, JWTs, `token=`/`key=`-style values, long base64 or hex strings) is replaced with `[redacted]`, and your home folder is shortened to `~`. Delete the file at any time; the menu item goes away by the next launch.
+
+Developers can exercise the whole path in a debug build with `USAGEBAR_DEBUG_PANIC=1 npm run tauri dev`, which panics right after the crash hook is installed; launch again without it to see the notification and menu item. Release builds do not contain that switch.
 
 ## Known limitations
 
