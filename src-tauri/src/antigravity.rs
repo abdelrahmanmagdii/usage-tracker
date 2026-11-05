@@ -39,6 +39,9 @@ const FIVE_HOUR_MINS: f64 = 300.0;
 const WEEKLY_MINS: f64 = 10_080.0;
 /// Refresh a minute before expiry so a poll does not race the token out.
 const EXPIRY_SKEW_SECS: f64 = 60.0;
+/// `lsof` and PowerShell normally answer in well under a second, but `lsof`
+/// can hang on an unreachable network mount. A poll must never wait on it.
+const LISTENER_SCAN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct AntigravityManager {
@@ -84,7 +87,7 @@ impl AntigravityManager {
         {
             return false;
         }
-        let Some(newest) = newest_logged_endpoint() else {
+        let Some(newest) = logged_endpoints().await.into_iter().next() else {
             return false;
         };
         self.last_local_endpoint.lock().await.as_ref() != Some(&newest)
@@ -116,8 +119,9 @@ impl AntigravityManager {
         }
 
         let _guard = self.refresh_lock.lock().await;
-        *self.last_local_endpoint.lock().await = newest_logged_endpoint();
-        if let Some(local) = fetch_local_usage().await {
+        let logged = logged_endpoints().await;
+        *self.last_local_endpoint.lock().await = logged.first().cloned();
+        if let Some(local) = fetch_local_usage(&logged).await {
             self.publish(&local.plan, local.payload).await?;
             return Ok(self.snapshot().await);
         }
@@ -202,20 +206,16 @@ impl AntigravityManager {
 
     async fn resolve_access_token(&self, token: &OAuthToken) -> Result<String, String> {
         let now = now_unix_seconds() as f64;
-        {
-            let cache = self.token_cache.lock().await;
-            if let Some(cached) = cache.as_ref() {
-                if cached.expires_at - EXPIRY_SKEW_SECS > now {
-                    return Ok(cached.access_token.clone());
-                }
+        let cached = self.token_cache.lock().await.clone();
+        match pick_access_token(token, cached.as_ref(), now) {
+            TokenChoice::Stored => {
+                self.store_cached_token(token.access_token.clone(), token.expires_at)
+                    .await;
+                Ok(token.access_token.clone())
             }
+            TokenChoice::Cached(access_token) => Ok(access_token),
+            TokenChoice::Expired => Err("Antigravity token is not usable".to_owned()),
         }
-        if !token.is_expired(now) {
-            self.store_cached_token(token.access_token.clone(), token.expires_at)
-                .await;
-            return Ok(token.access_token.clone());
-        }
-        Err("Antigravity token is not usable".to_owned())
     }
 
     async fn cached_usable_token(&self) -> Option<String> {
@@ -300,13 +300,13 @@ struct LocalUsage {
 /// Asks a running Antigravity app, IDE, VS Code extension, or `agy` session
 /// for quota. The app login never leaves the machine: the language server is
 /// already signed in.
-async fn fetch_local_usage() -> Option<LocalUsage> {
+async fn fetch_local_usage(logged: &[LocalEndpoint]) -> Option<LocalUsage> {
     let client = local_http_client();
-    let logged = logged_endpoints();
-    if let Some(usage) = probe_endpoints(&client, &logged).await {
+    if let Some(usage) = probe_endpoints(&client, logged).await {
         return Some(usage);
     }
     let fallback: Vec<_> = local_server_endpoints()
+        .await
         .into_iter()
         .filter(|endpoint| !logged.contains(endpoint))
         .collect();
@@ -322,11 +322,10 @@ async fn probe_endpoints(
             Some(token) => Some(token.clone()),
             None => fetch_local_csrf(client, &endpoint.base).await,
         };
-        let Some(status) =
-            post_local_rpc(client, &endpoint.base, csrf.as_deref(), LOCAL_STATUS_RPC).await
-        else {
-            continue;
-        };
+        // The status call only supplies the plan name. A server that answers
+        // quota but not status still has a meter to show.
+        let status =
+            post_local_rpc(client, &endpoint.base, csrf.as_deref(), LOCAL_STATUS_RPC).await;
         let Some(quota) =
             post_local_rpc(client, &endpoint.base, csrf.as_deref(), LOCAL_QUOTA_RPC).await
         else {
@@ -336,7 +335,9 @@ async fn probe_endpoints(
             continue;
         }
         return Some(LocalUsage {
-            plan: plan_from_status(&status),
+            plan: status
+                .as_ref()
+                .map_or_else(|| plan_from_status(&Value::Null), plan_from_status),
             payload: quota,
         });
     }
@@ -347,15 +348,40 @@ async fn probe_endpoints(
 /// This client is used only with hard-coded loopback hosts discovered from a
 /// local Antigravity process; the normal Cloud Code client still validates TLS.
 /// Only the Windows probe tries HTTPS listeners, so macOS keeps validation on.
+///
+/// Redirects are never followed: any local process can answer on a probed
+/// port, and following its redirect would carry the CSRF header to whatever
+/// host it names, with certificate checks off on Windows. Every request also
+/// goes through `is_loopback_url` first.
 fn local_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_millis(250))
         .timeout(std::time::Duration::from_secs(3))
         .user_agent(concat!("usagebar/", env!("CARGO_PKG_VERSION")))
         .danger_accept_invalid_certs(cfg!(target_os = "windows"))
+        .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .build()
         .expect("local reqwest client construction is infallible with these options")
+}
+
+/// Whether `url` names this machine. The local client relaxes TLS on
+/// Windows, so it must refuse anything else even if a bug builds such a URL.
+fn is_loopback_url(url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -365,6 +391,9 @@ struct LocalEndpoint {
 }
 
 async fn fetch_local_csrf(client: &reqwest::Client, base: &str) -> Option<String> {
+    if !is_loopback_url(base) {
+        return None;
+    }
     let response = client
         .get(base)
         .timeout(std::time::Duration::from_secs(2))
@@ -382,8 +411,12 @@ async fn post_local_rpc(
     csrf: Option<&str>,
     rpc: &str,
 ) -> Option<Value> {
+    let url = format!("{base}/{rpc}");
+    if !is_loopback_url(&url) {
+        return None;
+    }
     let mut request = client
-        .post(format!("{base}/{rpc}"))
+        .post(url)
         .header("Content-Type", "application/json")
         .json(&json!({}))
         .timeout(std::time::Duration::from_secs(3));
@@ -409,31 +442,47 @@ fn plan_from_status(value: &Value) -> String {
         .to_owned()
 }
 
+/// Newest first. Only Windows builds keep launch logs worth reading.
 #[cfg(not(target_os = "windows"))]
-fn logged_endpoints() -> Vec<LocalEndpoint> {
+async fn logged_endpoints() -> Vec<LocalEndpoint> {
     Vec::new()
 }
 
+/// Newest first. Walking the log folders and reading the logs is blocking
+/// file I/O, so it runs off the async worker threads.
 #[cfg(target_os = "windows")]
-fn logged_endpoints() -> Vec<LocalEndpoint> {
-    windows_logged_endpoints()
+async fn logged_endpoints() -> Vec<LocalEndpoint> {
+    tokio::task::spawn_blocking(windows_logged_endpoints)
+        .await
+        .unwrap_or_default()
 }
 
-fn newest_logged_endpoint() -> Option<LocalEndpoint> {
-    logged_endpoints().into_iter().next()
+/// Runs a listener-discovery command without blocking an async worker, and
+/// gives up (killing the child) if it does not answer in time.
+async fn run_scan(mut command: tokio::process::Command) -> Option<std::process::Output> {
+    command
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    tokio::time::timeout(LISTENER_SCAN_TIMEOUT, command.output())
+        .await
+        .ok()?
+        .ok()
 }
 
 #[cfg(not(target_os = "windows"))]
-fn local_server_endpoints() -> Vec<LocalEndpoint> {
-    let Ok(output) = std::process::Command::new("lsof")
-        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"])
-        .output()
-    else {
+async fn local_server_endpoints() -> Vec<LocalEndpoint> {
+    // Use the system binary rather than whatever `lsof` is first on PATH.
+    let lsof = ["/usr/sbin/lsof", "/usr/bin/lsof"]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).is_file())
+        .unwrap_or("lsof");
+    let mut command = tokio::process::Command::new(lsof);
+    command.args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"]);
+    let Some(output) = run_scan(command).await else {
         return Vec::new();
     };
-    let Ok(text) = String::from_utf8(output.stdout) else {
-        return Vec::new();
-    };
+    let text = String::from_utf8_lossy(&output.stdout);
     parse_lsof_bases(&text)
         .into_iter()
         .map(|base| LocalEndpoint { base, csrf: None })
@@ -441,8 +490,8 @@ fn local_server_endpoints() -> Vec<LocalEndpoint> {
 }
 
 #[cfg(target_os = "windows")]
-fn local_server_endpoints() -> Vec<LocalEndpoint> {
-    let ports = windows_listener_ports();
+async fn local_server_endpoints() -> Vec<LocalEndpoint> {
+    let ports = windows_listener_ports().await;
     let mut endpoints = Vec::new();
 
     // Keep compatibility with the standalone app and older IDE builds that
@@ -465,15 +514,15 @@ fn local_server_endpoints() -> Vec<LocalEndpoint> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_listener_ports() -> Vec<u16> {
+async fn windows_listener_ports() -> Vec<u16> {
     // Query listener ownership locally without exposing process arguments.
-    use std::os::windows::process::CommandExt;
-    let output = std::process::Command::new("powershell.exe")
+    let mut command = tokio::process::Command::new("powershell.exe");
+    command
         .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
             "$ids = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(language_server.*|antigravity|agy)$' } | Select-Object -ExpandProperty Id); if ($ids.Count -gt 0) { Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess } | Select-Object -ExpandProperty LocalPort -Unique }"])
-        .creation_flags(0x08000000)
-        .output();
-    let Ok(output) = output else {
+        // CREATE_NO_WINDOW: no console flashes up on every poll.
+        .creation_flags(0x08000000);
+    let Some(output) = run_scan(command).await else {
         return Vec::new();
     };
     if !output.status.success() {
@@ -506,7 +555,7 @@ fn windows_logged_endpoints() -> Vec<LocalEndpoint> {
 
     let mut endpoints = Vec::new();
     for path in logs.into_iter().take(12) {
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Some(text) = read_launch_log(&path) else {
             continue;
         };
         let Some(endpoint) = parse_language_server_log(&text) else {
@@ -517,6 +566,28 @@ fn windows_logged_endpoints() -> Vec<LocalEndpoint> {
         }
     }
     endpoints
+}
+
+/// Launch logs keep growing for as long as the session runs. The launch
+/// arguments sit near the top and a restarted server appends new ones near
+/// the end, so a long log is read as its head and tail only. Bytes that are
+/// not UTF-8 (a path in the ANSI code page) no longer discard the whole log.
+#[cfg(any(target_os = "windows", test))]
+fn read_launch_log(path: &std::path::Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const PART: u64 = 2 * 1024 * 1024;
+    let mut file = std::fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let mut bytes = Vec::new();
+    if length <= 2 * PART {
+        file.read_to_end(&mut bytes).ok()?;
+    } else {
+        (&mut file).take(PART).read_to_end(&mut bytes).ok()?;
+        bytes.push(b'\n');
+        file.seek(SeekFrom::Start(length - PART)).ok()?;
+        file.take(PART).read_to_end(&mut bytes).ok()?;
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -739,6 +810,33 @@ enum LoginAction {
     UseStored(OAuthToken),
 }
 
+#[derive(Debug, PartialEq)]
+enum TokenChoice {
+    Stored,
+    Cached(String),
+    Expired,
+}
+
+/// The stored login is what Antigravity is using now, so a still-valid one
+/// wins. Preferring the cache kept sending a token Antigravity had already
+/// replaced (after a re-login, possibly for another account) until it aged
+/// out. The cache only covers a stored token that has since expired.
+fn pick_access_token(
+    stored: &OAuthToken,
+    cached: Option<&CachedAccessToken>,
+    now: f64,
+) -> TokenChoice {
+    if !stored.is_expired(now) {
+        return TokenChoice::Stored;
+    }
+    match cached {
+        Some(cached) if cached.expires_at - EXPIRY_SKEW_SECS > now => {
+            TokenChoice::Cached(cached.access_token.clone())
+        }
+        _ => TokenChoice::Expired,
+    }
+}
+
 /// No stored login hides the meter. An unreadable store keeps the last
 /// reading, and prefers a still-valid cached token over hiding.
 fn login_action(
@@ -825,11 +923,8 @@ async fn load_from_file() -> CredentialRead {
                 .to_owned(),
         );
     };
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => match parse_oauth_bytes(&bytes) {
-            Some(token) => CredentialRead::Found(token),
-            None => CredentialRead::Absent,
-        },
+    match crate::platform::read_capped(&path, crate::platform::CREDENTIAL_FILE_LIMIT).await {
+        Ok(bytes) => classify_token_file(&bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => CredentialRead::Absent,
         Err(error) => {
             CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display()))
@@ -872,6 +967,22 @@ fn freshest(first: OAuthToken, second: OAuthToken, now: f64) -> OAuthToken {
     }
 }
 
+/// The CLI rewrites its token file when it refreshes. Bytes that do not
+/// decode at all are most likely that rewrite in progress, a passing failure
+/// that keeps the last meter; a decoded payload without a token is no login.
+fn classify_token_file(bytes: &[u8]) -> CredentialRead {
+    let Some(payload) = decode_keyring_payload(bytes) else {
+        return CredentialRead::Unavailable(
+            "The Antigravity token file could not be parsed".to_owned(),
+        );
+    };
+    match parse_oauth_value(&payload) {
+        Some(token) => CredentialRead::Found(token),
+        None => CredentialRead::Absent,
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
 fn parse_oauth_bytes(bytes: &[u8]) -> Option<OAuthToken> {
     let payload = decode_keyring_payload(bytes)?;
     parse_oauth_value(&payload)
@@ -970,7 +1081,9 @@ fn normalize_usage(raw: &Value) -> Option<NormalizedUsage> {
             let Some(period) = bucket_period(bucket) else {
                 continue;
             };
-            let Some(remaining) = remaining_fraction(bucket) else {
+            let Some(remaining) =
+                remaining_fraction(bucket).or_else(|| spent_bucket(bucket).then_some(0.0))
+            else {
                 continue;
             };
             let (id, limit_name, window_label, duration, kind) = slot_for(&group_meta, period);
@@ -978,13 +1091,7 @@ fn normalize_usage(raw: &Value) -> Option<NormalizedUsage> {
                 continue;
             }
             let used = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
-            let resets_at = parse_reset_timestamp(
-                bucket
-                    .get("resetTime")
-                    .or_else(|| bucket.get("reset_time"))
-                    .or_else(|| bucket.get("resetAt"))
-                    .or_else(|| bucket.get("reset_at")),
-            );
+            let resets_at = bucket_reset(bucket);
             entries.push(limit_entry(
                 &id,
                 &window_label,
@@ -1136,6 +1243,26 @@ fn remaining_fraction(bucket: &Value) -> Option<f64> {
         return finite_f64(remaining.get("value")).filter(valid_fraction);
     }
     None
+}
+
+/// Google's JSON mapping leaves out fields equal to zero, so a spent bucket
+/// can arrive with its reset time and no remaining fraction at all. A bucket
+/// that resets is a real quota; skipping it hid the window at 100%.
+fn spent_bucket(bucket: &Value) -> bool {
+    ["remainingFraction", "remaining_fraction", "remaining"]
+        .iter()
+        .all(|key| bucket.get(*key).is_none())
+        && bucket_reset(bucket).is_some()
+}
+
+fn bucket_reset(bucket: &Value) -> Option<f64> {
+    parse_reset_timestamp(
+        bucket
+            .get("resetTime")
+            .or_else(|| bucket.get("reset_time"))
+            .or_else(|| bucket.get("resetAt"))
+            .or_else(|| bucket.get("reset_at")),
+    )
 }
 
 fn valid_fraction(value: &f64) -> bool {
@@ -1542,6 +1669,266 @@ server.go:569] Language server listening on random port at 53573 for HTTP
             classify_keychain_status(-25293),
             CredentialRead::Unavailable(_)
         ));
+    }
+
+    #[test]
+    fn the_local_client_only_talks_to_this_machine() {
+        for url in [
+            "http://127.0.0.1:53573/exa.language_server_pb.LanguageServerService/GetUserStatus",
+            "https://127.0.0.1:53572",
+            "http://localhost:1234",
+            "http://[::1]:1234/rpc",
+            "http://127.8.9.10:80",
+        ] {
+            assert!(is_loopback_url(url), "{url} is loopback");
+        }
+        for url in [
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "http://192.168.1.8:53112",
+            "http://127.0.0.1.evil.example:80",
+            "http://localhost.evil.example",
+            "http://0.0.0.0:1234",
+            "file:///etc/passwd",
+            "not a url",
+        ] {
+            assert!(!is_loopback_url(url), "{url} is not loopback");
+        }
+    }
+
+    /// Accept one connection, record its request head, and answer `response`.
+    fn serve_once(
+        listener: std::net::TcpListener,
+        response: String,
+    ) -> std::thread::JoinHandle<String> {
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .expect("timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => request.extend_from_slice(&buffer[..read]),
+                }
+            }
+            stream.write_all(response.as_bytes()).expect("respond");
+            String::from_utf8_lossy(&request).into_owned()
+        })
+    }
+
+    #[test]
+    fn a_local_port_cannot_redirect_the_csrf_token_elsewhere() {
+        let target = std::net::TcpListener::bind("127.0.0.1:0").expect("bind target");
+        target.set_nonblocking(true).expect("nonblocking");
+        let target_port = target.local_addr().expect("addr").port();
+        let probed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probed");
+        let base = format!(
+            "http://127.0.0.1:{}",
+            probed.local_addr().expect("addr").port()
+        );
+        let server = serve_once(
+            probed,
+            format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{target_port}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ),
+        );
+        let answer = tauri::async_runtime::block_on(async {
+            post_local_rpc(
+                &local_http_client(),
+                &base,
+                Some("secret-csrf"),
+                LOCAL_QUOTA_RPC,
+            )
+            .await
+        });
+        let request = server.join().expect("server");
+        assert!(request.contains("x-codeium-csrf-token: secret-csrf"));
+        assert!(answer.is_none());
+        // The redirect target never heard from us.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(target.accept().is_err());
+    }
+
+    #[test]
+    fn reads_quota_from_a_local_server_even_without_a_status_answer() {
+        let quota = r#"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.75}]}]}"#;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!(
+            "http://127.0.0.1:{}",
+            listener.local_addr().expect("addr").port()
+        );
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let mut paths = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .expect("timeout");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut buffer) {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+                    }
+                }
+                let head = String::from_utf8_lossy(&request).into_owned();
+                let response = if head.contains("GetUserStatus") {
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+                } else {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{quota}",
+                        quota.len()
+                    )
+                };
+                stream.write_all(response.as_bytes()).expect("respond");
+                paths.push(head.lines().next().unwrap_or_default().to_owned());
+            }
+            paths
+        });
+        let endpoint = LocalEndpoint {
+            base,
+            csrf: Some("csrf".into()),
+        };
+        let usage = tauri::async_runtime::block_on(async {
+            probe_endpoints(&local_http_client(), &[endpoint]).await
+        })
+        .expect("local usage");
+        server.join().expect("server");
+        assert_eq!(usage.plan, "Antigravity");
+        assert!(normalize_usage(&usage.payload).is_some());
+    }
+
+    #[test]
+    fn a_long_launch_log_is_read_as_head_and_tail() {
+        let path = std::env::temp_dir().join(format!(
+            "usagebar-antigravity-long-log-{}.log",
+            std::process::id()
+        ));
+        let mut text = String::from("Args: --csrf_token first-token\n");
+        text.push_str("Language server listening on random port at 50001 for HTTP\n");
+        let filler = "x".repeat(1023) + "\n";
+        for _ in 0..(5 * 1024) {
+            text.push_str(&filler);
+        }
+        text.push_str("Args: --csrf_token restarted-token\n");
+        text.push_str("Language server listening on random port at 50002 for HTTP\n");
+        let mut bytes = text.into_bytes();
+        // A path in the ANSI code page is not UTF-8 and must not drop the log.
+        bytes.extend_from_slice(b"C:\\Users\\J\xf6rg\n");
+        std::fs::write(&path, &bytes).expect("write");
+
+        let read = read_launch_log(&path).expect("log");
+        assert!(read.len() < bytes.len());
+        assert_eq!(
+            parse_language_server_log(&read),
+            Some(LocalEndpoint {
+                base: "http://127.0.0.1:50002".to_owned(),
+                csrf: Some("restarted-token".to_owned()),
+            })
+        );
+        std::fs::write(
+            &path,
+            b"Args: --csrf_token t\nServer at http://127.0.0.1:50003 is READY\n\xff",
+        )
+        .expect("write");
+        assert_eq!(
+            parse_language_server_log(&read_launch_log(&path).expect("short log")),
+            Some(LocalEndpoint {
+                base: "http://127.0.0.1:50003".to_owned(),
+                csrf: Some("t".to_owned()),
+            })
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_spent_bucket_without_a_fraction_is_full() {
+        let payload = json!({
+            "groups": [{
+                "displayName": "Gemini Models",
+                "buckets": [
+                    { "bucketId": "gemini-weekly", "window": "weekly", "resetTime": "2026-08-29T12:08:59Z" },
+                    { "bucketId": "gemini-5h", "window": "5h" }
+                ]
+            }]
+        });
+        let normalized = normalize_usage(&payload).expect("windows");
+        let by_id = normalized.rate_limits["rateLimitsByLimitId"]
+            .as_object()
+            .expect("map");
+        assert_eq!(by_id.len(), 1);
+        assert_eq!(
+            by_id["gemini-weekly"].pointer("/secondary/usedPercent"),
+            Some(&json!(100.0))
+        );
+        assert_eq!(
+            by_id["gemini-weekly"].get("rateLimitReachedType"),
+            Some(&json!("limit_reached"))
+        );
+    }
+
+    #[test]
+    fn a_half_written_token_file_keeps_the_last_meter() {
+        for partial in [
+            &b""[..],
+            b"{\"token\":{\"access_tok",
+            b"go-keyring-base64:eyJ0b2tl",
+        ] {
+            assert!(matches!(
+                classify_token_file(partial),
+                CredentialRead::Unavailable(_)
+            ));
+        }
+        assert!(matches!(
+            classify_token_file(br#"{"token":{"refresh_token":"r"}}"#),
+            CredentialRead::Absent
+        ));
+        assert!(matches!(
+            classify_token_file(br#"{"token":{"access_token":"ya29"}}"#),
+            CredentialRead::Found(_)
+        ));
+        // With the Keychain empty, a half-written file is still not a sign-out.
+        assert!(matches!(
+            combine_reads(
+                CredentialRead::Absent,
+                classify_token_file(b"{"),
+                1_800_000_000.0
+            ),
+            CredentialRead::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn a_valid_stored_token_beats_the_cache() {
+        let now = 1_800_000_000.0;
+        let cached = CachedAccessToken {
+            access_token: "old-session".into(),
+            expires_at: now + 1_800.0,
+        };
+        let fresh = OAuthToken {
+            access_token: "new-session".into(),
+            refresh_token: None,
+            expires_at: Some(now + 3_600.0),
+        };
+        assert_eq!(
+            pick_access_token(&fresh, Some(&cached), now),
+            TokenChoice::Stored
+        );
+        let expired = OAuthToken {
+            access_token: "stale".into(),
+            refresh_token: None,
+            expires_at: Some(now - 10.0),
+        };
+        assert_eq!(
+            pick_access_token(&expired, Some(&cached), now),
+            TokenChoice::Cached("old-session".into())
+        );
+        assert_eq!(pick_access_token(&expired, None, now), TokenChoice::Expired);
     }
 
     fn stored_token() -> OAuthToken {
