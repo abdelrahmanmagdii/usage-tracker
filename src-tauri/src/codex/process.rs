@@ -19,7 +19,7 @@ use tokio::{
     time::{timeout, Duration},
 };
 
-use super::protocol::{route_line, RoutedMessage};
+use super::protocol::{route_line, unsupported_request_reply, RoutedMessage};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -319,6 +319,17 @@ impl CodexManager {
                             let refresh_manager = manager.clone();
                             tauri::async_runtime::spawn(async move {
                                 let _ = refresh_manager.refresh_data().await;
+                            });
+                        }
+                        Ok(RoutedMessage::Request { id, method }) => {
+                            // Answered off the reader: a write that waits on a
+                            // full stdin pipe must not stop this loop from
+                            // draining the stdout the server is blocked on.
+                            let reply_manager = manager.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = reply_manager
+                                    .write_json(unsupported_request_reply(id, &method))
+                                    .await;
                             });
                         }
                         Ok(RoutedMessage::Notification { .. } | RoutedMessage::Unexpected) => {}
