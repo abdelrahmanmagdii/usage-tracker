@@ -161,22 +161,36 @@ impl CodexManager {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = command.spawn().map_err(|error| error.to_string())?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or("Codex App Server stdin was unavailable")?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or("Codex App Server stdout was unavailable")?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or("Codex App Server stderr was unavailable")?;
-        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        *self.stdin.lock().await = Some(stdin);
-        *self.child.lock().await = Some(child);
+        // A spawn failure used to return straight out of here, leaving the
+        // state on "Starting" with no diagnostic until the next attempt.
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let message = format!("Codex App Server could not be started: {error}");
+                self.set_connection(ConnectionState::Error, Some(message.clone()))
+                    .await;
+                return Err(message);
+            }
+        };
+        let (Some(stdin), Some(stdout), Some(stderr)) =
+            (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        else {
+            // Dropping the child kills it (kill_on_drop).
+            let message = "Codex App Server pipes were unavailable".to_owned();
+            self.set_connection(ConnectionState::Error, Some(message.clone()))
+                .await;
+            return Err(message);
+        };
+        // The generation, the pipe and the child change together under the
+        // stdin lock; `stop_child` and `handle_disconnect` take the same lock,
+        // so neither can act on a half-installed process.
+        let generation = {
+            let mut slot = self.stdin.lock().await;
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            *slot = Some(stdin);
+            *self.child.lock().await = Some(child);
+            generation
+        };
 
         self.spawn_stdout_reader(stdout, generation);
         self.spawn_stderr_reader(stderr);
@@ -197,7 +211,13 @@ impl CodexManager {
                 .await;
             return Err(error);
         }
-        self.notify("initialized", None).await?;
+        // Like a failed initialize: without this, the half-started process
+        // stayed up and the state stayed on "Starting".
+        if let Err(error) = self.notify("initialized", None).await {
+            self.fail_start(format!("Codex App Server initialization failed: {error}"))
+                .await;
+            return Err(error);
+        }
 
         match self.refresh_data().await {
             Ok(state) => Ok(state),
@@ -392,18 +412,30 @@ impl CodexManager {
     }
 
     async fn handle_disconnect(&self, generation: u64, message: &str) {
+        // Everything happens under the stdin lock, which `start` holds while
+        // installing a new process. Checking the generation first and taking
+        // the lock afterwards left a gap in which a replacement could start,
+        // only to have its pipe cleared, its initialize request failed and
+        // its state overwritten with "Disconnected" by this stale reader.
+        let mut stdin = self.stdin.lock().await;
         // A reader for a process that `stop_child` already replaced: its
         // requests were failed there, and the pipes now belong to a newer
         // process.
         if generation != self.generation.load(Ordering::SeqCst) {
             return;
         }
-        *self.stdin.lock().await = None;
+        *stdin = None;
         self.fail_pending(message).await;
-        if !self.shutting_down.load(Ordering::Relaxed) {
-            self.set_connection(ConnectionState::Disconnected, Some(message.to_owned()))
-                .await;
+        if self.shutting_down.load(Ordering::Relaxed) {
+            return;
         }
+        {
+            let mut state = self.state.write().await;
+            state.connection = ConnectionState::Disconnected;
+            state.diagnostic = Some(message.to_owned());
+        }
+        drop(stdin);
+        self.emit_state().await;
     }
 
     async fn fail_start(&self, message: String) {
@@ -441,11 +473,18 @@ impl CodexManager {
 
     async fn stop_child(&self) {
         // Retire the current generation first, so its reader ignores the
-        // pipe closing below instead of racing the next `start`.
-        self.generation.fetch_add(1, Ordering::SeqCst);
-        *self.stdin.lock().await = None;
-        self.fail_pending("Codex App Server was restarted").await;
-        if let Some(mut child) = self.child.lock().await.take() {
+        // pipe closing below instead of racing the next `start`. The child is
+        // taken under the same stdin lock as the generation bump, so a
+        // `start` that slips in afterwards keeps its own process instead of
+        // having it killed here.
+        let child = {
+            let mut stdin = self.stdin.lock().await;
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            *stdin = None;
+            self.fail_pending("Codex App Server was restarted").await;
+            self.child.lock().await.take()
+        };
+        if let Some(mut child) = child {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
