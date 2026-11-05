@@ -11,6 +11,12 @@ on:
 permissions:
   contents: write
 
+# Runs every five minutes and can overlap when GitHub delays one. Queue them
+# instead, so two runs never race to push the same feed file.
+concurrency:
+  group: tibo-watch
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -33,5 +39,7 @@ jobs:
             echo "No new resets recorded."
           else
             git commit -m "tibo-watch: record new reset event"
+            # main may have moved since checkout (a merge, another run).
+            git pull --rebase origin "${GITHUB_REF_NAME}"
             git push
           fi
