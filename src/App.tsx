@@ -92,7 +92,9 @@ function Popover() {
   }, []);
 
   // Recording scripts drive the real window over `usagebar://demo`. The
-  // listener is inert unless the process was started in demo mode.
+  // listener is always registered, but only the backend's demo control
+  // (started by --demo / USAGEBAR_DEMO=1) emits the event, and the browser
+  // simulator (docs/SIMULATION.md) drives Settings and scrolling through it.
   useEffect(() => {
     let active = true;
     void demoMode().then((on) => {
