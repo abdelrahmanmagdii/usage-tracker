@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ProviderMeter } from "../hooks/useProviderMeter";
 import { QuotaSection } from "./QuotaSection";
 import { Freshness } from "./Freshness";
+import { useNow } from "../hooks/useNow";
 import { isRecord } from "../lib/rateLimits";
 import { describeAge } from "../lib/time";
 import type { CodexBackendState } from "../types/codex";
@@ -48,7 +49,7 @@ export function ProviderSection({
   label,
   icon,
   meter,
-  now,
+  now: pinnedNow,
   signedOutHint,
   dense = false,
 }: {
@@ -56,10 +57,13 @@ export function ProviderSection({
   label: string;
   icon: ReactNode;
   meter: ProviderMeter;
-  now: number;
+  /** Pins the clock (tests). Live sections follow the shared NowProvider. */
+  now?: number;
   signedOutHint: string;
   dense?: boolean;
 }) {
+  const ticking = useNow();
+  const now = pinnedNow ?? ticking;
   const { state, buckets, refresh } = meter;
   if (state.connection === "cli_not_found" || state.connection === "starting") return null;
 
