@@ -53,7 +53,7 @@
   /* Three coats of the glass token: near-opaque, so text under the tip (the
      dense row's heading) cannot read through it, in any theme. */
   background: linear-gradient(var(--glass-strong), var(--glass-strong)), linear-gradient(var(--glass-strong), var(--glass-strong)), var(--glass-strong);
-  box-shadow: 0 6px 16px rgba(45, 33, 80, .14);
+  box-shadow: var(--popover-shadow);
   backdrop-filter: blur(24px) saturate(1.4);
   pointer-events: none;
   white-space: nowrap;
@@ -103,4 +103,5 @@
   .quota-chart-line, .quota-chart-projection { stroke: CanvasText; }
   .quota-chart-dot, .quota-chart-cursor-value { fill: CanvasText; }
   .quota-chart-area { fill: CanvasText; opacity: .15; }
+  .quota-chart-runout { fill: Canvas; stroke: CanvasText; }
 }
