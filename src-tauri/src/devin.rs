@@ -212,10 +212,13 @@ async fn load_cli_auth() -> CredentialRead {
                 .to_owned(),
         );
     };
-    match tokio::fs::read_to_string(&path).await {
-        Ok(contents) => match parse_cli_auth(&contents) {
-            Some(auth) => CredentialRead::Found(auth),
-            None => CredentialRead::Absent,
+    match crate::platform::read_capped(&path, crate::platform::CREDENTIAL_FILE_LIMIT).await {
+        Ok(bytes) => match std::str::from_utf8(&bytes) {
+            Ok(contents) => classify_credentials(contents),
+            Err(_) => CredentialRead::Unavailable(format!(
+                "Could not read {}: it is not UTF-8 text",
+                path.display()
+            )),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => CredentialRead::Absent,
         Err(error) => {
@@ -232,6 +235,23 @@ fn credentials_path() -> Option<std::path::PathBuf> {
     }
     let home = crate::platform::home_dir()?;
     Some(home.join(".local/share/devin/credentials.toml"))
+}
+
+/// No key hides the meter. A key line whose value was cut off is a file the
+/// CLI is still writing, so it is a passing failure that keeps the last meter.
+fn classify_credentials(raw: &str) -> CredentialRead {
+    if let Some(auth) = parse_cli_auth(raw) {
+        return CredentialRead::Found(auth);
+    }
+    if ["windsurf_api_key", "api_key"]
+        .iter()
+        .any(|key| toml_value_truncated(raw, key))
+    {
+        return CredentialRead::Unavailable(
+            "The Devin CLI credentials file could not be parsed".to_owned(),
+        );
+    }
+    CredentialRead::Absent
 }
 
 fn parse_cli_auth(raw: &str) -> Option<CliAuth> {
@@ -261,20 +281,37 @@ fn clean_api_server_url(value: String) -> Option<String> {
 
 /// Pulls a top-level TOML string without taking a toml crate dependency.
 fn read_toml_string(text: &str, key: &str) -> Option<String> {
-    for raw_line in text.lines() {
+    parse_toml_string_value(raw_toml_value(text, key)?)
+}
+
+/// The text after `key =` on the first line that assigns `key`.
+fn raw_toml_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    text.lines().find_map(|raw_line| {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
-            continue;
+            return None;
         }
-        let Some((candidate, value)) = line.split_once('=') else {
-            continue;
-        };
-        if candidate.trim() != key {
-            continue;
-        }
-        return parse_toml_string_value(value.trim());
+        let (candidate, value) = line.split_once('=')?;
+        (candidate.trim() == key).then(|| value.trim())
+    })
+}
+
+/// Whether `key` is assigned but its value stops short: nothing after the
+/// `=`, or a string whose closing quote never arrives.
+fn toml_value_truncated(text: &str, key: &str) -> bool {
+    let Some(value) = raw_toml_value(text, key) else {
+        return false;
+    };
+    if value.is_empty() {
+        return true;
     }
-    None
+    if value.starts_with('"') {
+        return basic_string_end(value).is_none();
+    }
+    if let Some(rest) = value.strip_prefix('\'') {
+        return !rest.contains('\'');
+    }
+    false
 }
 
 fn parse_toml_string_value(value: &str) -> Option<String> {
@@ -293,25 +330,25 @@ fn parse_toml_string_value(value: &str) -> Option<String> {
     non_empty(value)
 }
 
-fn parse_basic_toml_string(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
+/// Index of the quote that closes a basic string opening at `value[0]`.
+fn basic_string_end(value: &str) -> Option<usize> {
     let mut escaped = false;
-    let mut closing = None;
-    for (index, byte) in bytes.iter().enumerate().skip(1) {
+    for (index, byte) in value.bytes().enumerate().skip(1) {
         if escaped {
             escaped = false;
             continue;
         }
         match byte {
             b'\\' => escaped = true,
-            b'"' => {
-                closing = Some(index);
-                break;
-            }
+            b'"' => return Some(index),
             _ => {}
         }
     }
-    let closing = closing?;
+    None
+}
+
+fn parse_basic_toml_string(value: &str) -> Option<String> {
+    let closing = basic_string_end(value)?;
     if !valid_value_tail(&value[closing + 1..]) {
         return None;
     }
@@ -340,20 +377,6 @@ fn normalize_usage(raw: &Value) -> Option<NormalizedUsage> {
     let hide_daily =
         bool_value(field_in(plan_info, &["hideDailyQuota", "hide_daily_quota"])).unwrap_or(false);
 
-    let daily_remaining = finite_f64(field(
-        plan_status,
-        &[
-            "dailyQuotaRemainingPercent",
-            "daily_quota_remaining_percent",
-        ],
-    ));
-    let weekly_remaining = finite_f64(field(
-        plan_status,
-        &[
-            "weeklyQuotaRemainingPercent",
-            "weekly_quota_remaining_percent",
-        ],
-    ));
     let daily_reset = parse_unix(field(
         plan_status,
         &["dailyQuotaResetAtUnix", "daily_quota_reset_at_unix"],
@@ -362,6 +385,26 @@ fn normalize_usage(raw: &Value) -> Option<NormalizedUsage> {
         plan_status,
         &["weeklyQuotaResetAtUnix", "weekly_quota_reset_at_unix"],
     ));
+    let daily_remaining = remaining_percent(
+        field(
+            plan_status,
+            &[
+                "dailyQuotaRemainingPercent",
+                "daily_quota_remaining_percent",
+            ],
+        ),
+        daily_reset,
+    );
+    let weekly_remaining = remaining_percent(
+        field(
+            plan_status,
+            &[
+                "weeklyQuotaRemainingPercent",
+                "weekly_quota_remaining_percent",
+            ],
+        ),
+        weekly_reset,
+    );
 
     let mut entries = Vec::new();
     if !hide_daily {
@@ -465,8 +508,19 @@ fn bool_value(value: Option<&Value>) -> Option<bool> {
     }
 }
 
+/// `GetUserStatus` is a Connect endpoint, and protobuf JSON leaves out any
+/// field equal to zero. A spent window therefore arrives with its reset time
+/// but no remaining percent; reading that as "no window" hid the meter at the
+/// moment it mattered most. A window that has a reset time is a real window,
+/// so its missing remainder is 0%.
+fn remaining_percent(value: Option<&Value>, resets_at: Option<f64>) -> Option<f64> {
+    finite_f64(value)
+        .filter(|number| number.is_finite())
+        .or(resets_at.map(|_| 0.0))
+}
+
 fn parse_unix(value: Option<&Value>) -> Option<f64> {
-    let number = finite_f64(value)?;
+    let number = finite_f64(value).filter(|number| number.is_finite() && *number > 0.0)?;
     if number > 10_000_000_000.0 {
         Some(number / 1_000.0)
     } else {
@@ -580,6 +634,78 @@ mod tests {
             Some(&json!(1_773_763_200.0))
         );
         assert_eq!(plan_name(&payload).as_deref(), Some("Max"));
+    }
+
+    #[test]
+    fn a_spent_window_omitted_by_protobuf_json_reads_as_full() {
+        // Protobuf JSON drops `dailyQuotaRemainingPercent: 0`; int64 resets
+        // arrive as strings.
+        let payload = json!({
+            "userStatus": {
+                "planStatus": {
+                    "planInfo": { "planName": "Pro" },
+                    "weeklyQuotaRemainingPercent": 40,
+                    "dailyQuotaResetAtUnix": "1773331200",
+                    "weeklyQuotaResetAtUnix": "1773763200"
+                }
+            }
+        });
+        let normalized = normalize_usage(&payload).expect("windows");
+        let daily = &normalized.rate_limits["rateLimitsByLimitId"]["daily"];
+        assert_eq!(daily.pointer("/primary/usedPercent"), Some(&json!(100.0)));
+        assert_eq!(
+            daily.pointer("/primary/resetsAt"),
+            Some(&json!(1_773_331_200.0))
+        );
+        assert_eq!(
+            daily.get("rateLimitReachedType"),
+            Some(&json!("limit_reached"))
+        );
+        assert_eq!(
+            normalized
+                .rate_limits
+                .pointer("/rateLimitsByLimitId/weekly/secondary/usedPercent"),
+            Some(&json!(60.0))
+        );
+    }
+
+    #[test]
+    fn a_window_with_neither_percent_nor_reset_is_not_invented() {
+        let payload = json!({
+            "userStatus": { "planStatus": { "weeklyQuotaRemainingPercent": 70 } }
+        });
+        let normalized = normalize_usage(&payload).expect("windows");
+        let by_id = normalized.rate_limits["rateLimitsByLimitId"]
+            .as_object()
+            .expect("map");
+        assert_eq!(by_id.len(), 1);
+        assert!(by_id.contains_key("weekly"));
+    }
+
+    #[test]
+    fn a_cut_off_credentials_file_is_a_passing_failure() {
+        for partial in [
+            "windsurf_api_key = \"cog_abc",
+            "windsurf_api_key = ",
+            "api_key = 'cog_abc",
+        ] {
+            assert!(
+                matches!(
+                    classify_credentials(partial),
+                    CredentialRead::Unavailable(_)
+                ),
+                "{partial:?} must keep the last meter"
+            );
+        }
+        assert!(matches!(classify_credentials(""), CredentialRead::Absent));
+        assert!(matches!(
+            classify_credentials("windsurf_api_key = \"\"\n"),
+            CredentialRead::Absent
+        ));
+        assert!(matches!(
+            classify_credentials("windsurf_api_key = \"cog\" # signed in\n"),
+            CredentialRead::Found(_)
+        ));
     }
 
     #[test]
