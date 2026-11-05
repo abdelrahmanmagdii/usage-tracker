@@ -96,6 +96,13 @@ impl Default for ProviderPref {
 pub struct AppPrefs {
     /// Local notifications at 80%/95% used and when a window resets.
     pub usage_alerts: bool,
+    /// "Runs out before it resets at this pace" warnings. Nested under
+    /// `usage_alerts`: they only fire while that master switch is on too.
+    /// On by default, since it is the one usage alert that arrives while
+    /// there is still time to slow down; written only when turned off, so
+    /// files from before this field existed load with it on.
+    #[serde(default = "bool_true", skip_serializing_if = "is_true")]
+    pub pace_alerts: bool,
     /// Notifications for resets announced by Tibo (independent of usage alerts).
     #[serde(default = "bool_true")]
     pub reset_alerts: bool,
@@ -124,6 +131,7 @@ impl Default for AppPrefs {
     fn default() -> Self {
         Self {
             usage_alerts: true,
+            pace_alerts: true,
             reset_alerts: true,
             dense_layout: false,
             combined_tray: true,
@@ -276,6 +284,7 @@ mod tests {
         let prefs = AppPrefs::default();
         assert!(prefs.combined_tray);
         assert!(prefs.usage_alerts);
+        assert!(prefs.pace_alerts);
         assert!(prefs.reset_alerts);
         assert!(!prefs.dense_layout);
         assert!(prefs.is_visible(PROVIDER_CODEX));
@@ -348,6 +357,26 @@ mod tests {
         // An old prefs file without the key still parses.
         let prefs: AppPrefs = serde_json::from_str(r#"{"usageAlerts":true}"#).unwrap();
         assert_eq!(prefs.usage_alert_thresholds, vec![80, 95]);
+    }
+
+    #[test]
+    fn pace_alerts_default_on_and_are_written_only_when_off() {
+        // A file from before the key existed (and every older shape) keeps
+        // pace alerts on.
+        let prefs: AppPrefs = serde_json::from_str(r#"{"usageAlerts":true}"#).unwrap();
+        assert!(prefs.pace_alerts);
+        let encoded = serde_json::to_string(&AppPrefs::default()).unwrap();
+        assert!(!encoded.contains("paceAlerts"));
+
+        let off = AppPrefs {
+            pace_alerts: false,
+            ..AppPrefs::default()
+        };
+        let encoded = serde_json::to_string(&off).unwrap();
+        assert!(encoded.contains(r#""paceAlerts":false"#));
+        let reloaded = parse_prefs(&encoded).expect("prefs");
+        assert!(!reloaded.pace_alerts);
+        assert_eq!(reloaded, off);
     }
 
     #[test]

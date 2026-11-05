@@ -173,6 +173,15 @@ pub fn set_usage_alerts(app: AppHandle, enabled: bool) {
     crate::tray::apply_preference_change(&app);
 }
 
+/// "Runs out before it resets at this pace" notifications. They also need
+/// `usage_alerts` on; this switch only narrows what that one allows.
+#[tauri::command]
+pub fn set_pace_alerts(app: AppHandle, enabled: bool) {
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.pace_alerts = enabled);
+    crate::tray::apply_preference_change(&app);
+}
+
 /// Only post links from the reset feed may be handed to `open`, so the
 /// webview cannot launch arbitrary URLs or files.
 fn is_openable_post_url(url: &str) -> bool {

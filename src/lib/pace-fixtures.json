@@ -1,0 +1,134 @@
+{
+  "comment": "Shared by src/lib/paceParity.test.ts (projectedRunOut) and src-tauri/src/alerts.rs (projected_run_out): both must give the same run-out for the same samples. Times: nowMs is 2026-10-03T12:00:00Z; resetsAt is unix seconds; expectedRunOutMs is unix ms or null.",
+  "nowMs": 1791028800000,
+  "cases": [
+    {
+      "name": "20% in the last hour with 40% left runs out in 2h, before a 4h reset",
+      "samples": [
+        { "minsAgo": 60, "used": 40, "resetsAt": 1791043200 },
+        { "minsAgo": 30, "used": 50, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 60, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": 1791036000000
+    },
+    {
+      "name": "the window renews before it runs out",
+      "samples": [
+        { "minsAgo": 60, "used": 40, "resetsAt": 1791043200 },
+        { "minsAgo": 0, "used": 45, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 45, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": null
+    },
+    {
+      "name": "a sample from the previous window is ignored",
+      "samples": [
+        { "minsAgo": 60, "used": 10, "resetsAt": 1791025200 },
+        { "minsAgo": 1, "used": 50, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 60, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": null
+    },
+    {
+      "name": "less than ten minutes of samples is too short",
+      "samples": [
+        { "minsAgo": 5, "used": 40, "resetsAt": 1791043200 },
+        { "minsAgo": 1, "used": 50, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 60, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": null
+    },
+    {
+      "name": "a reset time that wobbles by seconds is the same window",
+      "samples": [
+        { "minsAgo": 60, "used": 40, "resetsAt": 1791043199 },
+        { "minsAgo": 30, "used": 50, "resetsAt": 1791043202 }
+      ],
+      "bucket": { "usedPercent": 60, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": 1791036000000
+    },
+    {
+      "name": "a reset time 91 seconds off is a different window",
+      "samples": [
+        { "minsAgo": 60, "used": 40, "resetsAt": 1791043291 },
+        { "minsAgo": 30, "used": 50, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 60, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": null
+    },
+    {
+      "name": "samples older than the three-hour lookback do not count",
+      "samples": [
+        { "minsAgo": 181, "used": 10, "resetsAt": 1791043200 },
+        { "minsAgo": 30, "used": 40, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 50, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": null
+    },
+    {
+      "name": "the oldest sample inside the lookback anchors the burn rate",
+      "samples": [
+        { "minsAgo": 181, "used": 10, "resetsAt": 1791043200 },
+        { "minsAgo": 60, "used": 30, "resetsAt": 1791043200 },
+        { "minsAgo": 30, "used": 40, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 50, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": 1791037800000
+    },
+    {
+      "name": "two hours at 10%/h with 40% left runs out in 4h, before a 6h reset",
+      "samples": [
+        { "minsAgo": 240, "used": 10, "resetsAt": 1791050400 },
+        { "minsAgo": 120, "used": 40, "resetsAt": 1791050400 },
+        { "minsAgo": 60, "used": 50, "resetsAt": 1791050400 }
+      ],
+      "bucket": { "usedPercent": 60, "resetsAt": 1791050400, "reached": false },
+      "expectedRunOutMs": 1791043200000
+    },
+    {
+      "name": "fractional percents",
+      "samples": [
+        { "minsAgo": 45, "used": 12.5, "resetsAt": 1791046800 },
+        { "minsAgo": 20, "used": 20, "resetsAt": 1791046800 }
+      ],
+      "bucket": { "usedPercent": 27.5, "resetsAt": 1791046800, "reached": false },
+      "expectedRunOutMs": 1791041850000
+    },
+    {
+      "name": "flat usage has no pace",
+      "samples": [
+        { "minsAgo": 60, "used": 50, "resetsAt": 1791043200 },
+        { "minsAgo": 30, "used": 50, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 50, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": null
+    },
+    {
+      "name": "a reached limit has nothing left to project",
+      "samples": [
+        { "minsAgo": 60, "used": 40, "resetsAt": 1791043200 },
+        { "minsAgo": 30, "used": 50, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 60, "resetsAt": 1791043200, "reached": true },
+      "expectedRunOutMs": null
+    },
+    {
+      "name": "a full window has nothing left to project",
+      "samples": [
+        { "minsAgo": 60, "used": 40, "resetsAt": 1791043200 },
+        { "minsAgo": 30, "used": 50, "resetsAt": 1791043200 }
+      ],
+      "bucket": { "usedPercent": 100, "resetsAt": 1791043200, "reached": false },
+      "expectedRunOutMs": null
+    },
+    {
+      "name": "no reset time means no run-out",
+      "samples": [
+        { "minsAgo": 60, "used": 40, "resetsAt": null },
+        { "minsAgo": 30, "used": 50, "resetsAt": null }
+      ],
+      "bucket": { "usedPercent": 60, "resetsAt": null, "reached": false },
+      "expectedRunOutMs": null
+    }
+  ]
+}

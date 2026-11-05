@@ -280,6 +280,7 @@ pub fn run() {
             commands::set_tray_window,
             commands::set_provider_visible,
             commands::set_usage_alerts,
+            commands::set_pace_alerts,
             commands::set_reset_alerts,
             commands::open_post_url,
             commands::set_dense_layout,
