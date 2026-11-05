@@ -206,10 +206,15 @@ impl PrefsStore {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         mutate(&mut state);
         let snapshot = state.clone();
-        drop(state);
+        // The file is written before the lock is released. Two settings
+        // changed at once (the tray menu and the settings panel run on
+        // different threads) otherwise raced: the older snapshot could land
+        // on disk last and drop the newer change at the next launch, and both
+        // writers shared one temporary file. The file is a few hundred bytes.
         if let Ok(bytes) = serde_json::to_vec_pretty(&snapshot) {
             let _ = write_atomically(&self.path, &bytes);
         }
+        drop(state);
         snapshot
     }
 }
@@ -354,6 +359,43 @@ mod tests {
         assert!(!reloaded.get().combined_tray);
         assert!(reloaded.get().usage_alerts);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn concurrent_updates_leave_the_latest_state_on_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "usagebar-prefs-concurrent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = dir.join("preferences.json");
+        let store = std::sync::Arc::new(PrefsStore::load(path.clone()));
+        let threads: Vec<_> = (0..8)
+            .map(|thread| {
+                let store = store.clone();
+                std::thread::spawn(move || {
+                    for round in 0..25 {
+                        store.update(|prefs| {
+                            prefs.set_tray_window(&format!("tool-{thread}"), format!("w{round}"));
+                        });
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        // Whatever order the writers ran in, the file matches memory: every
+        // thread's last choice survives a reload.
+        let saved = parse_prefs(&fs::read_to_string(&path).unwrap()).expect("valid prefs");
+        assert_eq!(saved, store.get());
+        for thread in 0..8 {
+            assert_eq!(saved.tray_window(&format!("tool-{thread}")), "w24");
+        }
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
