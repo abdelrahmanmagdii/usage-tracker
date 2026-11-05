@@ -105,6 +105,7 @@
   --track-border: rgba(255, 255, 255, .5);
   --track-shadow: inset 0 1px 3px rgba(54, 41, 82, .1);
   --switch-off: rgba(88,70,150,.2);
+  --switch-on: var(--accent);
   --switch-shadow: inset 0 1px 3px rgba(54,41,82,.16);
   --knob: white;
   --knob-shadow: 0 1px 3px rgba(50,38,80,.28);
@@ -225,6 +226,8 @@
     --track-border: rgba(255, 255, 255, .04);
     --track-shadow: inset 0 1px 2px rgba(0, 0, 0, .28);
     --switch-off: rgba(255, 255, 255, .17);
+    /* Deeper than --accent so the light knob still stands out on it. */
+    --switch-on: #7564ee;
     --switch-shadow: inset 0 1px 3px rgba(0, 0, 0, .3);
     --knob: #f5f3fb;
     --knob-shadow: 0 1px 3px rgba(0, 0, 0, .45);
@@ -444,7 +447,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); o
 .setting-toggle small { color: var(--text-tertiary); font-size: 9.5px; line-height: 1.35; }
 .switch-track { flex: none; width: 34px; height: 20px; padding: 2px; border-radius: 999px; background: var(--switch-off); box-shadow: var(--switch-shadow); transition: background 160ms ease; }
 .switch-track i { display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--knob); box-shadow: var(--knob-shadow); transition: transform 160ms cubic-bezier(.2,.8,.2,1); }
-.setting-toggle.is-on .switch-track { background: var(--accent); }
+.setting-toggle.is-on .switch-track { background: var(--switch-on); }
 .setting-toggle.is-on .switch-track i { transform: translateX(14px); }
 .settings-guide { width: 100%; margin-top: 2px; }
 .layout-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
