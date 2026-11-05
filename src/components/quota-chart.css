@@ -1,0 +1,106 @@
+/* ── Quota chart: percent left across the current window ──
+   Colours come only from the app's tokens (--tone, --text-*, --hairline,
+   --glass-strong, --warning, --danger), so the chart follows the tile's
+   tone and any theme that redefines those tokens. */
+.quota-chart {
+  /* The projection matches the pace text: amber, or red once the tile is. */
+  --pace-tone: var(--warning);
+  /* Rings around dots are painted in the tile surface so they stay legible
+     where they sit on a line. */
+  --chart-ring: var(--glass-strong);
+  position: relative;
+  margin-top: 10px;
+  border-radius: 6px;
+  outline: none;
+  touch-action: pan-y;
+}
+.tone-danger .quota-chart { --pace-tone: var(--danger); }
+.quota-chart:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.quota-chart--dense { margin-top: 7px; }
+
+.quota-chart-plot { display: block; overflow: visible; }
+.quota-chart-plot line, .quota-chart-plot path { vector-effect: non-scaling-stroke; }
+.quota-chart-tick { stroke: var(--hairline); stroke-width: 1; opacity: .75; }
+.quota-chart-baseline { stroke: color-mix(in srgb, var(--text-tertiary) 34%, transparent); stroke-width: 1; }
+.quota-chart-even { stroke: var(--text-tertiary); stroke-width: 1; opacity: .5; }
+.quota-chart-now { stroke: color-mix(in srgb, var(--text-tertiary) 40%, transparent); stroke-width: 1; }
+.quota-chart-area { fill: var(--tone); opacity: .12; }
+.quota-chart-line { fill: none; stroke: var(--tone); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.quota-chart-projection { stroke: var(--pace-tone); stroke-width: 1.5; stroke-dasharray: 3 3; stroke-linecap: round; }
+.quota-chart-runout { fill: var(--chart-ring); stroke: var(--pace-tone); stroke-width: 1.5; }
+.quota-chart-dot, .quota-chart-cursor-value {
+  fill: var(--tone);
+  stroke: var(--chart-ring);
+  stroke-width: 2;
+  paint-order: stroke;
+}
+.quota-chart-cursor line { stroke: var(--text-secondary); stroke-width: 1; opacity: .4; }
+.quota-chart-cursor-even { fill: var(--text-tertiary); stroke: var(--chart-ring); stroke-width: 1.5; paint-order: stroke; }
+
+/* One line, above the plot, so it never clips against the tile's rounded
+   edge and never covers the marks it describes. */
+.quota-chart-tip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--tile-border);
+  border-radius: 8px;
+  /* Three coats of the glass token: near-opaque, so text under the tip (the
+     dense row's heading) cannot read through it, in any theme. */
+  background: linear-gradient(var(--glass-strong), var(--glass-strong)), linear-gradient(var(--glass-strong), var(--glass-strong)), var(--glass-strong);
+  box-shadow: 0 6px 16px rgba(45, 33, 80, .14);
+  backdrop-filter: blur(24px) saturate(1.4);
+  pointer-events: none;
+  white-space: nowrap;
+  font: 500 10px/14px var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  animation: quota-chart-tip-in 120ms ease-out;
+  z-index: 2;
+}
+.quota-chart-tip strong { color: var(--text); font-weight: 650; }
+@keyframes quota-chart-tip-in { from { opacity: 0; } }
+
+.quota-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  height: 14px;
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font: 500 9px/12px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.quota-chart-key { display: inline-flex; align-items: center; gap: 4px; }
+.quota-chart-key line { stroke: var(--text-tertiary); stroke-width: 1; opacity: .8; }
+
+.quota-chart-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Pace text sits under the chart and keys itself to the dashed projection. */
+.quota-pace { --pace-tone: var(--warning); display: flex; align-items: center; gap: 6px; margin: 6px 0 0; color: var(--pace-tone); font-size: 10.5px; font-weight: 600; }
+.tone-danger .quota-pace { --pace-tone: var(--danger); }
+.quota-pace-key { flex: none; }
+.quota-pace-key line { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 3 3; stroke-linecap: round; }
+.dense-meta .quota-pace { margin: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .quota-chart-tip { animation: none; }
+}
+@media (forced-colors: active) {
+  .quota-chart-line, .quota-chart-projection { stroke: CanvasText; }
+  .quota-chart-dot, .quota-chart-cursor-value { fill: CanvasText; }
+  .quota-chart-area { fill: CanvasText; opacity: .15; }
+}
