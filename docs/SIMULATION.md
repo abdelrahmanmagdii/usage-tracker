@@ -210,9 +210,12 @@ and serves it with the CSP from `src-tauri/tauri.conf.json` as
 `devCsp: null`); violations land in `report.json` and fail the run with
 `--strict-csp`. `--copy-to DIR` also copies the output elsewhere.
 
-Note: "dark" captures use Chromium's `prefers-color-scheme: dark`. The app
-currently pins `color-scheme: light` and has no dark styles, so they only
-differ in the simulated wallpaper behind the window.
+Note: "dark" captures use Chromium's `prefers-color-scheme: dark`, which the
+app's dark theme follows (src/styles.css redefines its colour variables under
+that media query). The simulated wallpaper behind the window stands in for
+macOS vibrancy, so check glass surfaces on a real Mac too. The Windows look
+(`data-platform="windows"`: solid background in dark) is not captured by
+default.
 
 Screenshots are taken with Playwright's `animations: "disabled"`:
 transitions are finished and infinite animations (the danger-dot pulse, the
