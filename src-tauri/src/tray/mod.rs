@@ -491,6 +491,14 @@ async fn all_provider_views(
     views
 }
 
+/// Whether the combined item is the one on screen. It is whenever the user
+/// picked the compact layout, and also when the per-tool layout would show
+/// nothing at all (every tool hidden, or none found yet): a menu-bar app with
+/// no menu-bar item cannot be opened, configured, or even quit.
+fn shows_combined_item(prefs: &crate::prefs::AppPrefs, views: &[ProviderView]) -> bool {
+    prefs.combined_tray || !views.iter().any(|view| view.present)
+}
+
 /// Repaints the menu bar in whichever layout the user chose, toggling the
 /// visibility of the combined item versus the per-provider items so only one
 /// layout is on screen at a time.
@@ -500,7 +508,7 @@ pub async fn refresh_unified_tray(app: &AppHandle) {
     };
     let now = now_unix_seconds();
     let views = all_provider_views(app, &prefs, now).await;
-    let combined = prefs.combined_tray;
+    let combined = shows_combined_item(&prefs, &views);
 
     set_visible(app, TRAY_ID, combined);
     for view in &views {
@@ -1272,5 +1280,33 @@ mod tests {
                 "{provider:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_combined_item_stands_in_when_the_per_tool_layout_would_be_empty() {
+        let mut prefs = crate::prefs::AppPrefs {
+            combined_tray: false,
+            ..Default::default()
+        };
+        let found = reading(ConnectionState::Connected);
+        let views: Vec<ProviderView> = Provider::ALL
+            .into_iter()
+            .map(|provider| view_from_reading(provider, &prefs, 1_000, &found, false))
+            .collect();
+        assert!(!shows_combined_item(&prefs, &views));
+        // Every tool hidden: without the fallback no menu-bar item would be
+        // left to open the app, switch layouts, or quit.
+        for provider in Provider::ALL {
+            prefs.set_visible(provider.key(), false);
+        }
+        let views: Vec<ProviderView> = Provider::ALL
+            .into_iter()
+            .map(|provider| view_from_reading(provider, &prefs, 1_000, &found, false))
+            .collect();
+        assert!(shows_combined_item(&prefs, &views));
+        assert!(shows_combined_item(&prefs, &[]));
+        // The compact layout always uses the combined item.
+        prefs.combined_tray = true;
+        assert!(shows_combined_item(&prefs, &views));
     }
 }
