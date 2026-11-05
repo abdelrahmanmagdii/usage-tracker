@@ -19,7 +19,13 @@ use tokio::{
     time::{timeout, Duration},
 };
 
+use super::coalesce::RefreshCoalescer;
 use super::protocol::{route_line, unsupported_request_reply, RoutedMessage};
+
+/// How long a rate-limit notification waits before refreshing, so the rest of
+/// a burst lands first and one refresh covers all of it. Short enough that
+/// the meter still follows a turn as it finishes.
+const NOTIFICATION_DEBOUNCE: Duration = Duration::from_millis(300);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -74,6 +80,8 @@ pub struct CodexManager {
     /// reader for a process that was already replaced cannot tear down the
     /// pipes of its successor when its own pipe finally closes.
     generation: Arc<AtomicU64>,
+    /// Folds bursts of rate-limit notifications into one refresh at a time.
+    notified_refresh: Arc<RefreshCoalescer>,
 }
 
 impl CodexManager {
@@ -89,6 +97,7 @@ impl CodexManager {
             refresh_lock: Arc::new(Mutex::new(())),
             shutting_down: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
+            notified_refresh: Arc::new(RefreshCoalescer::default()),
         }
     }
 
@@ -316,10 +325,7 @@ impl CodexManager {
                             if method == "account/rateLimits/updated"
                                 || method == "account/updated" =>
                         {
-                            let refresh_manager = manager.clone();
-                            tauri::async_runtime::spawn(async move {
-                                let _ = refresh_manager.refresh_data().await;
-                            });
+                            manager.refresh_after_notification();
                         }
                         Ok(RoutedMessage::Request { id, method }) => {
                             // Answered off the reader: a write that waits on a
@@ -348,6 +354,23 @@ impl CodexManager {
             }
             manager
                 .handle_disconnect(generation, "Codex App Server exited unexpectedly")
+                .await;
+        });
+    }
+
+    /// Refreshes after the App Server reported new numbers. Codex sends these
+    /// in bursts during heavy use; see `coalesce` for how they are folded.
+    fn refresh_after_notification(&self) {
+        if !self.notified_refresh.signal() {
+            return;
+        }
+        let manager = self.clone();
+        tauri::async_runtime::spawn(async move {
+            manager
+                .notified_refresh
+                .drain(NOTIFICATION_DEBOUNCE, || async {
+                    let _ = manager.refresh_data().await;
+                })
                 .await;
         });
     }
