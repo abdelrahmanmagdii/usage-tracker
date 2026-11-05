@@ -90,10 +90,10 @@
 }
 
 /* Pace text sits under the chart and keys itself to the dashed projection. */
-.quota-pace { --pace-tone: var(--warning); display: flex; align-items: center; gap: 6px; margin: 6px 0 0; color: var(--pace-tone); font-size: 10.5px; font-weight: 600; }
+.quota-pace { --pace-tone: var(--warning); display: flex; align-items: center; gap: 6px; margin: 6px 0 0; color: color-mix(in srgb, var(--pace-tone) var(--tone-ink), var(--text)); font-size: 10.5px; font-weight: 600; }
 .tone-danger .quota-pace { --pace-tone: var(--danger); }
 .quota-pace-key { flex: none; }
-.quota-pace-key line { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 3 3; stroke-linecap: round; }
+.quota-pace-key line { stroke: var(--pace-tone); stroke-width: 1.5; stroke-dasharray: 3 3; stroke-linecap: round; }
 .dense-meta .quota-pace { margin: 0; }
 
 @media (prefers-reduced-motion: reduce) {
