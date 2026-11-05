@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   isPermissionGranted,
   requestPermission,
@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { MeterMark } from "./MeterMark";
 import { deviceName, isWindows, trayName } from "../lib/platform";
+import { useDialogFocus } from "./useDialogFocus";
 
 type ProviderStatus = {
   label: string;
@@ -206,9 +207,36 @@ function StepSettings() {
 export function Onboarding({ providers, onClose }: Props) {
   const [step, setStep] = useState(0);
   const last = step === STEP_COUNT - 1;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus(dialogRef, primaryRef);
+
+  // Next turns into Done on the last step and Back disables on the first,
+  // which drops keyboard focus to <body> behind the modal. Keep it on the
+  // primary action instead, so Enter keeps moving through the guide.
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    const dialog = dialogRef.current;
+    const active = document.activeElement;
+    if (dialog && (!active || active === document.body || !dialog.contains(active))) {
+      primaryRef.current?.focus();
+    }
+  }, [step]);
 
   return (
-    <div className="onboard-scrim" role="dialog" aria-modal="true" aria-label="UsageBar setup">
+    <div
+      ref={dialogRef}
+      className="onboard-scrim"
+      role="dialog"
+      aria-modal="true"
+      aria-label="UsageBar setup"
+      aria-describedby="onboard-progress"
+      tabIndex={-1}
+    >
       <div className="onboard-card glass-tile">
         <div className="onboard-body">
           <div className="onboard-content">
@@ -227,13 +255,14 @@ export function Onboarding({ providers, onClose }: Props) {
           >
             <ChevronLeft size={16} />
           </button>
-          <div className="onboard-dots" role="presentation">
+          {/* The dots were the only progress cue, and invisible to assistive tech. */}
+          <div className="onboard-dots" id="onboard-progress" role="img" aria-label={`Step ${step + 1} of ${STEP_COUNT}`}>
             {Array.from({ length: STEP_COUNT }, (_, index) => (
               <span key={index} className={index === step ? "is-active" : ""} />
             ))}
           </div>
           {last ? (
-            <button className="primary-button" onClick={onClose}>
+            <button ref={primaryRef} className="primary-button" onClick={onClose}>
               Done
             </button>
           ) : (
@@ -241,7 +270,7 @@ export function Onboarding({ providers, onClose }: Props) {
               <button className="ghost-button" onClick={onClose}>
                 Skip
               </button>
-              <button className="primary-button" onClick={() => setStep((value) => value + 1)}>
+              <button ref={primaryRef} className="primary-button" onClick={() => setStep((value) => value + 1)}>
                 Next <ChevronRight size={15} aria-hidden="true" />
               </button>
             </>
