@@ -45,6 +45,12 @@ const otherMeters = vi.hoisted(() => ({
     refresh: vi.fn(),
     refreshing: false,
   },
+  gemini: {
+    state: { connection: "cli_not_found" } as CodexBackendState,
+    buckets: [] as RateLimitBucket[],
+    refresh: vi.fn(),
+    refreshing: false,
+  },
 }));
 
 vi.mock("../hooks/useClaudeMeter", () => ({
@@ -53,6 +59,7 @@ vi.mock("../hooks/useClaudeMeter", () => ({
   useCursorMeter: () => otherMeters.cursor,
   useOpenCodeMeter: () => otherMeters.opencode,
   useDevinMeter: () => otherMeters.devin,
+  useGeminiMeter: () => otherMeters.gemini,
 }));
 
 const ipc = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -301,6 +308,21 @@ it("labels other window lengths by their own duration, not as 5-hour", () => {
   expect(screen.getByText("30d")).toBeTruthy();
   expect(screen.queryByText("5h")).toBeNull();
   expect(screen.getByRole("meter", { name: "30-day quota remaining" })).toBeTruthy();
+});
+
+it("gives a signed-in Gemini CLI its own card", () => {
+  meter.state = { connection: "cli_not_found" };
+  meter.buckets = [];
+  otherMeters.gemini.state = { connection: "connected", updatedAt: now / 1000 };
+  otherMeters.gemini.buckets = extractRateLimitBuckets({
+    rateLimitsByLimitId: {
+      pro: { primary: { usedPercent: 30, windowDurationMins: 1_440, resetsAt: now / 1000 + 6 * 3600 } },
+    },
+  });
+  renderExpanded();
+  expect(screen.getByText("Gemini CLI")).toBeTruthy();
+  expect(screen.getAllByText("1d").length).toBeGreaterThan(0);
+  expect(screen.getByRole("meter", { name: "1d quota remaining" })).toBeTruthy();
 });
 
 it("says a stale Cursor reading is stale rather than live", () => {

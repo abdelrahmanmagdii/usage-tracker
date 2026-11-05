@@ -8,6 +8,7 @@ import {
   useClaudeMeter,
   useCursorMeter,
   useDevinMeter,
+  useGeminiMeter,
   useOpenCodeMeter,
 } from "../hooks/useClaudeMeter";
 import { formatCountdown, formatLocalReset, windowDurationLabel } from "../lib/rateLimits";
@@ -170,6 +171,7 @@ export function CodexWidget() {
   const cursor = useCursorMeter();
   const opencode = useOpenCodeMeter();
   const devin = useDevinMeter();
+  const gemini = useGeminiMeter();
 
   const [prefs, setPrefs] = useState<AppPrefs>(
     () => previewPrefs(window.location.search) ?? DEFAULT_PREFS,
@@ -335,7 +337,7 @@ export function CodexWidget() {
 
     // 2-6. Single-card providers, in widget order.
     const simple: Array<{
-      provider: Exclude<ProviderId, "antigravity" | "gemini">;
+      provider: Exclude<ProviderId, "antigravity">;
       name: string;
       shortLabel: string;
       signIn: string;
@@ -391,6 +393,17 @@ export function CodexWidget() {
         missing: "Devin missing",
         meter: devin,
         buckets: devin.buckets,
+      },
+      // Gemini CLI arrived after the widget was written and never got a card,
+      // so a Windows user signed in only to Gemini saw a placeholder.
+      {
+        provider: "gemini",
+        name: "Gemini CLI",
+        shortLabel: "Gemini",
+        signIn: "Sign in to Gemini CLI",
+        missing: "Gemini CLI missing",
+        meter: gemini,
+        buckets: gemini.buckets,
       },
     ];
 
@@ -450,6 +463,9 @@ export function CodexWidget() {
     devin.state,
     devin.buckets,
     devin.refresh,
+    gemini.state,
+    gemini.buckets,
+    gemini.refresh,
     now,
   ]);
 
@@ -459,7 +475,8 @@ export function CodexWidget() {
     claude.refreshing ||
     cursor.refreshing ||
     opencode.refreshing ||
-    devin.refreshing;
+    devin.refreshing ||
+    gemini.refreshing;
 
   const refreshAll = async () => {
     // Antigravity fills up to three cards from one meter; refresh it once,
