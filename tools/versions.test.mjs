@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,12 +8,19 @@ import { VERSION_FILES, readVersions, setVersion, versionProblems } from "./vers
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/** A scratch copy of just the files that carry the version. */
-function scratchCopy() {
+/**
+ * A scratch copy of just the files that carry the version. `crlf` rewrites
+ * them the way a Windows runner checks them out (core.autocrlf).
+ */
+function scratchCopy({ crlf = false } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "usagebar-versions-"));
   for (const file of new Set(VERSION_FILES.map((entry) => entry.file))) {
     mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     cpSync(path.join(repo, file), path.join(root, file));
+    if (crlf) {
+      const text = readFileSync(path.join(root, file), "utf8");
+      writeFileSync(path.join(root, file), text.replace(/\r?\n/g, "\r\n"));
+    }
   }
   return root;
 }
@@ -42,6 +49,23 @@ test("set rewrites only the version fields and check then passes", () => {
     // Both JSON files still parse.
     JSON.parse(readFileSync(path.join(root, "package-lock.json"), "utf8"));
     JSON.parse(readFileSync(path.join(root, "src-tauri/tauri.conf.json"), "utf8"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows (CRLF) checkouts read and rewrite the same fields", () => {
+  const root = scratchCopy({ crlf: true });
+  try {
+    const expected = readVersions(repo)[0].version;
+    const readings = readVersions(root);
+    assert.deepEqual(versionProblems(readings), []);
+    assert.ok(readings.every(({ version }) => version === expected));
+    setVersion("9.8.7", root);
+    assert.ok(readVersions(root).every(({ version }) => version === "9.8.7"));
+    // Line endings are left as they were.
+    const lock = readFileSync(path.join(root, "src-tauri/Cargo.lock"), "utf8");
+    assert.equal(lock.split("\r\n").length, lock.split("\n").length);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

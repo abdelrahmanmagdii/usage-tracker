@@ -17,7 +17,8 @@ const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 /**
  * Each entry reads and rewrites one version field with a targeted pattern,
  * so `set` leaves the rest of the file (formatting included) untouched.
- * Patterns capture the text before the version as group 1.
+ * Patterns capture the text before the version as group 1. Line breaks are
+ * matched as `\r?\n`: Windows runners check the repository out with CRLF.
  */
 export const VERSION_FILES = [
   { label: "package.json", file: "package.json", pattern: /^(\s*"version":\s*")[^"]+/m },
@@ -25,10 +26,10 @@ export const VERSION_FILES = [
   {
     label: 'package-lock.json packages[""]',
     file: "package-lock.json",
-    pattern: /^(\s{4}"": \{\n\s{6}"name": "usagebar",\n\s{6}"version":\s*")[^"]+/m,
+    pattern: /^(\s{4}"": \{\r?\n\s{6}"name": "usagebar",\r?\n\s{6}"version":\s*")[^"]+/m,
   },
-  { label: "src-tauri/Cargo.toml", file: "src-tauri/Cargo.toml", pattern: /^(\[package\][^[]*?\nversion\s*=\s*")[^"]+/m },
-  { label: "src-tauri/Cargo.lock", file: "src-tauri/Cargo.lock", pattern: /^(name = "usagebar"\nversion = ")[^"]+/m },
+  { label: "src-tauri/Cargo.toml", file: "src-tauri/Cargo.toml", pattern: /^(\[package\][^[]*?\r?\nversion\s*=\s*")[^"]+/m },
+  { label: "src-tauri/Cargo.lock", file: "src-tauri/Cargo.lock", pattern: /^(name = "usagebar"\r?\nversion = ")[^"]+/m },
   { label: "src-tauri/tauri.conf.json", file: "src-tauri/tauri.conf.json", pattern: /^(\s*"version":\s*")[^"]+/m },
   { label: "Casks/usagebar.rb", file: "Casks/usagebar.rb", pattern: /^(\s*version\s+")[^"]+/m },
   { label: "homebrew-tap/Casks/usagebar.rb", file: "homebrew-tap/Casks/usagebar.rb", pattern: /^(\s*version\s+")[^"]+/m },
