@@ -215,6 +215,40 @@ describe("SettingsModal", () => {
     expect(commands("set_usage_alert_thresholds")).toEqual([{ thresholds: [75, 90] }]);
   });
 
+  it("saves the pace alerts toggle with its own command", async () => {
+    await openSettings();
+    const pace = screen.getByRole("switch", { name: /Pace alerts/ });
+    expect(pace.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(pace);
+    expect(commands("set_pace_alerts")).toEqual([{ enabled: false }]);
+    expect(pace.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("follows pace alerts changed elsewhere and hides them with usage alerts off", async () => {
+    await openSettings();
+    // The backend leaves paceAlerts out while it is on.
+    broadcast({ ...DEFAULT_PREFS, providers: {}, paceAlerts: false });
+    expect(screen.getByRole("switch", { name: /Pace alerts/ }).getAttribute("aria-checked")).toBe("false");
+    const sparse = { ...DEFAULT_PREFS, providers: {} } as Partial<AppPrefs>;
+    delete sparse.paceAlerts;
+    broadcast(sparse as AppPrefs);
+    expect(screen.getByRole("switch", { name: /Pace alerts/ }).getAttribute("aria-checked")).toBe("true");
+    // Nested under usage alerts: no switch to flip while the master is off.
+    broadcast({ ...DEFAULT_PREFS, providers: {}, usageAlerts: false });
+    expect(screen.queryByRole("switch", { name: /Pace alerts/ })).toBeNull();
+  });
+
+  it("reverts the pace alerts toggle when saving it fails", async () => {
+    backend.failing.add("set_pace_alerts");
+    await openSettings();
+    const pace = screen.getByRole("switch", { name: /Pace alerts/ });
+    await act(async () => {
+      fireEvent.click(pace);
+    });
+    expect(commands("set_pace_alerts")).toEqual([{ enabled: false }]);
+    expect(pace.getAttribute("aria-checked")).toBe("true");
+  });
+
   it("discards a threshold the backend would reject", async () => {
     await openSettings();
     const last = screen.getByRole("spinbutton", { name: "Last call at" }) as HTMLInputElement;

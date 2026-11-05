@@ -12,6 +12,11 @@ export type ProviderPref = {
 
 export type AppPrefs = {
   usageAlerts: boolean;
+  /**
+   * "Runs out before it resets at this pace" notifications. Only fire while
+   * `usageAlerts` is on too. The backend omits the key while it is on.
+   */
+  paceAlerts: boolean;
   /** Notifications when Tibo announces a reset. */
   resetAlerts: boolean;
   /** One-row quota cards instead of the roomy default. */
@@ -27,6 +32,7 @@ export const AUTO_WINDOW = "auto";
 
 export const DEFAULT_PREFS: AppPrefs = {
   usageAlerts: true,
+  paceAlerts: true,
   resetAlerts: true,
   denseLayout: false,
   combinedTray: true,
@@ -39,6 +45,8 @@ export function normalizePrefs(raw: Partial<AppPrefs> | null | undefined): AppPr
   return {
     ...DEFAULT_PREFS,
     ...raw,
+    // Serialized sparsely: missing means on, as in prefs.rs.
+    paceAlerts: raw?.paceAlerts !== false,
     providers: raw?.providers ?? {},
   };
 }

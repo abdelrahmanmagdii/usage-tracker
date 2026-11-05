@@ -74,7 +74,11 @@ through, so it keeps working while app internals are refactored:
   `stateAfterRefreshFailure` path), `cli_not_found` hides it.
 - **Usage alerts** follow `alerts.rs` (first sighting seeds silently, one
   notification for the highest threshold crossed, "fresh window" when usage
-  drops from ≥50% to <10%) into `__sim.notifications`.
+  drops from ≥50% to <10%) into `__sim.notifications`. **Pace alerts** ("runs
+  out in ~… at this pace") use the popover's `projectedRunOut` with the
+  `alerts.rs` firing rules: at most once per window, ≥30 min of samples,
+  confirmed on two refreshes in a row, run-out within 3 h and at least
+  max(30 min, 10% of the window) before the reset, below the top threshold.
 - **Tray title**: `__sim.tray()` returns what the Rust tray would show
   (combined `53% · 9% · …`, `~` when stale, `⚡` while a reset is incoming).
 
@@ -109,6 +113,7 @@ activity uses UTC hours so it does not depend on the machine's time zone
 | `combined=0` | on | one menu-bar item per provider (affects `__sim.tray()`) |
 | `onboarding=1` / `0` | per scenario | force the walkthrough on / off |
 | `alerts=0` | on | usage-alerts pref |
+| `pace=0` | on | pace-alerts pref (only fires while usage alerts are on) |
 | `alert=42` | per scenario | announce a Codex reset this many minutes after the start |
 | `feed` | `fixture` | `fixture`, `empty`, or `live` (let feed/Bluesky requests through) |
 | `demo` | off | `is_demo_mode` → true (header says "Demo data", no reset-feed polling) |

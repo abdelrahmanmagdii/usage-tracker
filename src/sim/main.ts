@@ -54,6 +54,7 @@ prefs.onboardingComplete = params.has("onboarding") ? !flag("onboarding") : scen
 prefs.denseLayout = flag("dense");
 prefs.combinedTray = flag("combined", true);
 prefs.usageAlerts = flag("alerts", true);
+prefs.paceAlerts = flag("pace", true);
 if (params.has("providers")) {
   const shown = new Set((params.get("providers") ?? "").split(",").map((id) => id.trim()));
   for (const id of SIM_PROVIDERS) if (!shown.has(id)) prefs.providers[id] = { visible: false };

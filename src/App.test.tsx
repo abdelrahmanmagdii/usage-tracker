@@ -43,6 +43,7 @@ vi.mock("./hooks/useProviderMeters", async (importOriginal) => {
 const now = Date.parse("2026-11-05T12:00:00Z");
 const prefs: AppPrefs = {
   usageAlerts: true,
+  paceAlerts: true,
   resetAlerts: true,
   denseLayout: false,
   combinedTray: true,

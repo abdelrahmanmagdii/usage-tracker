@@ -5,6 +5,7 @@ import {
   PROVIDER_IDS,
   PROVIDER_SETUP,
   missingProviders,
+  normalizePrefs,
   onboardingStatus,
   providerChannels,
   stateAfterRefreshFailure,
@@ -112,5 +113,13 @@ describe("onboardingStatus", () => {
       "Quota API returned 403",
     );
     expect(onboardingStatus(gemini, { connection: "not_authenticated" })?.detail).toBe("Run `gemini` and sign in");
+  });
+});
+
+describe("normalizePrefs", () => {
+  it("reads a missing paceAlerts as on, like the sparse prefs.rs output", () => {
+    expect(normalizePrefs({ usageAlerts: true }).paceAlerts).toBe(true);
+    expect(normalizePrefs(null).paceAlerts).toBe(true);
+    expect(normalizePrefs({ paceAlerts: false }).paceAlerts).toBe(false);
   });
 });

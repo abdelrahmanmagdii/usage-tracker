@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SIM_PROVIDERS, SCENARIOS, SimModel, scenarioById } from "./model";
-import { collectTrayWindows, normalizeThresholds, serializePrefs, defaultPrefs } from "./backend";
+import { SimPaceTracker, collectTrayWindows, normalizeThresholds, serializePrefs, defaultPrefs } from "./backend";
 import { buildHistory } from "./seed";
 import { parseDuration } from "./clock";
 
@@ -89,6 +89,23 @@ describe("simulated backend helpers", () => {
     prefs.providers.cursor = { visible: false, trayWindow: "auto" };
     prefs.usageAlertThresholds = [50];
     expect(serializePrefs(prefs)).toMatchObject({ providers: { cursor: { visible: false } }, usageAlertThresholds: [50] });
+    expect(serializePrefs(prefs)).not.toHaveProperty("paceAlerts");
+    prefs.paceAlerts = false;
+    expect(serializePrefs(prefs)).toMatchObject({ paceAlerts: false });
+  });
+
+  it("warns about a fast-burning window once, like alerts.rs", () => {
+    // A weekly window rising 2% every 5 minutes from 50%: dry in about two
+    // hours, two days before it resets.
+    const tracker = new SimPaceTracker();
+    const resetsAt = T0 + 2 * 86_400;
+    const context = { enabled: true, otherAlert: false, topThreshold: 95 };
+    const fired: number[] = [];
+    for (let step = 0; step <= 16; step += 1) {
+      const window = { id: "weekly:secondary", label: "Weekly", usedPercent: 50 + 2 * step, resetsAt, durationMins: 10_080 };
+      if (tracker.observe(window, T0 + step * 300, context)) fired.push(step * 5);
+    }
+    expect(fired).toEqual([35]);
   });
 
   it("normalizes alert thresholds like prefs.rs", () => {

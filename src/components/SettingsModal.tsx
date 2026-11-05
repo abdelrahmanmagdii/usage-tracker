@@ -277,7 +277,11 @@ export function SettingsModal({
   }, [save]);
 
   const setPref = useCallback(
-    (key: "resetAlerts" | "denseLayout" | "usageAlerts" | "combinedTray", command: string, next: boolean) => {
+    (
+      key: "resetAlerts" | "denseLayout" | "usageAlerts" | "paceAlerts" | "combinedTray",
+      command: string,
+      next: boolean,
+    ) => {
       setPrefs((current) => ({ ...current, [key]: next }));
       save(command, { enabled: next });
     },
@@ -424,6 +428,14 @@ export function SettingsModal({
                   onCommit={(value) => commitThreshold(thresholdSlots, thresholdSlots.length - 1, value)}
                 />
               </div>
+            ) : null}
+            {prefs.usageAlerts ? (
+              <Toggle
+                label="Pace alerts"
+                detail="Get notified when your recent pace would use up a limit well before it resets."
+                checked={prefs.paceAlerts}
+                onChange={(next) => setPref("paceAlerts", "set_pace_alerts", next)}
+              />
             ) : null}
             <Toggle
               label="Reset alerts"

@@ -10,6 +10,8 @@
  */
 import type { SimClock } from "./clock";
 import { SIM_PROVIDERS, type SimModel, type SimProvider } from "./model";
+import { currentWindowSamples, projectedRunOut } from "../lib/history";
+import type { QuotaSnapshot } from "../types/codex";
 
 type Json = Record<string, unknown>;
 
@@ -17,6 +19,7 @@ export type SimProviderPref = { visible?: boolean; trayWindow?: string };
 
 export type SimPrefs = {
   usageAlerts: boolean;
+  paceAlerts: boolean;
   resetAlerts: boolean;
   denseLayout: boolean;
   combinedTray: boolean;
@@ -51,6 +54,7 @@ const TRAY_STALE_AFTER_SECS = 15 * 60;
 export function defaultPrefs(): SimPrefs {
   return {
     usageAlerts: true,
+    paceAlerts: true,
     resetAlerts: true,
     denseLayout: false,
     combinedTray: true,
@@ -69,6 +73,7 @@ export function serializePrefs(prefs: SimPrefs): Json {
     combinedTray: prefs.combinedTray,
     onboardingComplete: prefs.onboardingComplete,
   };
+  if (!prefs.paceAlerts) out.paceAlerts = false;
   if (prefs.usageAlertThresholds.join(",") !== DEFAULT_THRESHOLDS.join(",")) {
     out.usageAlertThresholds = [...prefs.usageAlertThresholds];
   }
@@ -139,6 +144,102 @@ function formatCountdown(total: number): string {
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
 }
 
+// The pace-alert rules of alerts.rs. The projection itself is the
+// popover's `projectedRunOut`, which alerts.rs ports.
+const PACE_LOOKBACK_MS = 3 * 3_600_000;
+const PACE_ALERT_HORIZON_SECS = 3 * 3_600;
+const PACE_ALERT_MIN_MARGIN_SECS = 30 * 60;
+const PACE_ALERT_MIN_MARGIN_FRACTION = 0.1;
+const PACE_ALERT_MIN_SPAN_MS = 30 * 60_000;
+const PACE_ALERT_CONFIRMATIONS = 2;
+const PACE_MAX_SAMPLES = 256;
+const RENEWAL_MIN_RESET_ADVANCE_SECS = 15 * 60;
+
+export type PaceWarning = { runsOutIn: number; beforeReset: number };
+
+/**
+ * `alerts::pace_warning`: a projection worth a notification, before the
+ * once-per-window and confirmation rules. `reached` is approximated by a
+ * full window (tray windows do not carry the provider's reached flag).
+ */
+export function paceWarning(
+  samples: readonly QuotaSnapshot[],
+  window: TrayWindow,
+  nowSecs: number,
+  topThreshold: number,
+): PaceWarning | null {
+  if (window.usedPercent >= topThreshold || window.resetsAt === undefined) return null;
+  const nowMs = nowSecs * 1000;
+  const bucket = { usedPercent: window.usedPercent, resetsAt: window.resetsAt, reached: window.usedPercent >= 100 };
+  const runOutMs = projectedRunOut(samples, bucket, nowMs);
+  if (runOutMs === null) return null;
+  const usable = currentWindowSamples(samples, window.resetsAt).filter(
+    (sample) => nowMs - Date.parse(sample.timestamp) <= PACE_LOOKBACK_MS,
+  );
+  if (usable.length < 2 || nowMs - Date.parse(usable[0].timestamp) < PACE_ALERT_MIN_SPAN_MS) return null;
+  const runOut = Math.max(nowSecs, Math.floor(runOutMs / 1000));
+  const runsOutIn = runOut - nowSecs;
+  const beforeReset = Math.max(0, window.resetsAt - runOut);
+  const minMargin = Math.max(
+    PACE_ALERT_MIN_MARGIN_SECS,
+    (window.durationMins && window.durationMins > 0 ? window.durationMins * 60 : 0) * PACE_ALERT_MIN_MARGIN_FRACTION,
+  );
+  return runsOutIn <= PACE_ALERT_HORIZON_SECS && beforeReset >= minMargin ? { runsOutIn, beforeReset } : null;
+}
+
+/** `alerts::PaceTracker`: history and firing state for one window. */
+export class SimPaceTracker {
+  samples: QuotaSnapshot[] = [];
+  private streak = 0;
+  private warnedFor: number | undefined;
+
+  observe(
+    window: TrayWindow,
+    nowSecs: number,
+    context: { enabled: boolean; otherAlert: boolean; topThreshold: number },
+  ): PaceWarning | null {
+    this.record(window, nowSecs);
+    const warning = paceWarning(this.samples, window, nowSecs, context.topThreshold);
+    const warned =
+      this.warnedFor !== undefined &&
+      window.resetsAt !== undefined &&
+      window.resetsAt < this.warnedFor + RENEWAL_MIN_RESET_ADVANCE_SECS;
+    if (!context.enabled || !warning || warned) {
+      this.streak = 0;
+      return null;
+    }
+    this.streak += 1;
+    if (this.streak < PACE_ALERT_CONFIRMATIONS || context.otherAlert) return null;
+    this.warnedFor = window.resetsAt;
+    this.streak = 0;
+    return warning;
+  }
+
+  private record(window: TrayWindow, nowSecs: number): void {
+    const nowMs = nowSecs * 1000;
+    const sample: QuotaSnapshot = {
+      timestamp: new Date(nowMs).toISOString(),
+      limitId: window.id,
+      usedPercent: window.usedPercent,
+      remainingPercent: 100 - window.usedPercent,
+      windowDurationMins: window.durationMins,
+      resetsAt: window.resetsAt,
+    };
+    const last = this.samples.at(-1);
+    const unchanged = last && last.usedPercent === sample.usedPercent && last.resetsAt === sample.resetsAt;
+    if (last && !unchanged && currentWindowSamples([last], sample.resetsAt).length === 0) {
+      // A new window starts a fresh history.
+      this.samples = [];
+      this.streak = 0;
+    }
+    if (!unchanged) this.samples.push(sample);
+    while (this.samples.length > 1 && nowMs - Date.parse(this.samples[0].timestamp) > PACE_LOOKBACK_MS) {
+      this.samples.shift();
+    }
+    if (this.samples.length > PACE_MAX_SAMPLES) this.samples.splice(0, this.samples.length - PACE_MAX_SAMPLES);
+  }
+}
+
 const emptyState = (connection: string, diagnostic?: string): ProviderStatePayload => ({
   connection,
   diagnostic: diagnostic ?? null,
@@ -171,6 +272,7 @@ export class SimBackend {
   private readonly lastGood = new Map<SimProvider, { rateLimits: unknown; updatedAt: number; usage?: unknown }>();
   private readonly nextPoll = new Map<SimProvider, number>();
   private readonly seen = new Map<string, number>();
+  private readonly pace = new Map<string, SimPaceTracker>();
   private timer = 0;
 
   constructor(private readonly options: BackendOptions) {
@@ -266,21 +368,45 @@ export class SimBackend {
     }
   }
 
-  /** `alerts::UsageAlerts::observe`: first sighting seeds silently. */
+  /**
+   * `alerts::UsageAlerts::observe`: first sighting seeds silently. Pace
+   * warnings need `usageAlerts` and `paceAlerts`, and wait a refresh when a
+   * threshold or fresh-window alert just went out for the same window.
+   */
   private observeAlerts(provider: SimProvider, rateLimits: unknown, seedOnly = false): void {
     const thresholds = [...this.prefs.usageAlertThresholds].sort((a, b) => b - a);
+    const topThreshold = thresholds[0] ?? 100;
     const t = this.nowSecs();
     for (const window of collectTrayWindows(rateLimits)) {
       const key = `${provider}:${window.id}`;
       const previous = this.seen.get(key);
       this.seen.set(key, window.usedPercent);
-      if (previous === undefined || seedOnly || !this.prefs.usageAlerts) continue;
-      const crossed = thresholds.find((level) => previous < level && window.usedPercent >= level);
+      const live = previous !== undefined && !seedOnly;
+      const enabled = live && this.prefs.usageAlerts;
+      const crossed =
+        enabled && previous !== undefined
+          ? thresholds.find((level) => previous < level && window.usedPercent >= level)
+          : undefined;
+      const fresh = enabled && previous !== undefined && crossed === undefined && previous >= 50 && window.usedPercent < 10;
       const label = window.label;
+      let tracker = this.pace.get(key);
+      if (!tracker) this.pace.set(key, (tracker = new SimPaceTracker()));
+      const warning = tracker.observe(window, t, {
+        enabled: enabled && this.prefs.paceAlerts,
+        otherAlert: crossed !== undefined || fresh,
+        topThreshold,
+      });
+      if (warning) {
+        const runsOutIn = Math.max(1, Math.ceil(warning.runsOutIn / 60)) * 60;
+        this.notify(
+          `${provider}: ${label} window runs out in ~${formatCountdown(runsOutIn)}`,
+          `${Math.round(window.usedPercent)}% used · at this pace, empty ${formatCountdown(warning.beforeReset)} before it resets`,
+        );
+      }
       if (crossed !== undefined) {
         const left = window.resetsAt && window.resetsAt > t ? ` · resets in ${formatCountdown(window.resetsAt - t)}` : "";
         this.notify(`${provider}: ${label} window at ${crossed}%`, `${window.usedPercent}% used${left}`);
-      } else if (previous >= 50 && window.usedPercent < 10) {
+      } else if (fresh) {
         this.notify(`${provider}: fresh ${label} window`, `Usage is back down to ${window.usedPercent}%`);
       }
     }
@@ -404,6 +530,9 @@ export class SimBackend {
       }
       case "set_usage_alerts":
         this.updatePrefs((prefs) => void (prefs.usageAlerts = Boolean(args.enabled)));
+        return ok(null);
+      case "set_pace_alerts":
+        this.updatePrefs((prefs) => void (prefs.paceAlerts = Boolean(args.enabled)));
         return ok(null);
       case "set_reset_alerts":
         this.updatePrefs((prefs) => void (prefs.resetAlerts = Boolean(args.enabled)));
