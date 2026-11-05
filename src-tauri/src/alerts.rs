@@ -431,7 +431,22 @@ impl PaceTracker {
     }
 }
 
-/// "Claude Code: weekly window runs out in ~2:00:00" /
+/// A duration for notification text: "45m", "2h", "1h 30m", "1d 4h". The
+/// menu bar's ticking "1:23:45" countdown reads like a clock time in a
+/// sentence, and seconds mean nothing in an alert. Never below "1m".
+fn spoken_duration(total_seconds: u64) -> String {
+    let minutes = (total_seconds / 60).max(1);
+    let (days, hours, mins) = (minutes / 1_440, (minutes % 1_440) / 60, minutes % 60);
+    match (days, hours, mins) {
+        (0, 0, m) => format!("{m}m"),
+        (0, h, 0) => format!("{h}h"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, 0, _) => format!("{d}d"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
+}
+
+/// "Claude Code: weekly window runs out in ~2h" /
 /// "72% used · at this pace, empty 1d 4h before it resets".
 fn pace_notification(
     provider: &str,
@@ -444,12 +459,12 @@ fn pace_notification(
         format!(
             "{provider}: {} window runs out in ~{}",
             window.label,
-            crate::tray::format_countdown(runs_out_in)
+            spoken_duration(runs_out_in)
         ),
         format!(
             "{:.0}% used · at this pace, empty {} before it resets",
             window.used,
-            crate::tray::format_countdown(warning.before_reset)
+            spoken_duration(warning.before_reset)
         ),
     )
 }
@@ -517,7 +532,7 @@ impl UsageAlerts {
                         Some(resets_at) if resets_at > now => format!(
                             "{:.0}% used · resets in {}",
                             window.used,
-                            crate::tray::format_countdown(resets_at - now)
+                            spoken_duration(resets_at - now)
                         ),
                         _ => format!("{:.0}% used", window.used),
                     },
@@ -535,6 +550,17 @@ impl UsageAlerts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notification_durations_read_as_words_not_clock_times() {
+        assert_eq!(spoken_duration(0), "1m");
+        assert_eq!(spoken_duration(59), "1m");
+        assert_eq!(spoken_duration(45 * 60), "45m");
+        assert_eq!(spoken_duration(2 * 3_600), "2h");
+        assert_eq!(spoken_duration(90 * 60 + 30), "1h 30m");
+        assert_eq!(spoken_duration(86_400), "1d");
+        assert_eq!(spoken_duration(86_400 + 4 * 3_600 + 59 * 60), "1d 4h");
+    }
     use serde_json::json;
 
     const NOW: u64 = 1_000_000;
@@ -918,7 +944,7 @@ mod tests {
         assert_eq!(warning.before_reset, 46 * HOUR);
         let (title, body) =
             pace_notification("Claude Code", &reading(60.0, resets_at, WEEK_MINS), warning);
-        assert_eq!(title, "Claude Code: weekly window runs out in ~2:00:00");
+        assert_eq!(title, "Claude Code: weekly window runs out in ~2h");
         assert_eq!(
             body,
             "60% used · at this pace, empty 1d 22h before it resets"
