@@ -3,6 +3,7 @@ mod antigravity;
 mod claude;
 mod codex;
 mod commands;
+mod crashlog;
 mod cursor;
 mod demo;
 mod devin;
@@ -117,6 +118,11 @@ pub(crate) fn hide_app() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // First, so a panic anywhere below (plugin init, setup) leaves a report.
+    crashlog::install();
+    #[cfg(debug_assertions)]
+    crashlog::debug_panic_if_requested();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
@@ -151,6 +157,8 @@ pub fn run() {
             // Every provider's manager, plus the list the tray and watchdogs
             // iterate. Before the tray, which reads it on every repaint.
             registry::install(app);
+            // Before the tray, whose menu offers a saved crash report.
+            crashlog::on_launch(app.handle());
             tray::setup(app)?;
             #[cfg(target_os = "windows")]
             {

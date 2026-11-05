@@ -234,6 +234,21 @@ fn update_menu_item(app: &AppHandle) -> tauri::Result<MenuItem<tauri::Wry>> {
     )
 }
 
+/// "Show Crash Report…", only while a report from an earlier crash exists.
+fn crash_report_item(app: &AppHandle) -> tauri::Result<Option<MenuItem<tauri::Wry>>> {
+    if !crate::crashlog::report_available() {
+        return Ok(None);
+    }
+    MenuItem::with_id(
+        app,
+        "show-crash-report",
+        "Show Crash Report…",
+        true,
+        None::<&str>,
+    )
+    .map(Some)
+}
+
 /// A provider's "Menu Bar Shows" submenu: "Most used" plus one entry per window.
 fn window_picker(
     app: &AppHandle,
@@ -312,6 +327,7 @@ fn build_unified_menu(
     let updates = update_menu_item(app)?;
     let walkthrough =
         MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
+    let crash_report = crash_report_item(app)?;
     let star = MenuItem::with_id(
         app,
         "star-github",
@@ -344,9 +360,11 @@ fn build_unified_menu(
         &updates,
         &sep_after_toggles,
         &walkthrough,
-        &star,
-        &quit,
     ]);
+    if let Some(item) = &crash_report {
+        items.push(item);
+    }
+    items.extend([&star as &dyn IsMenuItem<tauri::Wry>, &quit]);
     Menu::with_items(app, &items)
 }
 
@@ -391,6 +409,7 @@ fn build_provider_menu(
     let updates = update_menu_item(app)?;
     let walkthrough =
         MenuItem::with_id(app, "show-onboarding", "Setup Guide…", true, None::<&str>)?;
+    let crash_report = crash_report_item(app)?;
     let star = MenuItem::with_id(
         app,
         "star-github",
@@ -399,7 +418,6 @@ fn build_provider_menu(
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit-app", "Quit UsageBar", true, None::<&str>)?;
-    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
     let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
         &refresh,
         &sep_after_refresh,
@@ -411,9 +429,11 @@ fn build_provider_menu(
         &updates,
         &sep_after_toggles,
         &walkthrough,
-        &star,
-        &quit,
     ];
+    if let Some(item) = &crash_report {
+        items.push(item);
+    }
+    items.extend([&star as &dyn IsMenuItem<tauri::Wry>, &quit]);
     #[cfg(target_os = "windows")]
     let show_widget = MenuItem::with_id(
         app,
@@ -653,7 +673,14 @@ fn sync_menus(
         .state::<UpdateStatus>()
         .pending_version()
         .unwrap_or_default();
-    let shared = format!("{}|{}|{}", prefs.usage_alerts, prefs.combined_tray, pending);
+    // Likewise whether "Show Crash Report…" is offered.
+    let shared = format!(
+        "{}|{}|{}|{}",
+        prefs.usage_alerts,
+        prefs.combined_tray,
+        pending,
+        crate::crashlog::report_available()
+    );
     let listed: Vec<&ProviderView> = views.iter().filter(|view| view.present).collect();
 
     if combined {
@@ -866,6 +893,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             }
             let _ = app.emit("usagebar://show-onboarding", ());
         }
+        "show-crash-report" => crate::crashlog::reveal_report(),
         "show-codex-widget" => {
             let _ = crate::commands::show_codex_widget(app);
         }
