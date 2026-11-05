@@ -240,7 +240,7 @@ async fn load_access_token() -> CredentialRead {
     }
 }
 
-fn sqlite_readonly_uri(path: &std::path::Path) -> String {
+fn sqlite_readonly_uri(path: &std::path::Path, immutable: bool) -> String {
     let encoded = path
         .to_string_lossy()
         .replace('\\', "/")
@@ -248,37 +248,60 @@ fn sqlite_readonly_uri(path: &std::path::Path) -> String {
         .replace('#', "%23")
         .replace('?', "%3F")
         .replace(' ', "%20");
-    format!("file:{encoded}?mode=ro&immutable=1")
+    if immutable {
+        format!("file:{encoded}?mode=ro&immutable=1")
+    } else {
+        format!("file:{encoded}?mode=ro")
+    }
 }
 
 fn read_cursor_token(path: &std::path::Path) -> CredentialRead {
-    // `immutable=1` lets the read succeed while Cursor has the DB open (WAL).
-    let uri = sqlite_readonly_uri(path);
-    let conn = match rusqlite::Connection::open_with_flags(
-        &uri,
+    // Read through SQLite's normal locking first. Cursor keeps the database
+    // open in WAL mode and writes a refreshed access token into the WAL;
+    // `immutable=1` ignores the WAL, so it can hand back the token Cursor
+    // already replaced, and the request then fails as a rejected login.
+    // Immutable stays as the fallback for a database a read-only connection
+    // cannot open normally (for example when the WAL index cannot be created).
+    match query_cursor_token(&sqlite_readonly_uri(path, false)) {
+        Ok(read) => read,
+        Err(first) => match query_cursor_token(&sqlite_readonly_uri(path, true)) {
+            Ok(read) => read,
+            Err(_) => CredentialRead::Unavailable(first),
+        },
+    }
+}
+
+fn query_cursor_token(uri: &str) -> Result<CredentialRead, String> {
+    let conn = rusqlite::Connection::open_with_flags(
+        uri,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    ) {
-        Ok(conn) => conn,
-        Err(error) => {
-            return CredentialRead::Unavailable(format!(
-                "Cursor's login database could not be opened ({error})"
-            ))
-        }
-    };
-    let value: Result<String, rusqlite::Error> = conn.query_row(
+    )
+    .map_err(|error| format!("Cursor's login database could not be opened ({error})"))?;
+    // Cursor may be mid-checkpoint; wait briefly rather than fail the poll.
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(2));
+    let value: Result<rusqlite::types::Value, rusqlite::Error> = conn.query_row(
         "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1",
         [],
         |row| row.get(0),
     );
     match value {
-        Ok(raw) => match parse_stored_token(&raw) {
-            Some(token) => CredentialRead::Found(token),
-            None => CredentialRead::Absent,
-        },
-        Err(rusqlite::Error::QueryReturnedNoRows) => CredentialRead::Absent,
-        Err(error) => CredentialRead::Unavailable(format!(
+        Ok(rusqlite::types::Value::Text(raw)) => Ok(token_read(&raw)),
+        // VS Code declares `value` as a BLOB column. Builds store text, but
+        // UTF-8 bytes are the same login and must not read as unreadable.
+        Ok(rusqlite::types::Value::Blob(bytes)) => Ok(std::str::from_utf8(&bytes)
+            .map(token_read)
+            .unwrap_or(CredentialRead::Absent)),
+        Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => Ok(CredentialRead::Absent),
+        Err(error) => Err(format!(
             "Cursor's login database could not be read ({error})"
         )),
+    }
+}
+
+fn token_read(raw: &str) -> CredentialRead {
+    match parse_stored_token(raw) {
+        Some(token) => CredentialRead::Found(token),
+        None => CredentialRead::Absent,
     }
 }
 
@@ -303,17 +326,17 @@ fn normalize_period_usage(raw: &Value) -> Option<Value> {
         .get("planUsage")
         .or_else(|| raw.pointer("/individualUsage/plan"))
         .unwrap_or(raw);
-    let used = finite_f64(plan.get("totalPercentUsed"))
-        .or_else(|| finite_f64(plan.get("percentUsed")))
+    let used = finite_number(plan.get("totalPercentUsed"))
+        .or_else(|| finite_number(plan.get("percentUsed")))
         .or_else(|| percent_from_spend(plan))?;
-    let auto = finite_f64(plan.get("autoPercentUsed"));
-    let api = finite_f64(plan.get("apiPercentUsed"));
-    let resets_at = parse_reset_timestamp(
+    let auto = finite_number(plan.get("autoPercentUsed"));
+    let api = finite_number(plan.get("apiPercentUsed"));
+    let resets_at = parse_cursor_timestamp(
         raw.get("billingCycleEnd")
             .or_else(|| plan.get("billingCycleEnd"))
             .or_else(|| raw.pointer("/planInfo/billingCycleEnd")),
     );
-    let start = parse_reset_timestamp(
+    let start = parse_cursor_timestamp(
         raw.get("billingCycleStart")
             .or_else(|| plan.get("billingCycleStart")),
     );
@@ -358,18 +381,43 @@ fn normalize_period_usage(raw: &Value) -> Option<Value> {
 }
 
 fn percent_from_spend(plan: &Value) -> Option<f64> {
-    let used =
-        finite_f64(plan.get("totalSpend")).or_else(|| finite_f64(plan.get("includedSpend")))?;
-    let limit = finite_f64(plan.get("limit")).filter(|limit| *limit > 0.0)?;
+    let limit = finite_number(plan.get("limit")).filter(|limit| *limit > 0.0)?;
+    // Protobuf JSON drops zero-valued fields, so a fresh billing cycle sends
+    // the plan's `limit` with no spend at all. That is 0% used, not "no meter".
+    let used = finite_number(plan.get("totalSpend"))
+        .or_else(|| finite_number(plan.get("includedSpend")))
+        .unwrap_or(0.0);
     Some((used / limit) * 100.0)
+}
+
+/// `finite_f64` also parses the strings "NaN" and "inf", which would reach
+/// the renderer as a null percentage.
+fn finite_number(value: Option<&Value>) -> Option<f64> {
+    finite_f64(value).filter(|number| number.is_finite())
+}
+
+/// Cursor's dashboard service speaks Connect (protobuf JSON), which sends
+/// int64 epochs as strings, here in milliseconds (`"1756684800000"`); the
+/// legacy endpoint uses RFC3339. Accept both, plus bare numbers in seconds or
+/// milliseconds: a millisecond string used to fail the RFC3339 parse and drop
+/// the reset time, and a millisecond number put it tens of millennia out.
+/// Zero is protobuf's "unset", not 1970.
+fn parse_cursor_timestamp(value: Option<&Value>) -> Option<f64> {
+    let value = value?;
+    let seconds = match finite_number(Some(value)) {
+        Some(number) if number > 10_000_000_000.0 => number / 1_000.0,
+        Some(number) => number,
+        None => parse_reset_timestamp(Some(value))?,
+    };
+    (seconds > 0.0).then_some(seconds)
 }
 
 fn normalize_legacy_usage(raw: &Value) -> Option<Value> {
     let gpt4 = raw.get("gpt-4")?;
-    let used = finite_f64(gpt4.get("numRequests"))?;
-    let limit = finite_f64(gpt4.get("maxRequestUsage")).filter(|limit| *limit > 0.0)?;
+    let used = finite_number(gpt4.get("numRequests"))?;
+    let limit = finite_number(gpt4.get("maxRequestUsage")).filter(|limit| *limit > 0.0)?;
     let resets_at =
-        parse_reset_timestamp(raw.get("startOfMonth")).map(|start| start + 30.0 * 86_400.0);
+        parse_cursor_timestamp(raw.get("startOfMonth")).map(|start| start + 30.0 * 86_400.0);
     Some(rate_limits_map(vec![limit_entry(
         "premium",
         "Monthly",
@@ -422,7 +470,7 @@ mod tests {
     fn encodes_spaces_in_the_sqlite_uri() {
         let path = std::path::Path::new("/Users/me/Library/Application Support/Cursor/state.vscdb");
         assert_eq!(
-            sqlite_readonly_uri(path),
+            sqlite_readonly_uri(path, true),
             "file:/Users/me/Library/Application%20Support/Cursor/state.vscdb?mode=ro&immutable=1"
         );
     }
@@ -431,7 +479,7 @@ mod tests {
     fn normalizes_windows_paths_in_sqlite_uris() {
         let path = std::path::Path::new(r"C:\Users\Example User\Cursor\state.vscdb");
         assert_eq!(
-            sqlite_readonly_uri(path),
+            sqlite_readonly_uri(path, true),
             "file:C:/Users/Example%20User/Cursor/state.vscdb?mode=ro&immutable=1"
         );
     }
@@ -466,6 +514,131 @@ mod tests {
         assert!(labels.contains(&"Monthly"));
         assert!(labels.contains(&"Auto"));
         assert!(labels.contains(&"API"));
+    }
+
+    fn temp_db(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "usagebar-cursor-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir.join("state.vscdb")
+    }
+
+    #[test]
+    fn reads_a_token_cursor_just_rotated_into_the_wal() {
+        let path = temp_db("wal");
+        // Cursor keeps the database open in WAL mode with the newest rows
+        // still in the WAL. Disable auto-checkpointing to hold them there.
+        let writer = rusqlite::Connection::open(&path).expect("open");
+        writer
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA wal_autocheckpoint=0;
+                 CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+                 INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', 'old-token');
+                 PRAGMA wal_checkpoint(TRUNCATE);
+                 INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', 'new-token');",
+            )
+            .expect("seed");
+        match read_cursor_token(&path) {
+            CredentialRead::Found(token) => assert_eq!(token, "new-token"),
+            _ => panic!("token not found"),
+        }
+        drop(writer);
+        let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
+    }
+
+    #[test]
+    fn a_missing_token_row_is_absent_and_a_blob_token_is_read() {
+        let path = temp_db("blob");
+        let writer = rusqlite::Connection::open(&path).expect("open");
+        writer
+            .execute_batch(
+                "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);",
+            )
+            .expect("schema");
+        assert!(matches!(read_cursor_token(&path), CredentialRead::Absent));
+        writer
+            .execute(
+                "INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', ?1)",
+                [b"\"blob-token\"".to_vec()],
+            )
+            .expect("insert");
+        match read_cursor_token(&path) {
+            CredentialRead::Found(token) => assert_eq!(token, "blob-token"),
+            _ => panic!("blob token not read"),
+        }
+        drop(writer);
+        let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
+    }
+
+    #[test]
+    fn reads_connect_millisecond_strings_for_the_billing_cycle() {
+        // GetCurrentPeriodUsage sends int64 epochs as protobuf-JSON strings.
+        let payload = json!({
+            "billingCycleStart": "1785542400000",
+            "billingCycleEnd": "1788220800000",
+            "planUsage": { "totalSpend": 1250, "limit": 2000, "autoPercentUsed": 3.5 }
+        });
+        let normalized = normalize_usage(&payload).expect("windows");
+        let plan = &normalized["rateLimitsByLimitId"]["plan"]["primary"];
+        assert_eq!(plan.get("usedPercent"), Some(&json!(62.5)));
+        assert_eq!(plan.get("resetsAt"), Some(&json!(1_788_220_800.0)));
+        // 31 days, from the real cycle rather than the 30-day default.
+        assert_eq!(plan.get("windowDurationMins"), Some(&json!(44_640.0)));
+    }
+
+    #[test]
+    fn timestamps_accept_seconds_milliseconds_and_rfc3339() {
+        assert_eq!(
+            parse_cursor_timestamp(Some(&json!(1_788_220_800))),
+            Some(1_788_220_800.0)
+        );
+        assert_eq!(
+            parse_cursor_timestamp(Some(&json!(1_788_220_800_000_i64))),
+            Some(1_788_220_800.0)
+        );
+        assert_eq!(
+            parse_cursor_timestamp(Some(&json!("2026-09-01T00:00:00.000Z"))),
+            Some(1_788_220_800.0)
+        );
+        assert_eq!(parse_cursor_timestamp(Some(&json!("0"))), None);
+        assert_eq!(parse_cursor_timestamp(Some(&json!("NaN"))), None);
+        assert_eq!(parse_cursor_timestamp(Some(&json!("soon"))), None);
+        assert_eq!(parse_cursor_timestamp(None), None);
+    }
+
+    #[test]
+    fn a_fresh_cycle_without_spend_fields_is_zero_percent() {
+        // Protobuf JSON omits zero spend; only the allowance remains.
+        let payload = json!({
+            "billingCycleStart": "1785542400000",
+            "billingCycleEnd": "1788220800000",
+            "planUsage": { "limit": 2000, "remaining": 2000 }
+        });
+        let normalized = normalize_usage(&payload).expect("windows");
+        assert_eq!(
+            normalized.pointer("/rateLimitsByLimitId/plan/primary/usedPercent"),
+            Some(&json!(0.0))
+        );
+        assert!(normalized
+            .pointer("/rateLimitsByLimitId/plan/rateLimitReachedType")
+            .is_none());
+    }
+
+    #[test]
+    fn non_finite_percentages_are_ignored() {
+        let payload = json!({
+            "planUsage": { "totalPercentUsed": "NaN", "totalSpend": 500, "limit": 2000 }
+        });
+        let normalized = normalize_usage(&payload).expect("windows");
+        assert_eq!(
+            normalized.pointer("/rateLimitsByLimitId/plan/primary/usedPercent"),
+            Some(&json!(25.0))
+        );
     }
 
     #[test]
