@@ -31,6 +31,8 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - run: npm run versions:check
+      - run: npm run typecheck
       - run: npm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm run windows:build
