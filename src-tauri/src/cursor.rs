@@ -210,10 +210,7 @@ fn state_db_path() -> Option<std::path::PathBuf> {
     #[cfg(not(target_os = "windows"))]
     let home = crate::platform::home_dir()?;
     #[cfg(not(target_os = "windows"))]
-    Some(
-        std::path::PathBuf::from(home)
-            .join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
-    )
+    Some(home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"))
 }
 
 async fn load_access_token() -> CredentialRead {

@@ -212,7 +212,7 @@ fn auth_json_path() -> Option<std::path::PathBuf> {
         return Some(std::path::PathBuf::from(xdg).join("opencode/auth.json"));
     }
     let home = crate::platform::home_dir()?;
-    Some(std::path::PathBuf::from(home).join(".local/share/opencode/auth.json"))
+    Some(home.join(".local/share/opencode/auth.json"))
 }
 
 /// Pulls the OpenCode Go API key and ignores Zen (`opencode`) entries.

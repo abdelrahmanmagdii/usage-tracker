@@ -30,7 +30,9 @@ const QUOTA_URL: &str =
 const LOCAL_STATUS_RPC: &str = "exa.language_server_pb.LanguageServerService/GetUserStatus";
 const LOCAL_QUOTA_RPC: &str =
     "exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "gemini";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_ACCOUNT: &str = "antigravity";
 const KEYRING_BASE64_PREFIX: &[u8] = b"go-keyring-base64:";
 const FIVE_HOUR_MINS: f64 = 300.0;
@@ -753,6 +755,7 @@ fn login_action(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn classify_keychain_status(code: i32) -> CredentialRead {
     if crate::provider::keychain_login_absent(code) {
         return CredentialRead::Absent;
@@ -812,7 +815,7 @@ async fn load_from_keychain(allow_prompt: bool) -> CredentialRead {
 
 fn token_file_path() -> Option<std::path::PathBuf> {
     let home = crate::platform::home_dir()?;
-    Some(std::path::PathBuf::from(home).join(".gemini/antigravity-cli/antigravity-oauth-token"))
+    Some(home.join(".gemini/antigravity-cli/antigravity-oauth-token"))
 }
 
 async fn load_from_file() -> CredentialRead {

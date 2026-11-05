@@ -231,7 +231,7 @@ fn credentials_path() -> Option<std::path::PathBuf> {
         }
     }
     let home = crate::platform::home_dir()?;
-    Some(std::path::PathBuf::from(home).join(".local/share/devin/credentials.toml"))
+    Some(home.join(".local/share/devin/credentials.toml"))
 }
 
 fn parse_cli_auth(raw: &str) -> Option<CliAuth> {
@@ -286,11 +286,11 @@ fn parse_toml_string_value(value: &str) -> Option<String> {
     }
     if let Some(rest) = value.strip_prefix('\'') {
         let closing = rest.find('\'')?;
-        let parsed = non_empty(rest[..closing].to_owned())?;
+        let parsed = non_empty(&rest[..closing])?;
         return valid_value_tail(&rest[closing + 1..]).then_some(parsed);
     }
     let value = value.split_once('#').map_or(value, |(value, _)| value);
-    non_empty(value.to_owned())
+    non_empty(value)
 }
 
 fn parse_basic_toml_string(value: &str) -> Option<String> {
@@ -417,7 +417,7 @@ fn plan_name(raw: &Value) -> Option<String> {
     let plan_info = field(plan_status, &["planInfo", "plan_info"]).unwrap_or(plan_status);
     field(plan_info, &["planName", "plan_name"])
         .and_then(Value::as_str)
-        .and_then(|name| non_empty(name))
+        .and_then(non_empty)
 }
 
 fn limit_entry(
