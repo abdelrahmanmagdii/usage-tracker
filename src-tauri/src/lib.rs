@@ -11,63 +11,11 @@ mod opencode;
 mod platform;
 mod prefs;
 mod provider;
+mod registry;
 mod tray;
 mod updates;
 
-use antigravity::AntigravityManager;
-use claude::ClaudeManager;
-use codex::process::CodexManager;
-use cursor::CursorManager;
-use devin::DevinManager;
-use gemini::GeminiManager;
-use opencode::OpenCodeManager;
 use tauri::{Manager, WindowEvent};
-
-/// Meters refresh when their data is older than this.
-const STALE_AFTER_SECS: u64 = 5 * 60;
-/// Steady-state spacing between refresh attempts, so a healthy meter cannot
-/// hammer its backend.
-const MIN_RETRY_SECS: u64 = 4 * 60;
-/// Spacing after the first failed attempt. A denied keychain prompt or a
-/// dropped network call recovers on the next watchdog tick instead of leaving
-/// the meter wrong (or hidden) for minutes.
-const FIRST_RETRY_SECS: u64 = 30;
-
-fn now_unix_seconds() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-/// How long to wait before the next attempt: healthy meters keep the steady
-/// cadence, while a run of failures backs off from `FIRST_RETRY_SECS` up to the
-/// same ceiling, so a persistent outage (an expired session that only Claude
-/// Code itself can renew) is not retried any harder than before.
-fn retry_after_secs(consecutive_failures: u32) -> u64 {
-    if consecutive_failures == 0 {
-        return MIN_RETRY_SECS;
-    }
-    let doublings = consecutive_failures.saturating_sub(1).min(16);
-    FIRST_RETRY_SECS
-        .saturating_mul(1_u64 << doublings)
-        .min(MIN_RETRY_SECS)
-}
-
-/// Whether a meter is due for a refresh. Data younger than `STALE_AFTER_SECS`
-/// is left alone; anything older waits only for the retry spacing.
-fn should_refresh(
-    now: u64,
-    updated_at: Option<u64>,
-    last_attempt: u64,
-    consecutive_failures: u32,
-) -> bool {
-    let fresh = updated_at.is_some_and(|at| now.saturating_sub(at) < STALE_AFTER_SECS);
-    if fresh {
-        return false;
-    }
-    now.saturating_sub(last_attempt) >= retry_after_secs(consecutive_failures)
-}
 
 /// Opts the process out of App Nap. Without this, macOS throttles the process
 /// timers as soon as the popover hides, which froze both the 1-second tray
@@ -200,20 +148,9 @@ pub fn run() {
             app.manage(tray::TrayRenderCache::default());
             app.manage(updates::UpdateStatus::default());
             app.manage(platform::WidgetPlacement::default());
-            let manager = CodexManager::new(app.handle().clone());
-            app.manage(manager.clone());
-            let claude_manager = ClaudeManager::new(app.handle().clone());
-            app.manage(claude_manager.clone());
-            let cursor_manager = CursorManager::new(app.handle().clone());
-            app.manage(cursor_manager.clone());
-            let opencode_manager = OpenCodeManager::new(app.handle().clone());
-            app.manage(opencode_manager.clone());
-            let devin_manager = DevinManager::new(app.handle().clone());
-            app.manage(devin_manager.clone());
-            let antigravity_manager = AntigravityManager::new(app.handle().clone());
-            app.manage(antigravity_manager.clone());
-            let gemini_manager = GeminiManager::new(app.handle().clone());
-            app.manage(gemini_manager.clone());
+            // Every provider's manager, plus the list the tray and watchdogs
+            // iterate. Before the tray, which reads it on every repaint.
+            registry::install(app);
             tray::setup(app)?;
             #[cfg(target_os = "windows")]
             {
@@ -241,7 +178,7 @@ pub fn run() {
                 demo::log_enablement();
                 demo::spawn_control(app.handle().clone());
             } else {
-                updates::spawn_periodic_checks(&app.handle());
+                updates::spawn_periodic_checks(app.handle());
             }
 
             #[cfg(target_os = "macos")]
@@ -283,7 +220,7 @@ pub fn run() {
                 }
             }
 
-            // Both providers share one tray coordinator, so a single repaint per
+            // Every provider shares one tray coordinator, so a single repaint per
             // tick keeps the menu-bar countdown live. Refreshing once (rather
             // than once per manager, as before) halves the per-second work and
             // removes a redundant second pass over the same AppKit items.
@@ -295,7 +232,7 @@ pub fn run() {
                     interval.tick().await;
                     tray::refresh_unified_tray(&tray_handle).await;
                     #[cfg(target_os = "windows")]
-                    if now_unix_seconds() % 5 == 0 {
+                    if provider::now_unix_seconds() % 5 == 0 {
                         let handle = tray_handle.clone();
                         let _ = tray_handle.run_on_main_thread(move || {
                             let _ = platform::position_codex_widget(&handle);
@@ -304,236 +241,9 @@ pub fn run() {
                 }
             });
 
-            tauri::async_runtime::spawn(async move {
-                let _ = manager.start().await;
-            });
-            let claude_starter = claude_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = claude_starter.refresh().await;
-            });
-            let cursor_starter = cursor_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = cursor_starter.refresh().await;
-            });
-            let opencode_starter = opencode_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = opencode_starter.refresh().await;
-            });
-            let devin_starter = devin_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = devin_starter.refresh().await;
-            });
-            let antigravity_starter = antigravity_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = antigravity_starter.refresh().await;
-            });
-            let gemini_starter = gemini_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = gemini_starter.refresh().await;
-            });
-
-            // Wall-clock staleness watchdogs instead of a plain sleep loop:
-            // tokio timers pause during system sleep, so a fixed 5-minute
-            // sleep silently stretched across naps. Checking `updated_at`
-            // against the wall clock every 30 seconds catches up within one
-            // tick of waking, while the retry spacing keeps failures from
-            // hammering the backends.
-            //
-            // Success is measured by `updated_at` moving rather than by the
-            // returned Result: both providers report "signed out" as an Ok
-            // state, and that still leaves the meter frozen.
-            let refresh_manager = app.state::<CodexManager>().inner().clone();
-            tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut last_attempt = now_unix_seconds();
-                // Start in the failure lane: if the startup refresh did not
-                // land, the meter recovers on the next tick instead of waiting
-                // out the steady-state interval. A refresh that did land is
-                // fresh, so the watchdog skips anyway.
-                let mut failures: u32 = 1;
-                loop {
-                    interval.tick().await;
-                    let now = now_unix_seconds();
-                    let before = refresh_manager.snapshot().await.updated_at;
-                    if !should_refresh(now, before, last_attempt, failures) {
-                        continue;
-                    }
-                    last_attempt = now;
-                    let _ = refresh_manager.refresh_or_start().await;
-                    let after = refresh_manager.snapshot().await.updated_at;
-                    failures = if after == before {
-                        failures.saturating_add(1)
-                    } else {
-                        0
-                    };
-                }
-            });
-            let claude_refresher = claude_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                // A shorter tick than the other providers: each one checks
-                // whether Claude Code rewrote its login (a token rotation or a
-                // fresh sign-in refreshes the meter right away) and whether
-                // Claude Code has been used since the last reading. Claude has
-                // no push channel like Codex's App Server, so without the
-                // second check the meter trailed `/usage` by up to five
-                // minutes during a busy session.
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut last_attempt = now_unix_seconds();
-                // Start in the failure lane: if the startup refresh did not
-                // land, the meter recovers on the next tick instead of waiting
-                // out the steady-state interval. A refresh that did land is
-                // fresh, so the watchdog skips anyway.
-                let mut failures: u32 = 1;
-                loop {
-                    interval.tick().await;
-                    let now = now_unix_seconds();
-                    let before = claude_refresher.snapshot().await.updated_at;
-                    let login_changed = claude_refresher.login_changed().await;
-                    if login_changed {
-                        failures = 0;
-                    } else if !should_refresh(now, before, last_attempt, failures)
-                        && !claude_refresher
-                            .active_refresh_due(now, before, last_attempt, failures)
-                            .await
-                    {
-                        continue;
-                    }
-                    last_attempt = now;
-                    let _ = claude_refresher.refresh().await;
-                    let after = claude_refresher.snapshot().await.updated_at;
-                    failures = if after == before {
-                        failures.saturating_add(1)
-                    } else {
-                        0
-                    };
-                }
-            });
-            let cursor_refresher = cursor_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut last_attempt = now_unix_seconds();
-                let mut failures: u32 = 1;
-                loop {
-                    interval.tick().await;
-                    let now = now_unix_seconds();
-                    let before = cursor_refresher.snapshot().await.updated_at;
-                    if !should_refresh(now, before, last_attempt, failures) {
-                        continue;
-                    }
-                    last_attempt = now;
-                    let _ = cursor_refresher.refresh().await;
-                    let after = cursor_refresher.snapshot().await.updated_at;
-                    failures = if after == before {
-                        failures.saturating_add(1)
-                    } else {
-                        0
-                    };
-                }
-            });
-            let opencode_refresher = opencode_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut last_attempt = now_unix_seconds();
-                let mut failures: u32 = 1;
-                loop {
-                    interval.tick().await;
-                    let now = now_unix_seconds();
-                    let before = opencode_refresher.snapshot().await.updated_at;
-                    if !should_refresh(now, before, last_attempt, failures) {
-                        continue;
-                    }
-                    last_attempt = now;
-                    let _ = opencode_refresher.refresh().await;
-                    let after = opencode_refresher.snapshot().await.updated_at;
-                    failures = if after == before {
-                        failures.saturating_add(1)
-                    } else {
-                        0
-                    };
-                }
-            });
-            let devin_refresher = devin_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut last_attempt = now_unix_seconds();
-                let mut failures: u32 = 1;
-                loop {
-                    interval.tick().await;
-                    let now = now_unix_seconds();
-                    let before = devin_refresher.snapshot().await.updated_at;
-                    if !should_refresh(now, before, last_attempt, failures) {
-                        continue;
-                    }
-                    last_attempt = now;
-                    let _ = devin_refresher.refresh().await;
-                    let after = devin_refresher.snapshot().await.updated_at;
-                    failures = if after == before {
-                        failures.saturating_add(1)
-                    } else {
-                        0
-                    };
-                }
-            });
-            let antigravity_refresher = antigravity_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                // Windows also watches for a fresh Antigravity launch log, which
-                // needs a short tick; elsewhere that check is always false.
-                let tick = if cfg!(target_os = "windows") { 5 } else { 30 };
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(tick));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut last_attempt = now_unix_seconds();
-                let mut failures: u32 = 1;
-                loop {
-                    interval.tick().await;
-                    let now = now_unix_seconds();
-                    let before = antigravity_refresher.snapshot().await.updated_at;
-                    let new_local_launch = antigravity_refresher.should_poll_local_launch().await;
-                    if !new_local_launch && !should_refresh(now, before, last_attempt, failures) {
-                        continue;
-                    }
-                    last_attempt = now;
-                    let _ = antigravity_refresher.refresh().await;
-                    let after = antigravity_refresher.snapshot().await.updated_at;
-                    if after == before {
-                        if new_local_launch {
-                            failures = 1;
-                            last_attempt = now.saturating_sub(FIRST_RETRY_SECS.saturating_sub(5));
-                        } else {
-                            failures = failures.saturating_add(1);
-                        }
-                    } else {
-                        failures = 0;
-                    }
-                }
-            });
-            let gemini_refresher = gemini_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut last_attempt = now_unix_seconds();
-                let mut failures: u32 = 1;
-                loop {
-                    interval.tick().await;
-                    let now = now_unix_seconds();
-                    let before = gemini_refresher.snapshot().await.updated_at;
-                    if !should_refresh(now, before, last_attempt, failures) {
-                        continue;
-                    }
-                    last_attempt = now;
-                    let _ = gemini_refresher.refresh().await;
-                    let after = gemini_refresher.snapshot().await.updated_at;
-                    failures = if after == before {
-                        failures.saturating_add(1)
-                    } else {
-                        0
-                    };
-                }
-            });
+            // Each provider's first refresh, then its staleness watchdog.
+            // The timing per provider lives with its `Meter` impl.
+            registry::spawn_refreshers(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -561,6 +271,8 @@ pub fn run() {
             commands::refresh_antigravity,
             commands::get_gemini_state,
             commands::refresh_gemini,
+            commands::get_provider_state,
+            commands::refresh_provider,
             commands::set_reset_incoming,
             commands::get_app_prefs,
             commands::complete_onboarding,
@@ -586,58 +298,4 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running UsageBar");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn failures_retry_quickly_then_back_off_to_the_steady_cadence() {
-        assert_eq!(retry_after_secs(0), MIN_RETRY_SECS);
-        assert_eq!(retry_after_secs(1), FIRST_RETRY_SECS);
-        assert_eq!(retry_after_secs(2), 60);
-        assert_eq!(retry_after_secs(3), 120);
-        // The backoff never exceeds the healthy cadence, so a session only
-        // Claude Code can renew is not polled harder than before.
-        assert_eq!(retry_after_secs(4), MIN_RETRY_SECS);
-        assert_eq!(retry_after_secs(u32::MAX), MIN_RETRY_SECS);
-    }
-
-    #[test]
-    fn fresh_data_is_left_alone_and_stale_data_retries_on_schedule() {
-        let now = 1_000_000;
-        // Data younger than the staleness window is never re-fetched.
-        assert!(!should_refresh(now, Some(now - 60), now - 3_600, 0));
-        // Stale data waits out the steady cadence after a healthy run...
-        assert!(!should_refresh(
-            now,
-            Some(now - STALE_AFTER_SECS),
-            now - 60,
-            0
-        ));
-        assert!(should_refresh(
-            now,
-            Some(now - STALE_AFTER_SECS),
-            now - MIN_RETRY_SECS,
-            0
-        ));
-        // ...but a failed attempt is retried on the next watchdog tick, which
-        // is what pulls a hidden or frozen Claude meter back within seconds.
-        assert!(should_refresh(
-            now,
-            Some(now - STALE_AFTER_SECS),
-            now - FIRST_RETRY_SECS,
-            1
-        ));
-        assert!(!should_refresh(
-            now,
-            Some(now - STALE_AFTER_SECS),
-            now - 10,
-            1
-        ));
-        // A meter that never got data at all is due as soon as spacing allows.
-        assert!(should_refresh(now, None, now - FIRST_RETRY_SECS, 1));
-        assert!(!should_refresh(now, None, now, 1));
-    }
 }

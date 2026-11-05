@@ -7,29 +7,18 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt;
 
-use crate::antigravity::AntigravityManager;
-use crate::claude::ClaudeManager;
 use crate::codex::process::{CodexManager, ConnectionState};
-use crate::cursor::CursorManager;
-use crate::devin::DevinManager;
-use crate::gemini::GeminiManager;
-use crate::opencode::OpenCodeManager;
 use crate::prefs::PrefsStore;
-use crate::provider::ProviderState;
+use crate::provider::now_unix_seconds;
+pub use crate::registry::Provider;
+use crate::registry::{Meters, Reading};
 use crate::updates::UpdateStatus;
 
 /// The combined menu-bar item carrying both providers. One narrow item resists
 /// macOS hiding it when the bar is crowded (or collides with a notch), which is
-/// why it is the default; the per-provider items below are the opt-in layout.
+/// why it is the default; the per-provider items (`Provider::tray_id`) are the
+/// opt-in layout.
 pub const TRAY_ID: &str = "usagebar";
-/// Per-provider items, used only in the "one icon per tool" layout.
-pub const CODEX_TRAY_ID: &str = "provider-codex";
-pub const CLAUDE_TRAY_ID: &str = "provider-claude";
-pub const CURSOR_TRAY_ID: &str = "provider-cursor";
-pub const OPENCODE_TRAY_ID: &str = "provider-opencode";
-pub const DEVIN_TRAY_ID: &str = "provider-devin";
-pub const ANTIGRAVITY_TRAY_ID: &str = "provider-antigravity";
-pub const GEMINI_TRAY_ID: &str = "provider-gemini";
 
 /// Unix timestamp (seconds) until which an announced-but-not-yet-landed reset
 /// is pending. While pending, the Codex tray title carries a ⚡ prefix so the
@@ -134,83 +123,16 @@ fn refresh_tray(app: &AppHandle) {
     });
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Provider {
-    Codex,
-    Claude,
-    Cursor,
-    OpenCode,
-    Devin,
-    Antigravity,
-    Gemini,
-}
-
+/// Menu-bar specifics; the rest of each provider's static data lives in
+/// `registry::Provider::info`.
 impl Provider {
-    pub const ALL: [Provider; 7] = [
-        Provider::Codex,
-        Provider::Claude,
-        Provider::Cursor,
-        Provider::OpenCode,
-        Provider::Devin,
-        Provider::Antigravity,
-        Provider::Gemini,
-    ];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Provider::Codex => crate::prefs::PROVIDER_CODEX,
-            Provider::Claude => crate::prefs::PROVIDER_CLAUDE,
-            Provider::Cursor => crate::prefs::PROVIDER_CURSOR,
-            Provider::OpenCode => crate::prefs::PROVIDER_OPENCODE,
-            Provider::Devin => crate::prefs::PROVIDER_DEVIN,
-            Provider::Antigravity => crate::prefs::PROVIDER_ANTIGRAVITY,
-            Provider::Gemini => crate::prefs::PROVIDER_GEMINI,
-        }
-    }
-
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Provider::Codex => "Codex",
-            Provider::Claude => "Claude Code",
-            Provider::Cursor => "Cursor",
-            Provider::OpenCode => "OpenCode Go",
-            Provider::Devin => "Devin",
-            Provider::Antigravity => "Antigravity",
-            Provider::Gemini => "Gemini CLI",
-        }
-    }
-
+    /// The provider's own item in the one-icon-per-tool layout.
     pub fn tray_id(self) -> &'static str {
-        match self {
-            Provider::Codex => CODEX_TRAY_ID,
-            Provider::Claude => CLAUDE_TRAY_ID,
-            Provider::Cursor => CURSOR_TRAY_ID,
-            Provider::OpenCode => OPENCODE_TRAY_ID,
-            Provider::Devin => DEVIN_TRAY_ID,
-            Provider::Antigravity => ANTIGRAVITY_TRAY_ID,
-            Provider::Gemini => GEMINI_TRAY_ID,
-        }
+        self.info().tray_id
     }
 
-    /// Menu-bar ink for this tool. Compact layout uses these as left-to-right
-    /// bars next to the percentages; extended layout paints the same colors
-    /// into each tool's logo. Distinct on purpose: purple Codex, coral Claude,
-    /// teal Cursor, indigo OpenCode, amber Devin, blue Antigravity, magenta
-    /// Gemini.
     fn color(self) -> [f64; 3] {
-        match self {
-            Provider::Codex => [140.0, 92.0, 240.0],
-            Provider::Claude => [217.0, 119.0, 87.0],
-            Provider::Cursor => [15.0, 157.0, 142.0],
-            Provider::OpenCode => [79.0, 70.0, 229.0],
-            Provider::Devin => [212.0, 132.0, 38.0],
-            Provider::Antigravity => [66.0, 133.0, 244.0],
-            Provider::Gemini => [203.0, 88.0, 192.0],
-        }
-    }
-
-    fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|provider| provider.key() == key)
+        self.info().color
     }
 }
 
@@ -515,34 +437,31 @@ struct ProviderView {
     present: bool,
 }
 
-fn view_from_state(
+fn view_from_reading(
     provider: Provider,
     prefs: &crate::prefs::AppPrefs,
     now: u64,
-    connection: ConnectionState,
-    rate_limits: Option<&Value>,
-    updated_at: Option<u64>,
+    reading: &Reading,
     incoming: bool,
-    always_listed: bool,
 ) -> ProviderView {
     let visible = prefs.is_visible(provider.key());
-    let found = connection != ConnectionState::CliNotFound;
-    let present = visible && (always_listed || found);
-    let windows = collect_windows(rate_limits);
+    let found = reading.connection != ConnectionState::CliNotFound;
+    let present = visible && (provider.always_listed() || found);
+    let windows = collect_windows(reading.rate_limits.as_ref());
     let selected = select_window(&windows, &prefs.tray_window(provider.key())).cloned();
     let seg = MeterSegment {
         present: present && selected.is_some(),
         remaining: selected.as_ref().map(remaining_percent).unwrap_or(0.0),
         resets_at: selected.as_ref().and_then(|window| window.resets_at),
-        incoming,
-        stale: stale_age(updated_at, now).is_some(),
+        incoming: incoming && provider.follows_reset_radar(),
+        stale: stale_age(reading.updated_at, now).is_some(),
     };
     ProviderView {
         provider,
         seg,
         windows,
         selected,
-        updated_at,
+        updated_at: reading.updated_at,
         present,
     }
 }
@@ -555,74 +474,21 @@ async fn all_provider_views(
     let incoming = app
         .try_state::<ResetRadar>()
         .is_some_and(|radar| radar.incoming_at(now));
-
-    let mut views = Vec::new();
-
-    if let Some(manager) = app.try_state::<CodexManager>() {
-        let state = manager.inner().snapshot().await;
-        views.push(view_from_state(
-            Provider::Codex,
+    let Some(meters) = app.try_state::<Meters>() else {
+        return Vec::new();
+    };
+    let mut views = Vec::with_capacity(Provider::ALL.len());
+    for meter in meters.iter() {
+        let reading = meter.reading().await;
+        views.push(view_from_reading(
+            meter.provider(),
             prefs,
             now,
-            state.connection,
-            state.rate_limits.as_ref(),
-            state.updated_at,
+            &reading,
             incoming,
-            true,
         ));
-    }
-    if let Some(manager) = app.try_state::<ClaudeManager>() {
-        let state = manager.inner().snapshot().await;
-        views.push(view_from_state(
-            Provider::Claude,
-            prefs,
-            now,
-            state.connection,
-            state.rate_limits.as_ref(),
-            state.updated_at,
-            false,
-            false,
-        ));
-    }
-    if let Some(manager) = app.try_state::<CursorManager>() {
-        let state = manager.inner().snapshot().await;
-        views.push(optional_view(Provider::Cursor, prefs, now, &state));
-    }
-    if let Some(manager) = app.try_state::<OpenCodeManager>() {
-        let state = manager.inner().snapshot().await;
-        views.push(optional_view(Provider::OpenCode, prefs, now, &state));
-    }
-    if let Some(manager) = app.try_state::<DevinManager>() {
-        let state = manager.inner().snapshot().await;
-        views.push(optional_view(Provider::Devin, prefs, now, &state));
-    }
-    if let Some(manager) = app.try_state::<AntigravityManager>() {
-        let state = manager.inner().snapshot().await;
-        views.push(optional_view(Provider::Antigravity, prefs, now, &state));
-    }
-    if let Some(manager) = app.try_state::<GeminiManager>() {
-        let state = manager.inner().snapshot().await;
-        views.push(optional_view(Provider::Gemini, prefs, now, &state));
     }
     views
-}
-
-fn optional_view(
-    provider: Provider,
-    prefs: &crate::prefs::AppPrefs,
-    now: u64,
-    state: &ProviderState,
-) -> ProviderView {
-    view_from_state(
-        provider,
-        prefs,
-        now,
-        state.connection,
-        state.rate_limits.as_ref(),
-        state.updated_at,
-        false,
-        false,
-    )
 }
 
 /// Repaints the menu bar in whichever layout the user chose, toggling the
@@ -634,17 +500,14 @@ pub async fn refresh_unified_tray(app: &AppHandle) {
     };
     let now = now_unix_seconds();
     let views = all_provider_views(app, &prefs, now).await;
+    let combined = prefs.combined_tray;
 
-    set_visible(app, TRAY_ID, prefs.combined_tray);
-    for provider in Provider::ALL {
-        let present = views
-            .iter()
-            .find(|view| view.provider == provider)
-            .is_some_and(|view| view.present);
-        set_visible(app, provider.tray_id(), !prefs.combined_tray && present);
+    set_visible(app, TRAY_ID, combined);
+    for view in &views {
+        set_visible(app, view.provider.tray_id(), !combined && view.present);
     }
 
-    if prefs.combined_tray {
+    if combined {
         let showing: Vec<Provider> = views
             .iter()
             .filter(|view| view.seg.present)
@@ -666,7 +529,7 @@ pub async fn refresh_unified_tray(app: &AppHandle) {
         }
     }
 
-    sync_menus(app, &prefs, &views);
+    sync_menus(app, &prefs, &views, combined);
 }
 
 fn set_visible(app: &AppHandle, id: &'static str, visible: bool) {
@@ -763,7 +626,12 @@ fn paint_combined_icon(app: &AppHandle, providers: &[Provider]) {
 
 /// Rebuilds whichever menus the active layout needs, but only when their window
 /// lists or preferences actually changed (native menu builds are not free).
-fn sync_menus(app: &AppHandle, prefs: &crate::prefs::AppPrefs, views: &[ProviderView]) {
+fn sync_menus(
+    app: &AppHandle,
+    prefs: &crate::prefs::AppPrefs,
+    views: &[ProviderView],
+    combined: bool,
+) {
     let windows_sig = |windows: &[TrayWindow]| {
         windows
             .iter()
@@ -780,7 +648,7 @@ fn sync_menus(app: &AppHandle, prefs: &crate::prefs::AppPrefs, views: &[Provider
     let shared = format!("{}|{}|{}", prefs.usage_alerts, prefs.combined_tray, pending);
     let listed: Vec<&ProviderView> = views.iter().filter(|view| view.present).collect();
 
-    if prefs.combined_tray {
+    if combined {
         let picker_sig = listed
             .iter()
             .map(|view| {
@@ -897,65 +765,27 @@ fn provider_tooltip(view: &ProviderView, now: u64) -> String {
     }
 }
 
+/// Refreshes every visible provider. Each runs on its own task, so one slow
+/// or timing-out backend does not hold the others behind it.
 pub fn refresh_all_providers(app: &AppHandle) {
     let prefs = app.state::<PrefsStore>().get();
-    let codex = app
-        .try_state::<CodexManager>()
-        .map(|state| state.inner().clone());
-    let claude = app
-        .try_state::<ClaudeManager>()
-        .map(|state| state.inner().clone());
-    let cursor = app
-        .try_state::<CursorManager>()
-        .map(|state| state.inner().clone());
-    let opencode = app
-        .try_state::<OpenCodeManager>()
-        .map(|state| state.inner().clone());
-    let devin = app
-        .try_state::<DevinManager>()
-        .map(|state| state.inner().clone());
-    let antigravity = app
-        .try_state::<AntigravityManager>()
-        .map(|state| state.inner().clone());
-    let gemini = app
-        .try_state::<GeminiManager>()
-        .map(|state| state.inner().clone());
+    for provider in Provider::ALL {
+        if prefs.is_visible(provider.key()) {
+            refresh_provider(app, provider);
+        }
+    }
+}
+
+/// A background refresh of one provider, e.g. right after it is shown again.
+pub fn refresh_provider(app: &AppHandle, provider: Provider) {
+    let Some(meter) = app
+        .try_state::<Meters>()
+        .map(|meters| meters.get(provider).clone())
+    else {
+        return;
+    };
     tauri::async_runtime::spawn(async move {
-        if prefs.is_visible(crate::prefs::PROVIDER_CODEX) {
-            if let Some(codex) = codex {
-                let _ = codex.refresh_or_start().await;
-            }
-        }
-        if prefs.is_visible(crate::prefs::PROVIDER_CLAUDE) {
-            if let Some(claude) = claude {
-                let _ = claude.refresh().await;
-            }
-        }
-        if prefs.is_visible(crate::prefs::PROVIDER_CURSOR) {
-            if let Some(cursor) = cursor {
-                let _ = cursor.refresh().await;
-            }
-        }
-        if prefs.is_visible(crate::prefs::PROVIDER_OPENCODE) {
-            if let Some(opencode) = opencode {
-                let _ = opencode.refresh().await;
-            }
-        }
-        if prefs.is_visible(crate::prefs::PROVIDER_DEVIN) {
-            if let Some(devin) = devin {
-                let _ = devin.refresh().await;
-            }
-        }
-        if prefs.is_visible(crate::prefs::PROVIDER_ANTIGRAVITY) {
-            if let Some(antigravity) = antigravity {
-                let _ = antigravity.refresh().await;
-            }
-        }
-        if prefs.is_visible(crate::prefs::PROVIDER_GEMINI) {
-            if let Some(gemini) = gemini {
-                let _ = gemini.refresh().await;
-            }
-        }
+        meter.background_refresh().await;
     });
 }
 
@@ -1034,13 +864,6 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
     }
 }
 
-fn now_unix_seconds() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
 /// Every tray item toggles the popover on a left click.
 fn on_left_click(tray: &tauri::tray::TrayIcon, event: TrayIconEvent) {
     if let TrayIconEvent::Click {
@@ -1074,7 +897,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     for provider in Provider::ALL {
         let menu = build_provider_menu(&handle, provider, &[])?;
         TrayIconBuilder::with_id(provider.tray_id())
-            .tooltip(&format!("{} usage", provider.display_name()))
+            .tooltip(format!("{} usage", provider.display_name()))
             .icon(provider_tray_icon(provider))
             .icon_as_template(false)
             .menu(&menu)
@@ -1085,7 +908,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     }
     set_visible(&handle, TRAY_ID, combined);
     if !combined {
-        set_visible(&handle, CODEX_TRAY_ID, true);
+        set_visible(&handle, Provider::Codex.tray_id(), true);
     }
     Ok(())
 }
@@ -1408,5 +1231,46 @@ mod tests {
         let indigo = pixel_at(17, 12);
         assert!(indigo[3] > 200);
         assert!(indigo[2] > indigo[0] + 80);
+    }
+
+    fn reading(connection: ConnectionState) -> Reading {
+        Reading {
+            connection,
+            rate_limits: Some(sample_payload()),
+            updated_at: Some(1_000),
+        }
+    }
+
+    #[test]
+    fn codex_is_listed_before_it_is_found_and_other_tools_only_once_found() {
+        let prefs = crate::prefs::AppPrefs::default();
+        let missing = reading(ConnectionState::CliNotFound);
+        let codex = view_from_reading(Provider::Codex, &prefs, 1_000, &missing, false);
+        assert!(codex.present);
+        let cursor = view_from_reading(Provider::Cursor, &prefs, 1_000, &missing, false);
+        assert!(!cursor.present);
+        assert!(!cursor.seg.present);
+        let found = reading(ConnectionState::Connected);
+        let cursor = view_from_reading(Provider::Cursor, &prefs, 1_000, &found, false);
+        assert!(cursor.present && cursor.seg.present);
+        // A tool the user hid stays off the menu bar whatever its state.
+        let mut hidden = crate::prefs::AppPrefs::default();
+        hidden.set_visible(Provider::Codex.key(), false);
+        let codex = view_from_reading(Provider::Codex, &hidden, 1_000, &found, false);
+        assert!(!codex.present && !codex.seg.present);
+    }
+
+    #[test]
+    fn only_codex_carries_the_reset_radar_marker() {
+        let prefs = crate::prefs::AppPrefs::default();
+        let found = reading(ConnectionState::Connected);
+        for provider in Provider::ALL {
+            let view = view_from_reading(provider, &prefs, 1_000, &found, true);
+            assert_eq!(
+                view.seg.incoming,
+                provider == Provider::Codex,
+                "{provider:?}"
+            );
+        }
     }
 }
