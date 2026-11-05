@@ -4788,6 +4788,7 @@ name = "usagebar"
 version = "0.2.4"
 dependencies = [
  "base64 0.22.1",
+ "dirs 6.0.0",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

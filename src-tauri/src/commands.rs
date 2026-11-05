@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use tauri::{AppHandle, Manager, State};
 
 use crate::antigravity::AntigravityManager;
@@ -8,6 +10,7 @@ use crate::devin::DevinManager;
 use crate::gemini::GeminiManager;
 use crate::opencode::OpenCodeManager;
 use crate::provider::ProviderState;
+use crate::registry::{Meters, Provider};
 
 #[tauri::command]
 pub async fn get_codex_state(manager: State<'_, CodexManager>) -> Result<CodexState, String> {
@@ -87,6 +90,27 @@ pub async fn refresh_gemini(manager: State<'_, GeminiManager>) -> Result<Provide
     manager.refresh().await
 }
 
+/// Any provider's snapshot by id. The per-provider commands above stay for
+/// the renderer that already calls them; this one needs no new code when a
+/// provider is added.
+#[tauri::command]
+pub async fn get_provider_state(
+    meters: State<'_, Meters>,
+    provider: String,
+) -> Result<serde_json::Value, String> {
+    meters.get(Provider::parse(&provider)?).state_json().await
+}
+
+/// The Retry button for any provider by id, with the same semantics as the
+/// matching `refresh_*` command.
+#[tauri::command]
+pub async fn refresh_provider(
+    meters: State<'_, Meters>,
+    provider: String,
+) -> Result<serde_json::Value, String> {
+    meters.get(Provider::parse(&provider)?).user_refresh().await
+}
+
 #[tauri::command]
 pub fn get_app_prefs(prefs: State<'_, crate::prefs::PrefsStore>) -> crate::prefs::AppPrefs {
     let mut prefs = prefs.get();
@@ -104,82 +128,40 @@ pub fn is_demo_mode() -> bool {
     crate::demo::enabled()
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrayWindowOptions {
-    pub codex: Vec<crate::tray::TrayWindow>,
-    pub claude: Vec<crate::tray::TrayWindow>,
-    pub cursor: Vec<crate::tray::TrayWindow>,
-    pub opencode: Vec<crate::tray::TrayWindow>,
-    pub devin: Vec<crate::tray::TrayWindow>,
-    pub antigravity: Vec<crate::tray::TrayWindow>,
-    pub gemini: Vec<crate::tray::TrayWindow>,
-}
-
-/// Windows each provider currently reports, for the in-app menu-bar picker.
+/// Windows each provider currently reports, for the in-app menu-bar picker,
+/// keyed by provider id (`{ "codex": [...], "claude": [...], ... }`).
 #[tauri::command]
 pub async fn get_tray_windows(
-    codex: State<'_, CodexManager>,
-    claude: State<'_, ClaudeManager>,
-    cursor: State<'_, CursorManager>,
-    opencode: State<'_, OpenCodeManager>,
-    devin: State<'_, DevinManager>,
-    antigravity: State<'_, AntigravityManager>,
-    gemini: State<'_, GeminiManager>,
-) -> Result<TrayWindowOptions, String> {
-    let codex_state = codex.snapshot().await;
-    let claude_state = claude.snapshot().await;
-    let cursor_state = cursor.snapshot().await;
-    let opencode_state = opencode.snapshot().await;
-    let devin_state = devin.snapshot().await;
-    let antigravity_state = antigravity.snapshot().await;
-    let gemini_state = gemini.snapshot().await;
-    Ok(TrayWindowOptions {
-        codex: crate::tray::collect_windows(codex_state.rate_limits.as_ref()),
-        claude: crate::tray::collect_windows(claude_state.rate_limits.as_ref()),
-        cursor: crate::tray::collect_windows(cursor_state.rate_limits.as_ref()),
-        opencode: crate::tray::collect_windows(opencode_state.rate_limits.as_ref()),
-        devin: crate::tray::collect_windows(devin_state.rate_limits.as_ref()),
-        antigravity: crate::tray::collect_windows(antigravity_state.rate_limits.as_ref()),
-        gemini: crate::tray::collect_windows(gemini_state.rate_limits.as_ref()),
-    })
+    meters: State<'_, Meters>,
+) -> Result<BTreeMap<&'static str, Vec<crate::tray::TrayWindow>>, String> {
+    let mut windows = BTreeMap::new();
+    for meter in meters.iter() {
+        let reading = meter.reading().await;
+        windows.insert(
+            meter.provider().key(),
+            crate::tray::collect_windows(reading.rate_limits.as_ref()),
+        );
+    }
+    Ok(windows)
 }
 
 #[tauri::command]
 pub fn set_tray_window(app: AppHandle, provider: String, window: String) -> Result<(), String> {
-    match provider.as_str() {
-        crate::prefs::PROVIDER_CODEX
-        | crate::prefs::PROVIDER_CLAUDE
-        | crate::prefs::PROVIDER_CURSOR
-        | crate::prefs::PROVIDER_OPENCODE
-        | crate::prefs::PROVIDER_DEVIN
-        | crate::prefs::PROVIDER_ANTIGRAVITY
-        | crate::prefs::PROVIDER_GEMINI => {}
-        other => return Err(format!("Unknown provider: {other}")),
-    }
+    let provider = Provider::parse(&provider)?;
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.set_tray_window(&provider, window));
+        .update(|prefs| prefs.set_tray_window(provider.key(), window));
     crate::tray::apply_preference_change(&app);
     Ok(())
 }
 
 #[tauri::command]
 pub fn set_provider_visible(app: AppHandle, provider: String, visible: bool) -> Result<(), String> {
-    match provider.as_str() {
-        crate::prefs::PROVIDER_CODEX
-        | crate::prefs::PROVIDER_CLAUDE
-        | crate::prefs::PROVIDER_CURSOR
-        | crate::prefs::PROVIDER_OPENCODE
-        | crate::prefs::PROVIDER_DEVIN
-        | crate::prefs::PROVIDER_ANTIGRAVITY
-        | crate::prefs::PROVIDER_GEMINI => {}
-        other => return Err(format!("Unknown provider: {other}")),
-    }
+    let provider = Provider::parse(&provider)?;
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.set_visible(&provider, visible));
+        .update(|prefs| prefs.set_visible(provider.key(), visible));
     crate::tray::apply_preference_change(&app);
     if visible {
-        crate::tray::refresh_all_providers(&app);
+        crate::tray::refresh_provider(&app, provider);
     }
     Ok(())
 }
@@ -188,6 +170,15 @@ pub fn set_provider_visible(app: AppHandle, provider: String, visible: bool) -> 
 pub fn set_usage_alerts(app: AppHandle, enabled: bool) {
     app.state::<crate::prefs::PrefsStore>()
         .update(|prefs| prefs.usage_alerts = enabled);
+    crate::tray::apply_preference_change(&app);
+}
+
+/// "Runs out before it resets at this pace" notifications. They also need
+/// `usage_alerts` on; this switch only narrows what that one allows.
+#[tauri::command]
+pub fn set_pace_alerts(app: AppHandle, enabled: bool) {
+    app.state::<crate::prefs::PrefsStore>()
+        .update(|prefs| prefs.pace_alerts = enabled);
     crate::tray::apply_preference_change(&app);
 }
 

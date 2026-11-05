@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronUp, Clock3, Diamond, MousePointer2, PlugZap, Power, RefreshCw, Settings2, ShieldCheck, Sparkle, Sparkles, Terminal, Ticket } from "lucide-react";
+import { ChevronUp, Clock3, PlugZap, Power, RefreshCw, Settings2, ShieldCheck, Ticket } from "lucide-react";
 import { MeterMark } from "./components/MeterMark";
 import { meterTone } from "./components/EdgeMeter";
 import { QuotaSection } from "./components/QuotaSection";
@@ -15,13 +15,16 @@ import { ProviderSection } from "./components/ProviderSection";
 import { MissingProviders } from "./components/MissingProviders";
 import { Onboarding } from "./components/Onboarding";
 import { Freshness } from "./components/Freshness";
-import { useCodexMeter } from "./hooks/useCodexMeter";
-import { useClaudeMeter, useCursorMeter, useDevinMeter, useOpenCodeMeter, useAntigravityMeter, useGeminiMeter } from "./hooks/useClaudeMeter";
+import { useProviderMeters } from "./hooks/useProviderMeters";
+import { NowProvider, WithNow, useNow } from "./hooks/useNow";
 import {
   DEFAULT_PREFS,
+  PROVIDER_CATALOG,
+  isPresent,
   isVisible,
   missingProviders,
   normalizePrefs,
+  onboardingStatus,
   type AppPrefs,
 } from "./lib/providers";
 import { useResetEvents } from "./features/tibo-watch/useResetEvents";
@@ -29,9 +32,15 @@ import { upcomingReset } from "./features/tibo-watch/provider";
 import { notifyFreshResets } from "./features/tibo-watch/notifications";
 import { formatCountdown, windowDurationLabel } from "./lib/rateLimits";
 import { demoMode } from "./lib/demo";
+import { isLiveReading } from "./lib/time";
 import { previewPrefs, previewResetEvent } from "./lib/preview";
 import type { RateLimitBucket } from "./types/codex";
-import { deviceName, isWindows, trayName } from "./lib/platform";
+import { deviceName, trayName } from "./lib/platform";
+
+const inTauri = () => "__TAURI_INTERNALS__" in window;
+
+/** The tools that render through ProviderSection; Codex has its own block. */
+const SECTION_PROVIDERS = PROVIDER_CATALOG.filter((provider) => provider.id !== "codex");
 
 function headerResetText(bucket: RateLimitBucket, now: number): string {
   const countdown = bucket.resetsAt
@@ -43,18 +52,30 @@ function headerResetText(bucket: RateLimitBucket, now: number): string {
   return countdown || "Renewal unavailable";
 }
 
+/** The header's countdown line: the one piece of the shell that ticks. */
+function HeaderRenewal({ bucket }: { bucket: RateLimitBucket }) {
+  const now = useNow();
+  return (
+    <strong data-tauri-drag-region><Clock3 size={12} strokeWidth={2} aria-hidden="true" />{headerResetText(bucket, now)}</strong>
+  );
+}
+
 export default function App() {
-  const { state, buckets, resetCredits, usage, refreshing, refresh } = useCodexMeter();
-  const claude = useClaudeMeter();
-  const cursor = useCursorMeter();
-  const opencode = useOpenCodeMeter();
-  const devin = useDevinMeter();
-  const antigravity = useAntigravityMeter();
-  const gemini = useGeminiMeter();
+  // The clock sits above the popover so a tick re-renders only the
+  // countdowns, not the shell, the meters' derived lists or an open sheet.
+  return (
+    <NowProvider>
+      <Popover />
+    </NowProvider>
+  );
+}
+
+function Popover() {
+  const meters = useProviderMeters();
+  const { state, buckets, resetCredits, usage, refresh } = meters.codex;
   const [prefs, setPrefs] = useState<AppPrefs>(
     () => previewPrefs(window.location.search) ?? DEFAULT_PREFS,
   );
-  const [now, setNow] = useState(Date.now());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
   const [demo, setDemo] = useState(false);
@@ -71,7 +92,9 @@ export default function App() {
   }, []);
 
   // Recording scripts drive the real window over `usagebar://demo`. The
-  // listener is inert unless the process was started in demo mode.
+  // listener is always registered, but only the backend's demo control
+  // (started by --demo / USAGEBAR_DEMO=1) emits the event, and the browser
+  // simulator (docs/SIMULATION.md) drives Settings and scrolling through it.
   useEffect(() => {
     let active = true;
     void demoMode().then((on) => {
@@ -79,7 +102,7 @@ export default function App() {
       setDemo(on);
       if (on) document.documentElement.dataset.demo = "";
     });
-    if (!("__TAURI_INTERNALS__" in window)) {
+    if (!inTauri()) {
       return () => {
         active = false;
       };
@@ -104,15 +127,19 @@ export default function App() {
 
   // First run shows the walkthrough; the tray's Setup Guide item reopens it.
   useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) {
+    if (!inTauri()) {
       setOnboarding(new URLSearchParams(window.location.search).has("onboarding"));
       return;
     }
     let active = true;
+    // A prefs event can beat the initial read (the user toggles a meter in
+    // the tray menu while the webview boots). The read is then older than
+    // what is on screen, so it must not roll the toggle back.
+    let heardEvent = false;
     void invoke<AppPrefs>("get_app_prefs")
       .then((next) => {
         if (!active) return;
-        setPrefs(normalizePrefs(next));
+        if (!heardEvent) setPrefs(normalizePrefs(next));
         setOnboarding(!next.onboardingComplete);
       })
       .catch(() => undefined);
@@ -120,7 +147,9 @@ export default function App() {
       if (active) setOnboarding(true);
     });
     const unlistenPrefs = listen<AppPrefs>("usagebar://prefs", (event) => {
-      if (active) setPrefs(normalizePrefs(event.payload));
+      if (!active) return;
+      heardEvent = true;
+      setPrefs(normalizePrefs(event.payload));
     });
     return () => {
       active = false;
@@ -129,19 +158,15 @@ export default function App() {
     };
   }, []);
 
-  const closeOnboarding = () => {
+  const closeOnboarding = useCallback(() => {
     setOnboarding(false);
-    if ("__TAURI_INTERNALS__" in window) void invoke("complete_onboarding");
-  };
-  useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(interval);
+    if (inTauri()) void invoke("complete_onboarding");
   }, []);
   useEffect(() => {
     void notifyFreshResets(resetEvents, Date.now(), { enabled: prefs.resetAlerts });
   }, [resetEvents, prefs.resetAlerts]);
   useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!inTauri()) return;
     const upcoming = upcomingReset(resetEvents);
     const until = upcoming?.occursAt
       ? Math.floor(Date.parse(upcoming.occursAt) / 1000)
@@ -154,61 +179,50 @@ export default function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // A control that already used the key (an IME closing its candidate
+      // list, a field clearing itself) owns this press. A held key repeats:
+      // one press must close one layer, not every layer and then the window.
+      if (event.defaultPrevented || event.isComposing || event.repeat) return;
       if (settingsOpen) {
         setSettingsOpen(false);
         return;
       }
       if (onboarding) {
-        setOnboarding(false);
-        if ("__TAURI_INTERNALS__" in window) void invoke("complete_onboarding");
+        closeOnboarding();
         return;
       }
-      if ("__TAURI_INTERNALS__" in window) void invoke("hide_window");
+      if (inTauri()) void invoke("hide_window");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, onboarding]);
+  }, [settingsOpen, onboarding, closeOnboarding]);
+
   const showCodex = isVisible(prefs, "codex");
-  const showClaude = isVisible(prefs, "claude");
-  const showCursor = isVisible(prefs, "cursor");
-  const showOpenCode = isVisible(prefs, "opencode");
-  const showDevin = isVisible(prefs, "devin");
-  const showAntigravity = isVisible(prefs, "antigravity");
-  const showGemini = isVisible(prefs, "gemini");
   const connected = state.connection === "connected";
-  const visibleBuckets = [
-    ...(showCodex ? buckets : []),
-    ...(showClaude ? claude.buckets : []),
-    ...(showCursor ? cursor.buckets : []),
-    ...(showOpenCode ? opencode.buckets : []),
-    ...(showDevin ? devin.buckets : []),
-    ...(showAntigravity ? antigravity.buckets : []),
-    ...(showGemini ? gemini.buckets : []),
-  ];
+  const visibleBuckets = PROVIDER_CATALOG.flatMap((provider) =>
+    isVisible(prefs, provider.id) ? meters[provider.id].buckets : [],
+  );
   const mostCooked = visibleBuckets.reduce<(typeof visibleBuckets)[number] | undefined>(
     (lowest, bucket) => !lowest || bucket.remainingPercent < lowest.remainingPercent ? bucket : lowest,
     undefined,
   );
-  const anyRefreshing = refreshing || claude.refreshing || cursor.refreshing || opencode.refreshing || devin.refreshing || antigravity.refreshing || gemini.refreshing;
+  const anyRefreshing = PROVIDER_CATALOG.some((provider) => meters[provider.id].refreshing);
+  // Any shown tool still on its first read means the header is waiting, not
+  // offline. Codex used to be the only one asked, so with Codex hidden the
+  // header said "Offline" while every other meter was still connecting.
+  const anyConnecting = PROVIDER_CATALOG.some(
+    (provider) => isVisible(prefs, provider.id) && meters[provider.id].state.connection === "starting",
+  );
 
   // Every provider renders nothing while its login is absent (cli_not_found)
   // or still starting, so a Mac with no tools — or every meter hidden — would
   // show a blank card between the header and footer. Detect that exact case
   // and say what to do next instead.
   const codexRenders = showCodex && state.connection !== "cli_not_found";
-  const otherMeters = [
-    { show: showClaude, connection: claude.state.connection },
-    { show: showCursor, connection: cursor.state.connection },
-    { show: showOpenCode, connection: opencode.state.connection },
-    { show: showDevin, connection: devin.state.connection },
-    { show: showAntigravity, connection: antigravity.state.connection },
-    { show: showGemini, connection: gemini.state.connection },
-  ];
-  const othersRender = otherMeters.some(
-    ({ show, connection }) =>
-      show && connection !== "cli_not_found" && connection !== "starting",
+  const othersRender = SECTION_PROVIDERS.some(
+    (provider) => isVisible(prefs, provider.id) && isPresent(meters[provider.id].state),
   );
-  const nothingEnabled = !showCodex && otherMeters.every(({ show }) => !show);
+  const nothingEnabled = PROVIDER_CATALOG.every((provider) => !isVisible(prefs, provider.id));
 
   return (
     <main className="app-shell" data-tauri-drag-region>
@@ -222,7 +236,7 @@ export default function App() {
         className="dismiss-button"
         aria-label={`Hide UsageBar to the ${trayName}`}
         onClick={() => {
-          if ("__TAURI_INTERNALS__" in window) void invoke("hide_window");
+          if (inTauri()) void invoke("hide_window");
         }}
       >
         <ChevronUp size={15} strokeWidth={2.5} aria-hidden="true" />
@@ -238,7 +252,7 @@ export default function App() {
           if (event.button !== 0) return;
           if (!(event.target instanceof Element)) return;
           if (!event.target.hasAttribute("data-tauri-drag-region")) return;
-          if ("__TAURI_INTERNALS__" in window) {
+          if (inTauri()) {
             void getCurrentWindow().startDragging();
           }
         }}
@@ -246,9 +260,9 @@ export default function App() {
         <div className="header-toolbar" data-tauri-drag-region>
           <div className="brand-row" data-tauri-drag-region>
             <MeterMark />
-              <div data-tauri-drag-region>
-                <h1 data-tauri-drag-region>UsageBar</h1>
-                <p data-tauri-drag-region>{demo ? "Demo data" : "Usage meter"}</p>
+            <div data-tauri-drag-region>
+              <h1 data-tauri-drag-region>UsageBar</h1>
+              <p data-tauri-drag-region>{demo ? "Demo data" : "Usage meter"}</p>
             </div>
           </div>
           <span className="toolbar-divider" aria-hidden="true" />
@@ -263,7 +277,7 @@ export default function App() {
               </div>
               <div className="status-copy" data-tauri-drag-region>
                 <span className="status-eyebrow" data-tauri-drag-region><i aria-hidden="true" />Left · {windowDurationLabel(mostCooked.windowDurationMins)}</span>
-                <strong data-tauri-drag-region><Clock3 size={12} strokeWidth={2} aria-hidden="true" />{headerResetText(mostCooked, now)}</strong>
+                <HeaderRenewal bucket={mostCooked} />
               </div>
             </div>
           ) : (
@@ -271,7 +285,7 @@ export default function App() {
               <span className="connection-orb" aria-hidden="true" />
               <div className="status-copy" data-tauri-drag-region>
                 <span className="status-eyebrow" data-tauri-drag-region>Status</span>
-                <strong data-tauri-drag-region>{showCodex && state.connection === "starting" ? "Connecting…" : "Offline"}</strong>
+                <strong data-tauri-drag-region>{anyConnecting ? "Connecting…" : "Offline"}</strong>
               </div>
             </div>
           )}
@@ -279,7 +293,7 @@ export default function App() {
       </header>
 
       <div className="content-scroll">
-        {showCodex ? <ResetAlert now={now} events={resetEvents} /> : null}
+        {showCodex ? <WithNow>{(now) => <ResetAlert now={now} events={resetEvents} />}</WithNow> : null}
         {showCodex && !connected ? (
           <ConnectionStateView
             state={state}
@@ -288,13 +302,28 @@ export default function App() {
           />
         ) : showCodex && buckets.length ? (
           <>
-            <div className="section-label provider-label codex-label">
-              <span>Codex</span>
-              <Freshness updatedAt={state.updatedAt} now={now} />
-            </div>
-            <div className="quota-list">
-              {buckets.map((bucket) => <QuotaSection key={bucket.id} provider="codex" bucket={bucket} now={now} dense={prefs.denseLayout} />)}
-            </div>
+            <WithNow>
+              {(now) => (
+                <>
+                  <div className="section-label provider-label codex-label">
+                    <span>Codex</span>
+                    <Freshness updatedAt={state.updatedAt} now={now} />
+                  </div>
+                  <div className="quota-list">
+                    {buckets.map((bucket) => (
+                      <QuotaSection
+                        key={bucket.id}
+                        provider="codex"
+                        bucket={bucket}
+                        now={now}
+                        dense={prefs.denseLayout}
+                        live={isLiveReading(state.connection, state.updatedAt, now)}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </WithNow>
             {resetCredits.availableCount > 0 ? (
               <div className="reset-credit" title="Reset credits on your Codex account. Each one renews a window on demand.">
                 <Ticket size={15} aria-hidden="true" /><strong>{resetCredits.availableCount}</strong> reset credit{resetCredits.availableCount === 1 ? "" : "s"} on your account
@@ -310,77 +339,22 @@ export default function App() {
             <button className="secondary-button" onClick={() => void refresh()}>Refresh</button>
           </div>
         ) : null}
-        {showCodex && (connected || othersRender) ? <TiboWatch now={now} events={resetEvents} /> : null}
-        {showClaude ? (
-          <ProviderSection
-            id="claude"
-            label="Claude Code"
-            icon={<Sparkles size={14} aria-hidden="true" />}
-            meter={claude}
-            now={now}
-            dense={prefs.denseLayout}
-            signedOutHint={
-              isWindows
-                ? "the stored Claude Code login is stale. Open Claude Code to renew its login, then click Refresh. The desktop Claude app uses a different login than the `claude` CLI."
-                : "the stored Claude Code login is stale. Click Refresh — macOS may ask once to read the Keychain item Claude Code already keeps. Always Allow stops that sheet. The desktop Claude app uses a different login than the `claude` CLI."
-            }
-          />
+        {showCodex && (connected || othersRender) ? (
+          <WithNow>{(now) => <TiboWatch now={now} events={resetEvents} />}</WithNow>
         ) : null}
-        {showCursor ? (
-          <ProviderSection
-            id="cursor"
-            label="Cursor"
-            icon={<MousePointer2 size={14} aria-hidden="true" />}
-            meter={cursor}
-            now={now}
-            dense={prefs.denseLayout}
-            signedOutHint="the stored Cursor login was rejected. Sign in through the Cursor app, then retry."
-          />
-        ) : null}
-        {showOpenCode ? (
-          <ProviderSection
-            id="opencode"
-            label="OpenCode Go"
-            icon={<Terminal size={14} aria-hidden="true" />}
-            meter={opencode}
-            now={now}
-            dense={prefs.denseLayout}
-            signedOutHint="the stored OpenCode Go key was rejected. Sign in again with `/connect` and choose OpenCode Go."
-          />
-        ) : null}
-        {showDevin ? (
-          <ProviderSection
-            id="devin"
-            label="Devin"
-            icon={<Diamond size={14} aria-hidden="true" />}
-            meter={devin}
-            now={now}
-            dense={prefs.denseLayout}
-            signedOutHint="the stored Devin CLI login was rejected. Sign in again with `devin auth login`."
-          />
-        ) : null}
-        {showAntigravity ? (
-          <ProviderSection
-            id="antigravity"
-            label="Antigravity"
-            icon={<Sparkle size={14} aria-hidden="true" />}
-            meter={antigravity}
-            now={now}
-            dense={prefs.denseLayout}
-            signedOutHint="open the Antigravity app and sign in there. UsageBar reads quota from the running app."
-          />
-        ) : null}
-        {showGemini ? (
-          <ProviderSection
-            id="gemini"
-            label="Gemini CLI"
-            icon={<Sparkle size={14} aria-hidden="true" />}
-            meter={gemini}
-            now={now}
-            dense={prefs.denseLayout}
-            signedOutHint="run `gemini` and sign in with a paid/Workspace Google account. Personal accounts no longer get quota access."
-          />
-        ) : null}
+        {SECTION_PROVIDERS.map(({ id, label, icon: Icon, signedOutHint }) =>
+          isVisible(prefs, id) ? (
+            <ProviderSection
+              key={id}
+              id={id}
+              label={label}
+              icon={Icon ? <Icon size={14} aria-hidden="true" /> : null}
+              meter={meters[id]}
+              dense={prefs.denseLayout}
+              signedOutHint={signedOutHint ?? ""}
+            />
+          ) : null,
+        )}
         {!codexRenders && !othersRender ? (
           <div className="state-panel glass-tile" role="status">
             <PlugZap size={22} strokeWidth={1.8} aria-hidden="true" />
@@ -396,15 +370,10 @@ export default function App() {
           </div>
         ) : null}
         <MissingProviders
-          items={missingProviders(prefs, {
-            codex: state,
-            claude: claude.state,
-            cursor: cursor.state,
-            opencode: opencode.state,
-            devin: devin.state,
-            antigravity: antigravity.state,
-            gemini: gemini.state,
-          })}
+          items={missingProviders(
+            prefs,
+            Object.fromEntries(PROVIDER_CATALOG.map(({ id }) => [id, meters[id].state])),
+          )}
         />
       </div>
 
@@ -415,22 +384,20 @@ export default function App() {
         <button
           className="icon-button"
           onClick={() => {
-            if (showCodex) void refresh();
-            if (showClaude) void claude.refresh();
-            if (showCursor) void cursor.refresh();
-            if (showOpenCode) void opencode.refresh();
-            if (showDevin) void devin.refresh();
-            if (showAntigravity) void antigravity.refresh();
-            if (showGemini) void gemini.refresh();
+            for (const provider of PROVIDER_CATALOG) {
+              if (isVisible(prefs, provider.id)) void meters[provider.id].refresh();
+            }
           }}
           disabled={anyRefreshing}
           aria-label="Refresh usage data"
           title="Refresh"
         >
-          <RefreshCw size={17} className={anyRefreshing ? "spinning" : ""} />
+          <RefreshCw size={17} className={anyRefreshing ? "spinning" : ""} aria-hidden="true" />
         </button>
-        <button className="icon-button danger-hover" onClick={() => void invoke("quit_app")} aria-label="Quit UsageBar" title="Quit">
-          <Power size={17} />
+        <button className="icon-button danger-hover" onClick={() => {
+            if (inTauri()) void invoke("quit_app");
+          }} aria-label="Quit UsageBar" title="Quit">
+          <Power size={17} aria-hidden="true" />
         </button>
       </footer>
       {settingsOpen ? (
@@ -445,82 +412,13 @@ export default function App() {
       {onboarding ? (
         <Onboarding
           onClose={closeOnboarding}
-          providers={[
-            {
-              label: "Codex",
-              connected,
-              detail: connected
-                ? "Connected through the Codex app server"
-                : state.diagnostic ?? "Sign in with the codex CLI, then retry",
-              onRetry: () => void refresh(),
-            },
-            ...(claude.state.connection === "cli_not_found"
-              ? []
-              : [{
-                  label: "Claude Code",
-                  connected: claude.state.connection === "connected",
-                  detail:
-                    claude.state.connection === "connected"
-                      ? "Reading the login kept by the claude command-line tool"
-                      : claude.state.diagnostic ?? "Sign in with the claude command-line tool",
-                  onRetry: () => void claude.refresh(),
-                }]),
-            ...(cursor.state.connection === "cli_not_found"
-              ? []
-              : [{
-                  label: "Cursor",
-                  connected: cursor.state.connection === "connected",
-                  detail:
-                    cursor.state.connection === "connected"
-                      ? "Reading the login kept by the Cursor app"
-                      : cursor.state.diagnostic ?? "Sign in through the Cursor app",
-                  onRetry: () => void cursor.refresh(),
-                }]),
-            ...(opencode.state.connection === "cli_not_found"
-              ? []
-              : [{
-                  label: "OpenCode Go",
-                  connected: opencode.state.connection === "connected",
-                  detail:
-                    opencode.state.connection === "connected"
-                      ? "Reading the OpenCode Go key from auth.json"
-                      : opencode.state.diagnostic ?? "Sign in with /connect and choose OpenCode Go",
-                  onRetry: () => void opencode.refresh(),
-                }]),
-            ...(devin.state.connection === "cli_not_found"
-              ? []
-              : [{
-                  label: "Devin",
-                  connected: devin.state.connection === "connected",
-                  detail:
-                    devin.state.connection === "connected"
-                      ? "Reading the login kept by the Devin CLI"
-                      : devin.state.diagnostic ?? "Sign in with `devin auth login`",
-                  onRetry: () => void devin.refresh(),
-                }]),
-            ...(antigravity.state.connection === "cli_not_found"
-              ? []
-              : [{
-                  label: "Antigravity",
-                  connected: antigravity.state.connection === "connected",
-                  detail:
-                    antigravity.state.connection === "connected"
-                      ? "Reading the login kept by Antigravity"
-                      : antigravity.state.diagnostic ?? "Open the Antigravity app and sign in",
-                  onRetry: () => void antigravity.refresh(),
-                }]),
-            ...(gemini.state.connection === "cli_not_found"
-              ? []
-              : [{
-                  label: "Gemini CLI",
-                  connected: gemini.state.connection === "connected",
-                  detail:
-                    gemini.state.connection === "connected"
-                      ? "Reading the login kept by the gemini CLI"
-                      : gemini.state.diagnostic ?? "Run `gemini` and sign in",
-                  onRetry: () => void gemini.refresh(),
-                }]),
-          ]}
+          providers={PROVIDER_CATALOG.flatMap((provider) => {
+            const meter = meters[provider.id];
+            const status = onboardingStatus(provider, meter.state);
+            return status
+              ? [{ label: provider.label, ...status, onRetry: () => void meter.refresh() }]
+              : [];
+          })}
         />
       ) : null}
     </main>

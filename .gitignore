@@ -1,5 +1,6 @@
 # Dependencies and build output
 node_modules/
+node_modules
 dist/
 target/
 src-tauri/target/
@@ -15,3 +16,6 @@ fill.log
 
 # OS noise
 .DS_Store
+
+# Simulation harness output (npm run sim:shots / sim:linux)
+sim-shots/

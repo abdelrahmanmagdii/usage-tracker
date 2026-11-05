@@ -11,10 +11,25 @@ const TICK_MS = 60 * 1000;
 const MIN_GAP_MS = 30 * 1000;
 const SHARED_EVENTS_KEY = "codex-meter.shared-reset-events.v1";
 
-function readCachedEvents(): ResetEvent[] {
+/**
+ * Last poll's events, shown until the first live poll lands. Entries are
+ * checked for the fields every consumer dereferences, so one corrupt entry
+ * cannot crash the popover on launch. They are not re-normalized: that would
+ * drop the `sample` flag that keeps sample events out of notifications.
+ */
+export function readCachedEvents(): ResetEvent[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(SHARED_EVENTS_KEY) ?? "[]");
-    return Array.isArray(value) ? (value as ResetEvent[]) : [];
+    return Array.isArray(value)
+      ? value.filter(
+          (event): event is ResetEvent =>
+            typeof event === "object" &&
+            event !== null &&
+            typeof (event as ResetEvent).id === "string" &&
+            typeof (event as ResetEvent).announcedAt === "string" &&
+            typeof (event as ResetEvent).source === "string",
+        )
+      : [];
   } catch {
     return [];
   }
@@ -39,14 +54,21 @@ export function useResetEvents(): ResetEvent[] {
   useEffect(() => {
     let active = true;
     let lastLoad = 0;
+    // A focus nudge can start a poll while a slow one is still out. Results
+    // apply in the order the polls started, so an older response arriving
+    // late never replaces a newer one.
+    let requests = 0;
+    let applied = 0;
     const load = (nudge = false) => {
       const now = Date.now();
       if (lastLoad && !shouldLoad(lastLoad, now, nudge)) return;
       lastLoad = now;
+      const request = ++requests;
       void providerRef.current
         ?.listEvents()
         .then((next) => {
-          if (!active) return;
+          if (!active || request < applied) return;
+          applied = request;
           setEvents(next);
           try {
             localStorage.setItem(SHARED_EVENTS_KEY, JSON.stringify(next));

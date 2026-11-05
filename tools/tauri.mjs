@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { tauriArgs } from "./tauri-args.mjs";
 
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -17,7 +18,12 @@ if (process.platform === "win32") {
     process.env[pathKey] = `${process.env[pathKey] || ""};${cargoBin}`;
   }
 }
-const result = spawnSync(process.execPath, [cli, ...process.argv.slice(2)], {
+const { args, note } = tauriArgs(process.argv.slice(2), {
+  env: process.env,
+  platform: process.platform,
+});
+if (note) console.error(note);
+const result = spawnSync(process.execPath, [cli, ...args], {
   cwd: root,
   stdio: "inherit",
 });

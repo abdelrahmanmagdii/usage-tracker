@@ -31,9 +31,9 @@
     </div>
   </header>
   <main id="main" class="page">
-    <p class="kicker">13 September 2026</p>
+    <p class="kicker">5 November 2026</p>
     <h1>Privacy</h1>
-    <p>UsageBar is a Mac menu bar app I made. There’s no account with me. Your quota, credentials, and file paths don’t go to a UsageBar server — there isn’t one.</p>
+    <p>UsageBar is a Mac menu bar app (with a Windows beta) I made. There’s no account with me. Your quota, credentials, and file paths don’t go to a UsageBar server — there isn’t one.</p>
     <section class="sec">
       <h2>What it reads on this Mac</h2>
       <p>To draw the meters it talks to tools you already installed:</p>
@@ -43,7 +43,7 @@
         <li>Cursor’s local login database, then Cursor’s usage API.</li>
         <li>OpenCode Go’s <code>auth.json</code>, then OpenCode’s usage API.</li>
         <li>Devin CLI’s <code>~/.local/share/devin/credentials.toml</code>, then Cognition’s usage API.</li>
-        <li>Antigravity from Keychain or <code>~/.gemini</code>, then Google Cloud Code’s usage endpoint.</li>
+        <li>Antigravity from the running Antigravity app on this computer. If the app is closed, a still-valid token from Keychain or <code>~/.gemini</code> goes only to Google Cloud Code’s usage endpoint.</li>
         <li>Gemini CLI’s <code>~/.gemini/oauth_creds.json</code>, then Google’s quota endpoint.</li>
       </ul>
       <p>Those companies process that traffic under their own policies. I don’t get a copy.</p>
@@ -54,7 +54,7 @@
     </section>
     <section class="sec">
       <h2>Network</h2>
-      <p>Provider usage endpoints, plus a public JSON feed of reset announcements on GitHub. That’s it.</p>
+      <p>Provider usage endpoints; the reset-announcement feed (a public JSON file on GitHub, plus public Bluesky posts read through <code>public.api.bsky.app</code>); and, on the Mac, GitHub Releases to check for app updates. That’s it.</p>
     </section>
     <section class="sec">
       <h2>Kids</h2>

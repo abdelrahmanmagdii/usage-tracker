@@ -195,11 +195,8 @@ async fn load_go_key() -> CredentialRead {
                 .to_owned(),
         );
     };
-    match tokio::fs::read_to_string(&path).await {
-        Ok(contents) => match parse_go_key(&contents) {
-            Some(key) => CredentialRead::Found(key),
-            None => CredentialRead::Absent,
-        },
+    match crate::platform::read_capped(&path, crate::platform::CREDENTIAL_FILE_LIMIT).await {
+        Ok(contents) => classify_auth_json(&contents),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => CredentialRead::Absent,
         Err(error) => {
             CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display()))
@@ -207,17 +204,30 @@ async fn load_go_key() -> CredentialRead {
     }
 }
 
+/// A file that is not JSON is most likely one OpenCode is rewriting right
+/// now, so it is a passing read failure that keeps the last meter. Only a
+/// well-formed file without a Go entry means there is no Go login.
+fn classify_auth_json(contents: &[u8]) -> CredentialRead {
+    let Ok(value) = serde_json::from_slice::<Value>(contents) else {
+        return CredentialRead::Unavailable("OpenCode's auth.json could not be parsed".to_owned());
+    };
+    match parse_go_key(&value) {
+        Some(key) => CredentialRead::Found(key),
+        None => CredentialRead::Absent,
+    }
+}
+
 fn auth_json_path() -> Option<std::path::PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+    // XDG says an empty value means "use the default".
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|xdg| !xdg.is_empty()) {
         return Some(std::path::PathBuf::from(xdg).join("opencode/auth.json"));
     }
     let home = crate::platform::home_dir()?;
-    Some(std::path::PathBuf::from(home).join(".local/share/opencode/auth.json"))
+    Some(home.join(".local/share/opencode/auth.json"))
 }
 
 /// Pulls the OpenCode Go API key and ignores Zen (`opencode`) entries.
-fn parse_go_key(raw: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(raw.trim()).ok()?;
+fn parse_go_key(value: &Value) -> Option<String> {
     let object = value.as_object()?;
     for id in GO_PROVIDER_IDS {
         if let Some(entry) = object.get(*id) {
@@ -226,16 +236,28 @@ fn parse_go_key(raw: &str) -> Option<String> {
             }
         }
     }
-    // Some builds store Go under a key that merely contains "go".
-    for (id, entry) in object {
-        let lower = id.to_ascii_lowercase();
-        if lower.contains("go") && !lower.contains("google") && !lower.contains("golang") {
-            if let Some(key) = key_from_entry(entry) {
-                return Some(key);
-            }
-        }
+    // Some builds store Go under another id that still names it.
+    object
+        .iter()
+        .filter(|(id, _)| names_go_subscription(id))
+        .find_map(|(_, entry)| key_from_entry(entry))
+}
+
+/// Whether an `auth.json` provider id is OpenCode Go. The key is sent to
+/// opencode.ai, so this must never match another vendor's entry: a bare
+/// substring test for "go" also picked up ids such as `algolia`, `mongodb`,
+/// or `cargo`, and would have sent that vendor's API key to OpenCode.
+fn names_go_subscription(id: &str) -> bool {
+    let lower = id.to_ascii_lowercase();
+    if lower.contains("google") || lower.contains("golang") {
+        return false;
     }
-    None
+    // "opencode" itself has no "go", so this cannot pick up the Zen entry.
+    let opencode_owned = lower.starts_with("opencode") && lower.contains("go");
+    opencode_owned
+        || lower
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .any(|word| word == "go")
 }
 
 fn key_from_entry(entry: &Value) -> Option<String> {
@@ -298,6 +320,14 @@ fn normalize_usage(raw: &Value) -> Option<Value> {
 mod tests {
     use super::*;
 
+    fn go_key(raw: &str) -> Option<String> {
+        match classify_auth_json(raw.as_bytes()) {
+            CredentialRead::Found(key) => Some(key),
+            CredentialRead::Absent => None,
+            CredentialRead::Unavailable(message) => panic!("unparseable fixture: {message}"),
+        }
+    }
+
     #[test]
     fn reads_the_go_key_and_ignores_zen() {
         let raw = r#"{
@@ -305,13 +335,53 @@ mod tests {
             "opencode-go": { "type": "api", "key": "go-key" },
             "anthropic": { "type": "api", "key": "sk-ant" }
         }"#;
-        assert_eq!(parse_go_key(raw).as_deref(), Some("go-key"));
-        assert!(parse_go_key(r#"{"opencode":{"type":"api","key":"zen-key"}}"#).is_none());
-        assert!(parse_go_key("{}").is_none());
+        assert_eq!(go_key(raw).as_deref(), Some("go-key"));
+        assert!(go_key(r#"{"opencode":{"type":"api","key":"zen-key"}}"#).is_none());
+        assert!(go_key("{}").is_none());
         assert_eq!(
-            parse_go_key(r#"{"opencode.go":{"key":"dotted"}}"#).as_deref(),
+            go_key(r#"{"opencode.go":{"key":"dotted"}}"#).as_deref(),
             Some("dotted")
         );
+    }
+
+    #[test]
+    fn other_vendors_keys_are_never_taken_for_go() {
+        // Each of these ids contains "go" but belongs to another vendor; its
+        // key must never be sent to opencode.ai.
+        let raw = r#"{
+            "algolia": { "type": "api", "key": "algolia-key" },
+            "mongodb": { "type": "api", "key": "mongo-key" },
+            "cargo": { "type": "api", "key": "cargo-key" },
+            "google": { "type": "api", "key": "google-key" },
+            "google-go": { "type": "api", "key": "google-go-key" },
+            "golang": { "type": "api", "key": "golang-key" }
+        }"#;
+        assert!(go_key(raw).is_none());
+        assert_eq!(
+            go_key(r#"{"opencode_go_subscription":{"key":"underscored"}}"#).as_deref(),
+            Some("underscored")
+        );
+        assert_eq!(
+            go_key(r#"{"opencodego":{"key":"joined"}}"#).as_deref(),
+            Some("joined")
+        );
+        assert!(names_go_subscription("Go"));
+        assert!(!names_go_subscription("gogs"));
+    }
+
+    #[test]
+    fn a_half_written_auth_file_is_a_passing_failure() {
+        // OpenCode rewrites auth.json in place; a poll can land mid-write.
+        for partial in [&b""[..], b"{", br#"{"opencode-go": {"type": "api", "ke"#] {
+            assert!(matches!(
+                classify_auth_json(partial),
+                CredentialRead::Unavailable(_)
+            ));
+        }
+        assert!(matches!(
+            classify_auth_json(br#"{"anthropic":{"key":"sk"}}"#),
+            CredentialRead::Absent
+        ));
     }
 
     #[test]

@@ -1,38 +1,24 @@
 import { useMemo, type CSSProperties } from "react";
 import type { RateLimitBucket } from "../types/codex";
 import { historySeries, projectedRunOut } from "../lib/history";
+import { buildTimeline } from "../lib/quotaTimeline";
 import { formatLeadTime } from "../lib/time";
 import {
   formatCountdown,
   formatLocalReset,
   windowDurationLabel,
 } from "../lib/rateLimits";
+import { QuotaChart } from "./QuotaChart";
 
-const SPARK_WIDTH = 96;
-const SPARK_HEIGHT = 22;
-const SPARK_PAD = 2;
-const SPARK_POINTS = 40;
-
-/** A quiet trend line of the percent remaining, drawn from local history. */
-function Sparkline({ values }: { values: number[] }) {
-  const step = (SPARK_WIDTH - SPARK_PAD * 2) / (values.length - 1);
-  const y = (value: number) =>
-    SPARK_HEIGHT - SPARK_PAD - (Math.min(100, Math.max(0, value)) / 100) * (SPARK_HEIGHT - SPARK_PAD * 2);
-  const points = values
-    .map((value, index) => `${(SPARK_PAD + index * step).toFixed(2)},${y(value).toFixed(2)}`)
-    .join(" ");
-  const lastX = SPARK_PAD + (values.length - 1) * step;
-  const lastY = y(values[values.length - 1]);
+/** The pace warning, keyed to the dashed projection it describes. */
+function PaceNote({ text, as: Tag }: { text: string; as: "p" | "span" }) {
   return (
-    <svg
-      className="quota-sparkline"
-      viewBox={`0 0 ${SPARK_WIDTH} ${SPARK_HEIGHT}`}
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      <polyline points={points} />
-      <circle cx={lastX.toFixed(2)} cy={lastY.toFixed(2)} r="1.7" />
-    </svg>
+    <Tag className="quota-pace">
+      <svg className="quota-pace-key" width="14" height="4" viewBox="0 0 14 4" aria-hidden="true">
+        <line x1="1" y1="2" x2="13" y2="2" />
+      </svg>
+      {text}
+    </Tag>
   );
 }
 
@@ -41,11 +27,15 @@ export function QuotaSection({
   bucket,
   now,
   dense = false,
+  live = true,
 }: {
   provider: string;
   bucket: RateLimitBucket;
   now: number;
   dense?: boolean;
+  /** False when the provider is failing, signed out or stale: the recorded
+   * history still shows, but no "runs out in" projection is made from it. */
+  live?: boolean;
 }) {
   const used = Math.round(bucket.usedPercent);
   const remaining = Math.round(bucket.remainingPercent);
@@ -55,17 +45,23 @@ export function QuotaSection({
   // with what is left, so a full bar means plenty of quota.
   const style = { "--progress": bucket.remainingPercent / 100 } as CSSProperties;
   const heading = bucket.windowLabel ?? windowDurationLabel(bucket.windowDurationMins);
-  // Re-read history only when the observation changes, not on every `now` tick.
+  // Re-read history only when the observation changes, not on every `now`
+  // tick. The read is cached in history.ts, but the memo also keeps the
+  // array identity stable for the memos below.
   const history = useMemo(
     () => historySeries(provider, bucket.id),
     [provider, bucket.id, bucket.usedPercent, bucket.resetsAt],
   );
-  const series = history.slice(-SPARK_POINTS).map((s) => s.remainingPercent);
-  // Minute resolution is plenty for a pace estimate; avoids recomputing every tick.
+  // Minute resolution is plenty for the pace estimate and the chart's "now";
+  // it keeps both from recomputing on every one-second tick.
   const minute = Math.floor(now / 60_000);
   const runOut = useMemo(
-    () => projectedRunOut(history, bucket, minute * 60_000),
-    [history, bucket, minute],
+    () => (live ? projectedRunOut(history, bucket, minute * 60_000) : null),
+    [live, history, bucket, minute],
+  );
+  const timeline = useMemo(
+    () => buildTimeline(history, bucket, minute * 60_000, runOut),
+    [history, bucket, minute, runOut],
   );
   const pace = runOut ? `At this pace, runs out in ${formatLeadTime(runOut - now)}` : null;
 
@@ -86,9 +82,10 @@ export function QuotaSection({
           </div>
           <span className="quota-number"><strong>{remaining}</strong>%</span>
         </div>
+        {timeline ? <QuotaChart timeline={timeline} dense /> : null}
         <div className="dense-meta">
           <span className="reset-countdown">{formatCountdown(bucket.resetsAt, now)}</span>
-          {pace ? <span className="quota-pace">{pace}</span> : null}
+          {pace ? <PaceNote text={pace} as="span" /> : null}
         </div>
       </section>
     );
@@ -117,8 +114,8 @@ export function QuotaSection({
         <span>{bucket.reached ? "Limit reached" : `${remaining}% left`}</span>
         <span>{used}% used</span>
       </div>
-      {series.length >= 2 ? <Sparkline values={series} /> : null}
-      {pace ? <p className="quota-pace">{pace}</p> : null}
+      {timeline ? <QuotaChart timeline={timeline} /> : null}
+      {pace ? <PaceNote text={pace} as="p" /> : null}
       <div className="reset-row">
         <span className="reset-countdown">{formatCountdown(bucket.resetsAt, now)}</span>
         <span className="reset-local">{formatLocalReset(bucket.resetsAt, new Date(now))}</span>

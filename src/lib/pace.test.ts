@@ -29,6 +29,11 @@ describe("projectedRunOut", () => {
     expect(projectedRunOut([sample(60, 10, resetsAt - 18_000), sample(1, 50)], { usedPercent: 60, resetsAt, reached: false }, now)).toBeNull();
     expect(projectedRunOut([sample(5, 40), sample(1, 50)], { usedPercent: 60, resetsAt, reached: false }, now)).toBeNull();
   });
+
+  it("treats a reset time that wobbles by seconds as the same window", () => {
+    const runOut = projectedRunOut([sample(60, 40, resetsAt - 1), sample(30, 50, resetsAt + 2)], { usedPercent: 60, resetsAt, reached: false }, now);
+    expect(runOut).toBe(now + 2 * 3_600_000);
+  });
 });
 
 describe("freshness", () => {

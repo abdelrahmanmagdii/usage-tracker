@@ -7,6 +7,7 @@ import { QuotaSection } from "./QuotaSection";
 import { ProviderSection } from "./ProviderSection";
 import { ConnectionStateView } from "./ConnectionState";
 import { SettingsModal } from "./SettingsModal";
+import { NowProvider } from "../hooks/useNow";
 import type { RateLimitBucket, ResetEvent } from "../types/codex";
 
 afterEach(() => {
@@ -80,6 +81,26 @@ describe("ProviderSection", () => {
   it("shows how fresh the reading is", () => {
     render(<ProviderSection id="claude" label="Claude Code" icon={null} meter={meter(now / 1000 - 120)} now={now} signedOutHint="" />);
     expect(screen.getByText("Updated 2m ago")).toBeTruthy();
+  });
+
+  it("reads the shared clock when no time is pinned", () => {
+    render(
+      <NowProvider value={now}>
+        <ProviderSection id="claude" label="Claude Code" icon={null} meter={meter(now / 1000 - 5 * 60)} signedOutHint="" />
+      </NowProvider>,
+    );
+    expect(screen.getByText("Updated 5m ago")).toBeTruthy();
+  });
+
+  it("explains a signed-out login with the provider's hint", () => {
+    const signedOut = {
+      ...meter(now / 1000 - 120),
+      state: { connection: "not_authenticated" as const, updatedAt: now / 1000 - 120 },
+    };
+    render(
+      <ProviderSection id="cursor" label="Cursor" icon={null} meter={signedOut} now={now} signedOutHint="sign in again." />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("Showing the last known usage — sign in again. Last updated");
   });
 
   it("warns once a reading is stale", () => {

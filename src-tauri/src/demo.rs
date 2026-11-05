@@ -117,7 +117,7 @@ pub fn spawn_control(app: AppHandle) {
                     continue;
                 };
                 let response = handle(&app, &line);
-                let _ = write!(stream, "{response}\n");
+                let _ = writeln!(stream, "{response}");
                 if line.trim().eq_ignore_ascii_case("QUIT") {
                     app.exit(0);
                     break;

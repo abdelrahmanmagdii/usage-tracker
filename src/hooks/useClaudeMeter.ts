@@ -1,6 +1,6 @@
-import { useCallback } from "react";
 import type { CodexBackendState } from "../types/codex";
-import { useProviderMeter } from "./useProviderMeter";
+import { providerChannels, type ProviderId } from "../lib/providers";
+import { useProviderMeter, type ProviderMeter } from "./useProviderMeter";
 
 function claudePreview(): CodexBackendState {
   const now = Date.now() / 1000;
@@ -148,62 +148,6 @@ function antigravityPreview(): CodexBackendState {
     },
   };
 }
-
-export function useClaudeMeter() {
-  const preview = useCallback(claudePreview, []);
-  return useProviderMeter({
-    provider: "claude",
-    getCommand: "get_claude_state",
-    refreshCommand: "refresh_claude",
-    event: "claude://state",
-    preview,
-  });
-}
-
-export function useCursorMeter() {
-  const preview = useCallback(cursorPreview, []);
-  return useProviderMeter({
-    provider: "cursor",
-    getCommand: "get_cursor_state",
-    refreshCommand: "refresh_cursor",
-    event: "cursor://state",
-    preview,
-  });
-}
-
-export function useOpenCodeMeter() {
-  const preview = useCallback(opencodePreview, []);
-  return useProviderMeter({
-    provider: "opencode",
-    getCommand: "get_opencode_state",
-    refreshCommand: "refresh_opencode",
-    event: "opencode://state",
-    preview,
-  });
-}
-
-export function useDevinMeter() {
-  const preview = useCallback(devinPreview, []);
-  return useProviderMeter({
-    provider: "devin",
-    getCommand: "get_devin_state",
-    refreshCommand: "refresh_devin",
-    event: "devin://state",
-    preview,
-  });
-}
-
-export function useAntigravityMeter() {
-  const preview = useCallback(antigravityPreview, []);
-  return useProviderMeter({
-    provider: "antigravity",
-    getCommand: "get_antigravity_state",
-    refreshCommand: "refresh_antigravity",
-    event: "antigravity://state",
-    preview,
-  });
-}
-
 function geminiPreview(): CodexBackendState {
   const now = Date.now() / 1000;
   return {
@@ -229,13 +173,47 @@ function geminiPreview(): CodexBackendState {
   };
 }
 
+export type MeterId = Exclude<ProviderId, "codex">;
+
+// Module-level so every hook call gets the same channel names and preview
+// function: useProviderMeter re-subscribes when either identity changes.
+const PREVIEWS: Record<MeterId, () => CodexBackendState> = {
+  claude: claudePreview,
+  cursor: cursorPreview,
+  opencode: opencodePreview,
+  devin: devinPreview,
+  antigravity: antigravityPreview,
+  gemini: geminiPreview,
+};
+
+const CHANNELS = Object.fromEntries(
+  Object.keys(PREVIEWS).map((id) => [id, providerChannels(id as MeterId)]),
+) as Record<MeterId, ReturnType<typeof providerChannels>>;
+
+function useMeter(provider: MeterId): ProviderMeter {
+  return useProviderMeter({ provider, ...CHANNELS[provider], preview: PREVIEWS[provider] });
+}
+
+export function useClaudeMeter() {
+  return useMeter("claude");
+}
+
+export function useCursorMeter() {
+  return useMeter("cursor");
+}
+
+export function useOpenCodeMeter() {
+  return useMeter("opencode");
+}
+
+export function useDevinMeter() {
+  return useMeter("devin");
+}
+
+export function useAntigravityMeter() {
+  return useMeter("antigravity");
+}
+
 export function useGeminiMeter() {
-  const preview = useCallback(geminiPreview, []);
-  return useProviderMeter({
-    provider: "gemini",
-    getCommand: "get_gemini_state",
-    refreshCommand: "refresh_gemini",
-    event: "gemini://state",
-    preview,
-  });
+  return useMeter("gemini");
 }

@@ -212,6 +212,30 @@ export function toResetEvent(item) {
 const MAX_EVENTS = 500;
 
 /**
+ * The tweet a post mirrors, as a dedupe key. Relays keep the tweet's
+ * timestamp but not its formatting: scraped posts arrive as
+ * "…T18:20:00.000Z" while a hand-written backfill entry may say
+ * "…T18:20:00Z". Comparing parsed instants treats those as the same tweet.
+ */
+export function tweetKey(announcedAt) {
+  const ms = typeof announcedAt === "string" ? Date.parse(announcedAt) : Number.NaN;
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : String(announcedAt);
+}
+
+/**
+ * Parses the stored data/resets.json. Throws when the file exists but is not
+ * a feed, so a bad hand edit fails the run instead of being read as "no
+ * events" and overwritten with only the freshly scraped ones.
+ */
+export function parseStoredFeed(text) {
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.events)) {
+    throw new Error("stored feed has no events array");
+  }
+  return { updatedAt: parsed.updatedAt ?? null, events: parsed.events };
+}
+
+/**
  * Merges scraped events into the stored feed. Existing entries always win,
  * so hand-written (manual) backfill entries are never modified or removed.
  */
@@ -222,12 +246,13 @@ export function mergeEvents(existing, incoming) {
   }
   // Each relay mirrors the same tweet under its own post id, but keeps the
   // tweet's timestamp, so the timestamp identifies a tweet across mirrors.
-  const announced = new Set([...byId.values()].map((event) => event.announcedAt));
+  const announced = new Set([...byId.values()].map((event) => tweetKey(event.announcedAt)));
   let added = 0;
   for (const event of incoming) {
-    if (!byId.has(event.id) && !announced.has(event.announcedAt)) {
+    const key = tweetKey(event.announcedAt);
+    if (!byId.has(event.id) && !announced.has(key)) {
       byId.set(event.id, event);
-      announced.add(event.announcedAt);
+      announced.add(key);
       added += 1;
     }
   }

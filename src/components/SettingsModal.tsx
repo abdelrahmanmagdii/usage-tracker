@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BellRing, Check, Settings2, X } from "lucide-react";
@@ -17,6 +17,7 @@ import {
   type ProviderId,
 } from "../lib/providers";
 import { deviceName, notificationSettings, trayName } from "../lib/platform";
+import { useDialogFocus } from "./useDialogFocus";
 
 type TrayWindow = {
   id: string;
@@ -108,6 +109,30 @@ function WindowPicker({
   );
 }
 
+/**
+ * A draft threshold as the backend accepts it: a whole percent from 1 to
+ * 100. parseInt would read "12.5" as 12 and "1e2" as 1 and save a level the
+ * user never typed, so anything that is not exactly a whole number is null.
+ */
+export function parseThreshold(draft: string): number | null {
+  const trimmed = draft.trim();
+  if (!/^\d{1,3}$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return value >= 1 && value <= 100 ? value : null;
+}
+
+/**
+ * The full threshold list with one level replaced, deduped and ascending,
+ * as `set_usage_alert_thresholds` stores it. The other levels are kept: the
+ * backend allows up to four, and rebuilding from just the two fields shown
+ * here used to drop any level in between.
+ */
+export function replaceThreshold(current: number[], index: number, value: number): number[] {
+  const next = [...current];
+  next[index] = value;
+  return [...new Set(next)].sort((a, b) => a - b);
+}
+
 /** A percent field that commits on blur/Enter, so typing "9" mid-edit does
  * not persist a stray threshold. Invalid drafts are simply discarded. */
 function ThresholdField({
@@ -123,10 +148,8 @@ function ThresholdField({
   const commit = () => {
     if (draft === null) return;
     setDraft(null);
-    const parsed = Number.parseInt(draft, 10);
-    if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 100 && parsed !== percent) {
-      onCommit(parsed);
-    }
+    const parsed = parseThreshold(draft);
+    if (parsed !== null && parsed !== percent) onCommit(parsed);
   };
   return (
     <label className="threshold-field">
@@ -192,47 +215,77 @@ export function SettingsModal({
   );
   const [autostart, setAutostart] = useState(false);
   const [testResult, setTestResult] = useState<TestNotificationResult | "sending" | null>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogFocus(dialogRef);
 
   useEffect(() => {
     if (!inTauri()) {
       setWindows(PREVIEW_WINDOWS);
       return;
     }
-    void invoke<AppPrefs>("get_app_prefs").then((next) => setPrefs(normalizePrefs(next))).catch(() => undefined);
+    // A prefs broadcast is always newer than the initial read, so a read that
+    // resolves after one must not roll the sheet back to the older snapshot.
+    let broadcastSeen = false;
+    void invoke<AppPrefs>("get_app_prefs")
+      .then((next) => {
+        if (!broadcastSeen) setPrefs(normalizePrefs(next));
+      })
+      .catch(() => undefined);
     void invoke<TrayWindows>("get_tray_windows")
       .then(setWindows)
       .catch(() => undefined);
     void invoke<boolean>("get_autostart").then(setAutostart).catch(() => undefined);
-    const unlisten = listen<AppPrefs>("usagebar://prefs", (event) => setPrefs(normalizePrefs(event.payload)));
+    const unlisten = listen<AppPrefs>("usagebar://prefs", (event) => {
+      broadcastSeen = true;
+      setPrefs(normalizePrefs(event.payload));
+      // Launch at Login lives with the OS, not in the prefs payload, but the
+      // tray menu's toggle also broadcasts prefs: re-read it so an open sheet
+      // follows a change made from the menu bar.
+      void invoke<boolean>("get_autostart").then(setAutostart).catch(() => undefined);
+    });
     return () => {
       void unlisten.then((off) => off());
     };
   }, []);
 
+  // Every control updates optimistically, then saves. A save the backend
+  // rejects (or an IPC failure) re-reads the stored prefs, so the sheet
+  // never keeps showing a choice that was not saved.
+  const save = useCallback((command: string, args: Record<string, unknown>) => {
+    if (!inTauri()) return;
+    void invoke(command, args).catch(() =>
+      invoke<AppPrefs>("get_app_prefs")
+        .then((stored) => setPrefs(normalizePrefs(stored)))
+        .catch(() => undefined),
+    );
+  }, []);
+
   const chooseWindow = useCallback((provider: ProviderId, window: string) => {
     setPrefs((current) => withTrayWindow(current, provider, window));
-    if (inTauri()) void invoke("set_tray_window", { provider, window });
-  }, []);
+    save("set_tray_window", { provider, window });
+  }, [save]);
 
   const setToolVisible = useCallback((provider: ProviderId, visible: boolean) => {
     setPrefs((current) => withVisible(current, provider, visible));
-    if (inTauri()) void invoke("set_provider_visible", { provider, visible });
-  }, []);
+    save("set_provider_visible", { provider, visible });
+  }, [save]);
 
-  const commitThresholds = useCallback((first: number, second: number) => {
-    const next = [...new Set([first, second])].sort((a, b) => a - b);
-    setPrefs((current) => ({ ...current, usageAlertThresholds: next }));
-    if (inTauri()) {
-      void invoke("set_usage_alert_thresholds", { thresholds: next }).catch(() => undefined);
-    }
-  }, []);
+  const commitThreshold = useCallback((current: number[], index: number, value: number) => {
+    const next = replaceThreshold(current, index, value);
+    setPrefs((prefsNow) => ({ ...prefsNow, usageAlertThresholds: next }));
+    save("set_usage_alert_thresholds", { thresholds: next });
+  }, [save]);
 
   const setPref = useCallback(
-    (key: "resetAlerts" | "denseLayout", command: string, next: boolean) => {
+    (
+      key: "resetAlerts" | "denseLayout" | "usageAlerts" | "paceAlerts" | "combinedTray",
+      command: string,
+      next: boolean,
+    ) => {
       setPrefs((current) => ({ ...current, [key]: next }));
-      if (inTauri()) void invoke(command, { enabled: next }).catch(() => undefined);
+      save(command, { enabled: next });
     },
-    [],
+    [save],
   );
 
   const testMessage: Record<TestNotificationResult | "sending", string> = {
@@ -244,7 +297,12 @@ export function SettingsModal({
 
   const visibleCount = PROVIDER_CATALOG.filter((tool) => isVisible(prefs, tool.id)).length;
   const thresholds = alertThresholds(prefs);
-  const alertDetail = `Get notified at ${thresholds.map((t) => `${t}%`).join(" and ")} used, and when a limit resets.`;
+  // A single stored level fills both fields; editing one then adds a level
+  // beside it instead of replacing the only one.
+  const thresholdSlots = thresholds.length === 1 ? [thresholds[0], thresholds[0]] : thresholds;
+  const levels = thresholds.map((t) => `${t}%`);
+  const levelList = levels.length > 1 ? `${levels.slice(0, -1).join(", ")} and ${levels[levels.length - 1]}` : levels[0];
+  const alertDetail = `Get notified at ${levelList} used, and when a limit resets.`;
 
   return (
     <div
@@ -253,10 +311,12 @@ export function SettingsModal({
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <section
+        ref={dialogRef}
         className="sheet-modal settings-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
+        tabIndex={-1}
       >
         <header>
           <div>
@@ -325,10 +385,7 @@ export function SettingsModal({
                     className={`layout-option${active ? " selected" : ""}`}
                     role="radio"
                     aria-checked={active}
-                    onClick={() => {
-                      setPrefs((current) => ({ ...current, combinedTray: option.value }));
-                      if (inTauri()) void invoke("set_combined_tray", { enabled: option.value });
-                    }}
+                    onClick={() => setPref("combinedTray", "set_combined_tray", option.value)}
                   >
                     <strong>{option.name}</strong>
                     <small>{option.detail}</small>
@@ -356,24 +413,29 @@ export function SettingsModal({
               label="Usage alerts"
               detail={alertDetail}
               checked={prefs.usageAlerts}
-              onChange={(next) => {
-                setPrefs((current) => ({ ...current, usageAlerts: next }));
-                if (inTauri()) void invoke("set_usage_alerts", { enabled: next });
-              }}
+              onChange={(next) => setPref("usageAlerts", "set_usage_alerts", next)}
             />
             {prefs.usageAlerts ? (
               <div className="threshold-editor">
                 <ThresholdField
                   label="Warn at"
-                  percent={thresholds[0] ?? 80}
-                  onCommit={(value) => commitThresholds(value, thresholds[thresholds.length - 1] ?? 95)}
+                  percent={thresholdSlots[0]}
+                  onCommit={(value) => commitThreshold(thresholdSlots, 0, value)}
                 />
                 <ThresholdField
                   label="Last call at"
-                  percent={thresholds[thresholds.length - 1] ?? 95}
-                  onCommit={(value) => commitThresholds(thresholds[0] ?? 80, value)}
+                  percent={thresholdSlots[thresholdSlots.length - 1]}
+                  onCommit={(value) => commitThreshold(thresholdSlots, thresholdSlots.length - 1, value)}
                 />
               </div>
+            ) : null}
+            {prefs.usageAlerts ? (
+              <Toggle
+                label="Pace alerts"
+                detail="Get notified when your recent pace would use up a limit well before it resets."
+                checked={prefs.paceAlerts}
+                onChange={(next) => setPref("paceAlerts", "set_pace_alerts", next)}
+              />
             ) : null}
             <Toggle
               label="Reset alerts"

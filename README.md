@@ -40,7 +40,11 @@ npm install
 npm run tauri build
 ```
 
-The app lands in `src-tauri/target/release/bundle/macos/`.
+The app lands in `src-tauri/target/release/bundle/macos.noindex/` (moved out of
+`bundle/macos/` so Spotlight only lists the installed copy) and the `.dmg` in
+`bundle/dmg/`. Without the release signing key (`TAURI_SIGNING_PRIVATE_KEY`),
+the build skips the signed auto-update bundle and prints a note saying so;
+everything else is the same.
 
 Maintainers: see [docs/RELEASING.md](docs/RELEASING.md) for how signed releases are cut.
 
@@ -65,7 +69,7 @@ the `-setup.exe` lands in `src-tauri/target/release/bundle/nsis/`.
 - macOS 10.15 or newer, or Windows 10/11 x64 with WebView2 (beta)
 - A working, authenticated `codex` CLI for the Codex meter
 - Optional: signed-in Claude Code, Cursor, OpenCode Go, Devin CLI, Antigravity, and/or Gemini CLI for those meters
-- Node.js 20+ and Rust for development
+- Node.js 22.22+ or 24 LTS (the test DOM, jsdom, needs it; CI uses 24) and Rust for development
 
 ## Run locally
 
@@ -85,14 +89,41 @@ npm run app:install
 
 That builds the app bundle, quits the running copy, replaces `/Applications/UsageBar.app`, and relaunches it.
 
-Useful checks:
+Useful checks (the CI workflow runs the first six on macOS and the
+simulator on Linux for every pull request):
 
 ```sh
+npm run versions:check   # the eight version fields agree
 npm run typecheck
-npm test
+npm test                 # Vitest, plus node --test for tools/
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+npm run sim:shots -- --prod --strict-csp   # every screen against a simulated backend
+npm run check:macos      # lint the macOS-only Rust code from Linux
 npm run tauri build -- --debug
 ```
+
+`npm run sim:shots` screenshots the real frontend in headless Chromium
+against a simulated Tauri backend (every scenario, light/dark, roomy/dense,
+Settings, onboarding, the widget) and fails on a page error, a console
+error, an IPC command the simulator does not know, or, with
+`--strict-csp`, a CSP report. Open `sim-shots/index.html` for the contact
+sheet; on a pull request, the `sim-shots` artifact of the CI run has the
+same. It needs Chromium for the locked Playwright version once:
+`npx playwright install chromium`. See
+[docs/SIMULATION.md](docs/SIMULATION.md).
+
+`npm run versions:set -- 0.2.5` rewrites every version field at once (see
+[docs/RELEASING.md](docs/RELEASING.md)).
+
+`npm run check:macos` runs Clippy for `aarch64-apple-darwin`, so the Keychain,
+AppKit, and vibrancy code that only compiles for macOS gets type-checked on a
+Linux machine too. It needs `rustup target add aarch64-apple-darwin`, `clang`,
+and `llvm-ar`, but no macOS SDK: the few dependencies that compile C or
+Objective-C get empty stand-in objects, which is fine because Clippy never
+links. On a Mac it is plain `cargo clippy`. Extra Clippy flags go after a
+second `--`, e.g. `npm run check:macos -- -- -D warnings` (what CI enforces).
 
 ## How it works
 
@@ -139,7 +170,7 @@ The app is split into:
 - `src/features` — Tibo Watch (feed provider, notifications)
 - `src/lib` — defensive parsing, formatting, persistence, and reset detection
 - `src-tauri/src/codex` — process lifecycle and JSONL protocol routing
-- `src-tauri/src/tray.rs` — menu-bar meter: quota-aware pill icon plus `% · countdown` title
+- `src-tauri/src/tray/` — menu-bar meter: quota-aware pill icon plus `% · countdown` title
 - `tools/tibo-watch` — the zero-cost scraper behind the public reset feed
 - `data/resets.json` — the canonical reset event store (edit this to backfill)
 
@@ -159,6 +190,8 @@ Private usage stays on this Mac. UsageBar does not read Codex credential files, 
 In every case the credential is **never written or rotated**, never shown in the UI, and never sent to a UsageBar server. If a session expires, the meter asks you to sign in through that tool again.
 
 Heads-up: several of these usage endpoints are unofficial (they are what the tools themselves use, not documented public APIs), so a vendor change could break a meter until this app is updated. Parsers are defensive and degrade to hiding the section rather than misreporting.
+
+Crash reports are written only to a local file and never uploaded; see [Troubleshooting](#troubleshooting).
 
 Local history is stored in WebView local storage and records only observed percentages and reset timestamps. It is used to flag a **possible** surprise reset when quota jumps substantially before the expected reset time; it never attributes that reset to a person with certainty.
 
@@ -192,6 +225,24 @@ Knobs, all optional:
 - `VITE_TIBO_FEED_URL` — point the app at a forked/self-hosted feed (build-time)
 
 Run the scraper yourself with `node tools/tibo-watch/check.mjs` (`--dry-run` to preview).
+
+## Troubleshooting
+
+### UsageBar disappeared from the menu bar
+
+If UsageBar quits unexpectedly, it saves a short crash report on your machine and, on the next launch, posts one notification about it. While a report exists, the menu bar menu (tray menu on Windows) has **Show Crash Report…**, which reveals the file:
+
+| OS | Crash report |
+| --- | --- |
+| macOS | `~/Library/Logs/com.abdelrahmanamer.usagebar/crash-report.log` |
+| Windows | `%LOCALAPPDATA%\com.abdelrahmanamer.usagebar\logs\crash-report.log` |
+| Linux (dev builds) | `~/.local/share/com.abdelrahmanamer.usagebar/logs/crash-report.log` (or under `$XDG_DATA_HOME`) |
+
+Each report has the time (UTC), app version, OS and CPU architecture, the thread, the panic message and source location, and a backtrace (release builds are stripped, so frames are mostly unnamed). The newest five reports are kept. Attach the file to a [GitHub issue](https://github.com/abdelrahmanmagdii/usage-tracker/issues) if you want to report the crash; read it first, it is plain text.
+
+Nothing is sent anywhere: UsageBar has no telemetry. Before a report is written, anything resembling a credential (bearer tokens, `sk-…` keys, JWTs, `token=`/`key=`-style values, long base64 or hex strings) is replaced with `[redacted]`, and your home folder is shortened to `~`. Delete the file at any time; the menu item goes away by the next launch.
+
+Developers can exercise the whole path in a debug build with `USAGEBAR_DEBUG_PANIC=1 npm run tauri dev`, which panics right after the crash hook is installed; launch again without it to see the notification and menu item. Release builds do not contain that switch.
 
 ## Known limitations
 

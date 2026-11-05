@@ -2,7 +2,7 @@ name: Pages
 
 on:
   push:
-    branches: [main, app-store-and-social]
+    branches: [main]
     paths:
       - website/**
       - .github/workflows/pages.yml
@@ -13,9 +13,11 @@ permissions:
   pages: write
   id-token: write
 
+# Let an in-flight deployment finish rather than cancel it halfway; the next
+# one queues behind it (GitHub's recommended setting for Pages).
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:

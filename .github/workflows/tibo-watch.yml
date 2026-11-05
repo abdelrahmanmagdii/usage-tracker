@@ -20,12 +20,15 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Runs queue behind each other, so a hung run would hold up every check
+    # for GitHub's default six hours.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Check @thsottiaux for reset announcements
         run: node tools/tibo-watch/check.mjs

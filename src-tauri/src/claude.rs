@@ -20,25 +20,21 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::Serialize;
+#[cfg(any(target_os = "macos", test))]
+use std::time::Duration;
+
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::{
-    sync::{Mutex, RwLock},
-    time::Duration,
-};
+use tokio::sync::{Mutex, RwLock};
 
 use crate::codex::process::ConnectionState;
+use crate::provider::{parse_reset_timestamp, window_snapshot};
 use crate::tray::{self};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
-/// `errSecItemNotFound` (-25300). It is the ONLY status that proves the login
-/// is absent; every other failure — locked keychain, denied or dismissed
-/// access prompt, a cancelled lookup — says nothing about whether Claude Code
-/// is signed in, and used to be misread as "Claude Code is not installed".
-const KEYCHAIN_ITEM_NOT_FOUND: i32 = -25300;
 /// Consecutive empty reads required before the menu-bar meter disappears, once
 /// it has shown a number at least once.
 const ABSENT_READS_BEFORE_HIDING: u32 = 2;
@@ -70,27 +66,9 @@ const SECURITY_CLI_TIMEOUT: Duration = Duration::from_secs(3);
 static SECURITY_CLI_BLOCKED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClaudeState {
-    pub connection: ConnectionState,
-    pub diagnostic: Option<String>,
-    pub account: Option<Value>,
-    pub rate_limits: Option<Value>,
-    pub updated_at: Option<u64>,
-}
-
-impl Default for ClaudeState {
-    fn default() -> Self {
-        Self {
-            connection: ConnectionState::Starting,
-            diagnostic: None,
-            account: None,
-            rate_limits: None,
-            updated_at: None,
-        }
-    }
-}
+/// Claude reports the same shape as every other optional provider. The name
+/// stays because commands and the demo fixtures refer to it.
+pub type ClaudeState = crate::provider::ProviderState;
 
 #[derive(Clone)]
 pub struct ClaudeManager {
@@ -116,15 +94,10 @@ pub struct ClaudeManager {
 
 impl ClaudeManager {
     pub fn new(app: AppHandle) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .user_agent(concat!("usagebar/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .expect("reqwest client construction is infallible with these options");
         Self {
             app,
             state: Arc::new(RwLock::new(crate::demo::initial_claude())),
-            client,
+            client: crate::provider::http_client(),
             refresh_lock: Arc::new(Mutex::new(())),
             absent_reads: Arc::new(AtomicU32::new(0)),
             login_stamp: Arc::new(Mutex::new(None)),
@@ -493,11 +466,19 @@ fn hides_tray(has_shown_usage: bool, consecutive_absent_reads: u32) -> bool {
     !has_shown_usage || consecutive_absent_reads >= ABSENT_READS_BEFORE_HIDING
 }
 
-/// Classifies a failing Security.framework lookup.
-/// Item-not-found and a suppressed or cancelled prompt mean no usable login.
-/// Those cases hide the meter. A locked keychain stays an unknown.
+/// Classifies a failing Security.framework lookup, using the same rule as the
+/// other Keychain-backed providers (`provider::keychain_login_absent`):
+/// item-not-found (-25300), and a background poll whose suppressed sheet
+/// macOS reports as a cancel (-128) or as interaction-not-allowed (-25308),
+/// all count as no usable login and can hide the meter. Note that -25308 is
+/// also what a locked keychain returns while interaction is disabled, so a
+/// locked keychain reads as absent here too; `hides_tray` still asks for a
+/// confirming second read before a meter that has shown usage disappears.
+/// Every other status (an authorization failure, say) is an unknown that
+/// keeps the last meter.
+#[cfg(any(target_os = "macos", test))]
 fn classify_keychain_status(code: i32) -> CredentialRead {
-    if crate::provider::keychain_login_absent(code) || code == KEYCHAIN_ITEM_NOT_FOUND {
+    if crate::provider::keychain_login_absent(code) {
         return CredentialRead::Absent;
     }
     CredentialRead::Unavailable(format!(
@@ -577,7 +558,7 @@ fn parse_security_output(output: &str) -> Option<Credentials> {
 
 #[cfg(any(target_os = "macos", test))]
 fn decode_hex(text: &str) -> Option<Vec<u8>> {
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return None;
     }
     (0..text.len())
@@ -928,8 +909,8 @@ fn normalize_limit_entry(
     // the sub-line describes the window instead of repeating the model name.
     let limit_name = if scope_name.is_some() {
         duration.map(|duration| match duration {
-            d if d == 10_080.0 => "Weekly limit".to_owned(),
-            d if d == 1_440.0 => "Daily limit".to_owned(),
+            10_080.0 => "Weekly limit".to_owned(),
+            1_440.0 => "Daily limit".to_owned(),
             _ => "Model limit".to_owned(),
         })
     } else {
@@ -978,34 +959,6 @@ fn normalize_limit_entry(
     }
     snapshot.insert(window_kind.into(), window);
     Some((id, Value::Object(snapshot)))
-}
-
-fn window_snapshot(used_percent: f64, duration_mins: Option<f64>, resets_at: Option<f64>) -> Value {
-    let mut window = Map::new();
-    window.insert(
-        "usedPercent".into(),
-        Value::from(used_percent.clamp(0.0, 100.0)),
-    );
-    if let Some(duration) = duration_mins {
-        window.insert("windowDurationMins".into(), Value::from(duration));
-    }
-    if let Some(resets_at) = resets_at {
-        window.insert("resetsAt".into(), Value::from(resets_at));
-    }
-    Value::Object(window)
-}
-
-fn parse_reset_timestamp(value: Option<&Value>) -> Option<f64> {
-    match value? {
-        Value::Number(number) => number.as_f64(),
-        Value::String(text) => {
-            let parsed =
-                time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
-                    .ok()?;
-            Some(parsed.unix_timestamp() as f64)
-        }
-        _ => None,
-    }
 }
 
 fn now_unix_millis() -> u64 {
@@ -1198,6 +1151,14 @@ mod tests {
             classify_keychain_status(-25293),
             CredentialRead::Unavailable(_)
         ));
+        // Claude follows the shared rule exactly, so the two cannot drift.
+        for code in [-25300, -25308, -25293, -25291, -128, -34018, 0, 1] {
+            assert_eq!(
+                matches!(classify_keychain_status(code), CredentialRead::Absent),
+                crate::provider::keychain_login_absent(code),
+                "status {code}"
+            );
+        }
     }
 
     #[test]

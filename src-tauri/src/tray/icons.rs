@@ -59,13 +59,44 @@ pub(super) fn bar_slots(count: usize) -> Vec<(f64, f64, f64, f64)> {
             (13.2, 16.0, 8.0, 15.0),
             (16.4, 19.2, 9.0, 15.0),
         ],
-        _ => vec![
+        4 => vec![
             (1.6, 5.0, 4.2, 15.0),
             (6.2, 9.6, 6.0, 15.0),
             (10.8, 14.2, 7.8, 15.0),
             (15.4, 18.8, 9.6, 15.0),
         ],
+        // Seven tools (every provider showing) and anything beyond: computed
+        // rather than hand-placed. The hand-tuned four-slot layout used to be
+        // the catch-all here, which silently dropped every bar past the
+        // fourth, so the icon no longer matched the percentages beside it.
+        many => evenly_spaced_slots(many),
     }
+}
+
+/// `count` equal bars across the 20pt canvas, stepping down left to right like
+/// the hand-tuned layouts.
+pub(super) fn evenly_spaced_slots(count: usize) -> Vec<(f64, f64, f64, f64)> {
+    const LEFT: f64 = 0.4;
+    const RIGHT: f64 = 19.6;
+    const GAP: f64 = 0.3;
+    const FIRST_TOP: f64 = 4.0;
+    const LAST_TOP: f64 = 9.6;
+    const BOTTOM: f64 = 15.0;
+    let count = count.max(1);
+    let gaps = (count - 1) as f64;
+    let width = (RIGHT - LEFT - GAP * gaps) / count as f64;
+    (0..count)
+        .map(|index| {
+            let x0 = LEFT + index as f64 * (width + GAP);
+            let step = if count > 1 { index as f64 / gaps } else { 0.0 };
+            (
+                x0,
+                x0 + width,
+                FIRST_TOP + (LAST_TOP - FIRST_TOP) * step,
+                BOTTOM,
+            )
+        })
+        .collect()
 }
 
 pub(super) fn bars_tray_icon(colors: &[[f64; 3]]) -> Image<'static> {

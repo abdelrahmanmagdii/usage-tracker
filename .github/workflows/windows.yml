@@ -15,9 +15,16 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes the old build. Branch and tag
+# builds always finish, since a tag build publishes the installer.
+concurrency:
+  group: windows-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,9 +34,11 @@ jobs:
           node-version: 24
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      # Pull requests restore main's cache but do not save their own.
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: npm ci
       - run: npm run versions:check
       - run: npm run typecheck

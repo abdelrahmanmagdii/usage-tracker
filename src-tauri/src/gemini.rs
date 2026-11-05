@@ -204,23 +204,20 @@ impl GeminiManager {
 
     async fn resolve_access_token(&self, token: &OAuthToken) -> Result<String, String> {
         let now = now_unix_seconds() as f64;
-        {
-            let cache = self.token_cache.lock().await;
-            if let Some(cached) = cache.as_ref() {
-                if cached.expires_at - EXPIRY_SKEW_SECS > now {
-                    return Ok(cached.access_token.clone());
-                }
+        let mut cache = self.token_cache.lock().await;
+        match pick_access_token(token, cache.as_ref(), now) {
+            TokenChoice::Stored => {
+                *cache = Some(CachedAccessToken {
+                    access_token: token.access_token.clone(),
+                    expires_at: token.expires_at.unwrap_or(now + 3_600.0),
+                });
+                Ok(token.access_token.clone())
+            }
+            TokenChoice::Cached(access_token) => Ok(access_token),
+            TokenChoice::Expired => {
+                Err("The Gemini CLI login has expired; run `gemini` once to renew it".to_owned())
             }
         }
-        if !token.is_expired(now) {
-            let expires_at = token.expires_at.unwrap_or(now + 3_600.0);
-            *self.token_cache.lock().await = Some(CachedAccessToken {
-                access_token: token.access_token.clone(),
-                expires_at,
-            });
-            return Ok(token.access_token.clone());
-        }
-        Err("The Gemini CLI login has expired; run `gemini` once to renew it".to_owned())
     }
 
     async fn cached_usable_token(&self) -> Option<String> {
@@ -336,6 +333,33 @@ enum LoginAction {
     UseStored(OAuthToken),
 }
 
+#[derive(Debug, PartialEq)]
+enum TokenChoice {
+    Stored,
+    Cached(String),
+    Expired,
+}
+
+/// The file is the CLI's current session, so a still-valid stored token wins.
+/// Preferring the cache sent a token the CLI had already replaced (after a
+/// re-login, possibly for another account) until that token aged out. The
+/// cache only covers the case where the file now holds an expired token.
+fn pick_access_token(
+    stored: &OAuthToken,
+    cached: Option<&CachedAccessToken>,
+    now: f64,
+) -> TokenChoice {
+    if !stored.is_expired(now) {
+        return TokenChoice::Stored;
+    }
+    match cached {
+        Some(cached) if cached.expires_at - EXPIRY_SKEW_SECS > now => {
+            TokenChoice::Cached(cached.access_token.clone())
+        }
+        _ => TokenChoice::Expired,
+    }
+}
+
 /// No stored login hides the meter. An unreadable store keeps the last
 /// reading, and prefers a still-valid cached token over hiding.
 fn login_action(
@@ -378,7 +402,9 @@ async fn load_credentials() -> CredentialRead {
     let Some(path) = settings_path() else {
         return CredentialRead::Unavailable("The home directory is unavailable".to_owned());
     };
-    if let Ok(bytes) = tokio::fs::read(&path).await {
+    if let Ok(bytes) =
+        crate::platform::read_capped(&path, crate::platform::CREDENTIAL_FILE_LIMIT).await
+    {
         if let Ok(settings) = serde_json::from_slice::<Value>(&bytes) {
             if !oauth_supported(&settings) {
                 return CredentialRead::Absent;
@@ -389,15 +415,28 @@ async fn load_credentials() -> CredentialRead {
     let Some(path) = credentials_path() else {
         return CredentialRead::Unavailable("The home directory is unavailable".to_owned());
     };
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => match parse_oauth_value(&bytes) {
-            Some(token) => CredentialRead::Found(token),
-            None => CredentialRead::Absent,
-        },
+    match crate::platform::read_capped(&path, crate::platform::CREDENTIAL_FILE_LIMIT).await {
+        Ok(bytes) => classify_oauth_file(&bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => CredentialRead::Absent,
         Err(error) => {
             CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display()))
         }
+    }
+}
+
+/// The CLI rewrites `oauth_creds.json` whenever it refreshes the token. A
+/// poll that lands mid-write sees invalid JSON; that is a passing failure
+/// that keeps the last meter, not a sign-out. Only well-formed JSON without
+/// an access token means there is no login.
+fn classify_oauth_file(bytes: &[u8]) -> CredentialRead {
+    if serde_json::from_slice::<Value>(bytes).is_err() {
+        return CredentialRead::Unavailable(
+            "The Gemini CLI login file could not be parsed".to_owned(),
+        );
+    }
+    match parse_oauth_value(bytes) {
+        Some(token) => CredentialRead::Found(token),
+        None => CredentialRead::Absent,
     }
 }
 
@@ -601,17 +640,39 @@ fn remaining_fraction(bucket: &Value) -> Option<f64> {
         }
     }
     // Counts form: remainingAmount / quotaAmount.
-    let remaining = finite_f64(
+    let counts = finite_f64(
         bucket
             .get("remainingAmount")
             .or_else(|| bucket.get("remaining_amount")),
-    )?;
-    let total = finite_f64(
+    )
+    .zip(finite_f64(
         bucket
             .get("quotaAmount")
             .or_else(|| bucket.get("quota_amount")),
-    )?;
-    (total > 0.0).then(|| remaining / total)
+    ))
+    .filter(|(remaining, total)| remaining.is_finite() && total.is_finite() && *total > 0.0)
+    .map(|(remaining, total)| (remaining / total).clamp(0.0, 1.0));
+    if counts.is_some() {
+        return counts;
+    }
+    // Google's JSON mapping leaves out fields equal to zero, so a spent
+    // bucket can arrive with its reset time and nothing else. A bucket that
+    // resets is a real quota; without this the worst bucket in a family was
+    // silently skipped and the meter showed a better model's headroom.
+    spent_bucket(bucket).then_some(0.0)
+}
+
+fn spent_bucket(bucket: &Value) -> bool {
+    ["remainingFraction", "remaining_fraction", "remaining"]
+        .iter()
+        .all(|key| bucket.get(*key).is_none())
+        && parse_reset_timestamp(
+            bucket
+                .get("resetTime")
+                .or_else(|| bucket.get("reset_time"))
+                .or_else(|| bucket.get("resetAt")),
+        )
+        .is_some()
 }
 
 #[cfg(test)]
@@ -730,6 +791,77 @@ mod tests {
             by_id["flash"].pointer("/secondary/usedPercent"),
             Some(&json!(20.0))
         );
+    }
+
+    #[test]
+    fn a_spent_bucket_without_a_fraction_reads_as_full() {
+        // `remainingFraction: 0` is dropped by Google's JSON mapping.
+        let payload = json!({
+            "buckets": [
+                { "modelId": "gemini-2.5-pro", "remainingFraction": 0.6, "resetTime": "2026-10-08T00:00:00Z" },
+                { "modelId": "gemini-3-pro-preview", "resetTime": "2026-10-07T18:00:00Z" },
+                { "modelId": "gemini-2.5-flash", "remainingFraction": 0.9 },
+                { "modelId": "gemini-2.5-flash-lite" }
+            ]
+        });
+        let normalized = normalize_quota(&payload).expect("families");
+        let pro = &normalized.rate_limits["rateLimitsByLimitId"]["pro"];
+        assert_eq!(pro.pointer("/primary/usedPercent"), Some(&json!(100.0)));
+        assert_eq!(
+            pro.pointer("/primary/resetsAt"),
+            Some(&json!(1_791_396_000.0))
+        );
+        // A bucket with no reset and no fraction is still skipped.
+        assert_eq!(
+            normalized
+                .rate_limits
+                .pointer("/rateLimitsByLimitId/flash/secondary/usedPercent"),
+            Some(&json!(10.0))
+        );
+    }
+
+    #[test]
+    fn a_half_written_login_file_keeps_the_last_meter() {
+        for partial in [&b""[..], b"{", br#"{"access_token":"ya29.ab"#] {
+            assert!(matches!(
+                classify_oauth_file(partial),
+                CredentialRead::Unavailable(_)
+            ));
+        }
+        assert!(matches!(
+            classify_oauth_file(br#"{"refresh_token":"1//x"}"#),
+            CredentialRead::Absent
+        ));
+        assert!(matches!(
+            classify_oauth_file(br#"{"access_token":"ya29.abc"}"#),
+            CredentialRead::Found(_)
+        ));
+    }
+
+    #[test]
+    fn a_valid_stored_token_beats_the_cache() {
+        let now = 1_800_000_000.0;
+        let cached = CachedAccessToken {
+            access_token: "old-session".into(),
+            expires_at: now + 1_800.0,
+        };
+        let fresh = OAuthToken {
+            access_token: "new-session".into(),
+            expires_at: Some(now + 3_600.0),
+        };
+        assert_eq!(
+            pick_access_token(&fresh, Some(&cached), now),
+            TokenChoice::Stored
+        );
+        let expired = OAuthToken {
+            access_token: "stale".into(),
+            expires_at: Some(now - 10.0),
+        };
+        assert_eq!(
+            pick_access_token(&expired, Some(&cached), now),
+            TokenChoice::Cached("old-session".into())
+        );
+        assert_eq!(pick_access_token(&expired, None, now), TokenChoice::Expired);
     }
 
     #[test]

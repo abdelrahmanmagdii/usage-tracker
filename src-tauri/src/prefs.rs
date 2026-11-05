@@ -96,6 +96,13 @@ impl Default for ProviderPref {
 pub struct AppPrefs {
     /// Local notifications at 80%/95% used and when a window resets.
     pub usage_alerts: bool,
+    /// "Runs out before it resets at this pace" warnings. Nested under
+    /// `usage_alerts`: they only fire while that master switch is on too.
+    /// On by default, since it is the one usage alert that arrives while
+    /// there is still time to slow down; written only when turned off, so
+    /// files from before this field existed load with it on.
+    #[serde(default = "bool_true", skip_serializing_if = "is_true")]
+    pub pace_alerts: bool,
     /// Notifications for resets announced by Tibo (independent of usage alerts).
     #[serde(default = "bool_true")]
     pub reset_alerts: bool,
@@ -124,6 +131,7 @@ impl Default for AppPrefs {
     fn default() -> Self {
         Self {
             usage_alerts: true,
+            pace_alerts: true,
             reset_alerts: true,
             dense_layout: false,
             combined_tray: true,
@@ -206,10 +214,15 @@ impl PrefsStore {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         mutate(&mut state);
         let snapshot = state.clone();
-        drop(state);
+        // The file is written before the lock is released. Two settings
+        // changed at once (the tray menu and the settings panel run on
+        // different threads) otherwise raced: the older snapshot could land
+        // on disk last and drop the newer change at the next launch, and both
+        // writers shared one temporary file. The file is a few hundred bytes.
         if let Ok(bytes) = serde_json::to_vec_pretty(&snapshot) {
             let _ = write_atomically(&self.path, &bytes);
         }
+        drop(state);
         snapshot
     }
 }
@@ -271,6 +284,7 @@ mod tests {
         let prefs = AppPrefs::default();
         assert!(prefs.combined_tray);
         assert!(prefs.usage_alerts);
+        assert!(prefs.pace_alerts);
         assert!(prefs.reset_alerts);
         assert!(!prefs.dense_layout);
         assert!(prefs.is_visible(PROVIDER_CODEX));
@@ -346,6 +360,26 @@ mod tests {
     }
 
     #[test]
+    fn pace_alerts_default_on_and_are_written_only_when_off() {
+        // A file from before the key existed (and every older shape) keeps
+        // pace alerts on.
+        let prefs: AppPrefs = serde_json::from_str(r#"{"usageAlerts":true}"#).unwrap();
+        assert!(prefs.pace_alerts);
+        let encoded = serde_json::to_string(&AppPrefs::default()).unwrap();
+        assert!(!encoded.contains("paceAlerts"));
+
+        let off = AppPrefs {
+            pace_alerts: false,
+            ..AppPrefs::default()
+        };
+        let encoded = serde_json::to_string(&off).unwrap();
+        assert!(encoded.contains(r#""paceAlerts":false"#));
+        let reloaded = parse_prefs(&encoded).expect("prefs");
+        assert!(!reloaded.pace_alerts);
+        assert_eq!(reloaded, off);
+    }
+
+    #[test]
     fn update_persists_and_reloads() {
         let path = std::env::temp_dir().join(format!("usagebar-prefs-{}.json", std::process::id()));
         let store = PrefsStore::load(path.clone());
@@ -354,6 +388,43 @@ mod tests {
         assert!(!reloaded.get().combined_tray);
         assert!(reloaded.get().usage_alerts);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn concurrent_updates_leave_the_latest_state_on_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "usagebar-prefs-concurrent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = dir.join("preferences.json");
+        let store = std::sync::Arc::new(PrefsStore::load(path.clone()));
+        let threads: Vec<_> = (0..8)
+            .map(|thread| {
+                let store = store.clone();
+                std::thread::spawn(move || {
+                    for round in 0..25 {
+                        store.update(|prefs| {
+                            prefs.set_tray_window(&format!("tool-{thread}"), format!("w{round}"));
+                        });
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        // Whatever order the writers ran in, the file matches memory: every
+        // thread's last choice survives a reload.
+        let saved = parse_prefs(&fs::read_to_string(&path).unwrap()).expect("valid prefs");
+        assert_eq!(saved, store.get());
+        for thread in 0..8 {
+            assert_eq!(saved.tray_window(&format!("tool-{thread}")), "w24");
+        }
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

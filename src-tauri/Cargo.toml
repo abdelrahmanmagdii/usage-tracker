@@ -14,6 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std", "alloc"] }
+dirs = "6"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -22,7 +23,7 @@ tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 time = { version = "0.3", features = ["parsing"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 which = "8"
 
 [target."cfg(not(target_os = \"macos\"))".dependencies]

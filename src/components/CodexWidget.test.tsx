@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { extractRateLimitBuckets } from "../lib/rateLimits";
 import { CodexWidget } from "./CodexWidget";
 import type { CodexBackendState, RateLimitBucket } from "../types/codex";
+import { DEFAULT_PREFS } from "../lib/providers";
 
 const meter = vi.hoisted(() => ({
   state: { connection: "connected" } as CodexBackendState,
@@ -44,6 +45,12 @@ const otherMeters = vi.hoisted(() => ({
     refresh: vi.fn(),
     refreshing: false,
   },
+  gemini: {
+    state: { connection: "cli_not_found" } as CodexBackendState,
+    buckets: [] as RateLimitBucket[],
+    refresh: vi.fn(),
+    refreshing: false,
+  },
 }));
 
 vi.mock("../hooks/useClaudeMeter", () => ({
@@ -52,10 +59,12 @@ vi.mock("../hooks/useClaudeMeter", () => ({
   useCursorMeter: () => otherMeters.cursor,
   useOpenCodeMeter: () => otherMeters.opencode,
   useDevinMeter: () => otherMeters.devin,
+  useGeminiMeter: () => otherMeters.gemini,
 }));
 
 const ipc = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: ipc }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => undefined) }));
 const now = Date.parse("2026-10-15T17:00:00Z");
 
 beforeEach(() => {
@@ -78,8 +87,10 @@ afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
-  otherMeters.antigravity.buckets = [];
-  otherMeters.antigravity.state = { connection: "cli_not_found" };
+  for (const other of Object.values(otherMeters)) {
+    other.buckets = [];
+    other.state = { connection: "cli_not_found" };
+  }
 });
 
 function renderExpanded() {
@@ -247,4 +258,130 @@ it("supports multiple LLM models side-by-side with 5-hour and Argon 4 weekly usa
   expect(screen.getByText("60%")).toBeTruthy();
   // Weekly limits remain hidden in collapsed mode when a 5h limit is present
   expect(screen.queryByText("64%")).toBeNull();
+});
+
+function connectAntigravityGroups() {
+  otherMeters.antigravity.state = { connection: "connected", updatedAt: now / 1000 };
+  otherMeters.antigravity.buckets = extractRateLimitBuckets({
+    rateLimitsByLimitId: {
+      "gemini-5h": { primary: { usedPercent: 2, windowDurationMins: 300 } },
+      "argon-weekly": { limitName: "Gemini 4 Argon", secondary: { usedPercent: 6, windowDurationMins: 10080 } },
+      "3p-5h": { primary: { usedPercent: 40, windowDurationMins: 300 } },
+    },
+  });
+}
+
+it("refreshes each meter once, even when one meter fills several cards", () => {
+  connectAntigravityGroups();
+  renderExpanded();
+  fireEvent.click(screen.getByRole("button", { name: "Refresh quota" }));
+  expect(otherMeters.antigravity.refresh).toHaveBeenCalledOnce();
+  expect(meter.refresh).toHaveBeenCalledOnce();
+});
+
+it("shows a weekly-only plan's window once, labelled as weekly", () => {
+  meter.buckets = extractRateLimitBuckets({
+    rateLimitsByLimitId: {
+      codex: { secondary: { usedPercent: 36, windowDurationMins: 10080, resetsAt: now / 1000 + 3 * 86400 } },
+    },
+  });
+  const { unmount } = render(<CodexWidget />);
+  expect(screen.getByText("7d")).toBeTruthy();
+  expect(screen.queryByText("5h")).toBeNull();
+  expect(screen.getByRole("meter", { name: "Weekly quota remaining" })).toBeTruthy();
+  unmount();
+
+  renderExpanded();
+  expect(screen.getAllByText("64%")).toHaveLength(1);
+});
+
+it("labels other window lengths by their own duration, not as 5-hour", () => {
+  meter.state = { connection: "cli_not_found" };
+  meter.buckets = [];
+  otherMeters.cursor.state = { connection: "connected", updatedAt: now / 1000 };
+  otherMeters.cursor.buckets = extractRateLimitBuckets({
+    rateLimitsByLimitId: {
+      plan: { primary: { usedPercent: 41, windowDurationMins: 43_200, resetsAt: now / 1000 + 9 * 86400 } },
+    },
+  });
+  render(<CodexWidget />);
+  expect(screen.getByText("30d")).toBeTruthy();
+  expect(screen.queryByText("5h")).toBeNull();
+  expect(screen.getByRole("meter", { name: "30-day quota remaining" })).toBeTruthy();
+});
+
+it("gives a signed-in Gemini CLI its own card", () => {
+  meter.state = { connection: "cli_not_found" };
+  meter.buckets = [];
+  otherMeters.gemini.state = { connection: "connected", updatedAt: now / 1000 };
+  otherMeters.gemini.buckets = extractRateLimitBuckets({
+    rateLimitsByLimitId: {
+      pro: { primary: { usedPercent: 30, windowDurationMins: 1_440, resetsAt: now / 1000 + 6 * 3600 } },
+    },
+  });
+  renderExpanded();
+  expect(screen.getByText("Gemini CLI")).toBeTruthy();
+  expect(screen.getAllByText("1d").length).toBeGreaterThan(0);
+  expect(screen.getByRole("meter", { name: "1d quota remaining" })).toBeTruthy();
+});
+
+it("says a stale Cursor reading is stale rather than live", () => {
+  meter.state = { connection: "cli_not_found" };
+  meter.buckets = [];
+  otherMeters.cursor.state = { connection: "connected", updatedAt: now / 1000 - 3600 };
+  otherMeters.cursor.buckets = extractRateLimitBuckets({
+    rateLimitsByLimitId: { plan: { primary: { usedPercent: 41, windowDurationMins: 43_200 } } },
+  });
+  renderExpanded();
+  expect(screen.getByText("Stale reading")).toBeTruthy();
+  expect(screen.queryByText("Live quota")).toBeNull();
+});
+
+function withTauriPrefs(providers: Record<string, { visible: boolean }>) {
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    value: { transformCallback: () => 0 },
+    configurable: true,
+  });
+  ipc.mockImplementation(async (command: string) =>
+    command === "get_app_prefs" ? { ...DEFAULT_PREFS, providers } : undefined,
+  );
+}
+
+it("waits on a tool the user keeps visible, not on a hidden Codex", async () => {
+  withTauriPrefs({ codex: { visible: false } });
+  meter.state = { connection: "cli_not_found" };
+  meter.buckets = [];
+  otherMeters.claude.state = { connection: "starting" };
+  render(<CodexWidget />);
+  await act(async () => {});
+  expect(screen.getByText("Claude")).toBeTruthy();
+  expect(screen.queryByText("Codex")).toBeNull();
+  ipc.mockReset();
+  ipc.mockResolvedValue(undefined);
+});
+
+it("grows the open panel when another tool connects while it is open", async () => {
+  Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+  renderExpanded();
+  const expandCalls = () =>
+    ipc.mock.calls.filter(
+      ([command, args]) => command === "set_widget_expanded" && (args as { expanded: boolean }).expanded,
+    );
+  const before = expandCalls();
+  expect(before).toHaveLength(1);
+  const firstHeight = (before[0][1] as { height: number }).height;
+
+  otherMeters.claude.state = { connection: "connected", updatedAt: now / 1000 };
+  otherMeters.claude.buckets = extractRateLimitBuckets({
+    rateLimitsByLimitId: {
+      session: { primary: { usedPercent: 8, windowDurationMins: 300 } },
+      weekly: { secondary: { usedPercent: 57, windowDurationMins: 10080 } },
+    },
+  });
+  act(() => {
+    vi.advanceTimersByTime(1000);
+  });
+  const after = expandCalls();
+  expect(after.length).toBeGreaterThan(1);
+  expect((after[after.length - 1][1] as { height: number }).height).toBeGreaterThan(firstHeight);
 });
