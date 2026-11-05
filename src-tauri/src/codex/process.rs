@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "macos", test))]
+use std::path::Path;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -26,6 +28,10 @@ use super::protocol::{route_line, unsupported_request_reply, RoutedMessage};
 /// a burst lands first and one refresh covers all of it. Short enough that
 /// the meter still follows a turn as it finishes.
 const NOTIFICATION_DEBOUNCE: Duration = Duration::from_millis(300);
+/// Longest a `codex --version` probe (direct or through a login shell) may
+/// take. A login profile that waits on something used to hold `start`, and
+/// with it every later reconnect, forever.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -142,9 +148,9 @@ impl CodexManager {
                 command
             }
             #[cfg(target_os = "macos")]
-            CodexExecutable::LoginShell => {
-                let mut command = Command::new("/bin/zsh");
-                command.args(["-lc", "exec codex app-server --stdio"]);
+            CodexExecutable::LoginShell(shell) => {
+                let mut command = Command::new(shell);
+                command.args(["-lc", LOGIN_SHELL_EXEC]);
                 command
             }
         };
@@ -460,8 +466,73 @@ impl CodexManager {
 
 enum CodexExecutable {
     Direct(PathBuf),
+    /// Run through this login shell, which puts `codex` on PATH.
     #[cfg(target_os = "macos")]
-    LoginShell,
+    LoginShell(PathBuf),
+}
+
+/// Login shells known to accept `-lc <script>` and to run the three scripts
+/// below unchanged. All three were checked with `codex` reachable only through
+/// the shell's own login profile (`.zprofile`, `.bash_profile`,
+/// `config.fish`). Anything else (tcsh takes `-l` only on its own, nushell has
+/// no `command -v`) keeps the zsh lookup UsageBar always made.
+#[cfg(any(target_os = "macos", test))]
+const LOGIN_SHELLS: [&str; 3] = ["zsh", "bash", "fish"];
+/// macOS's default login shell, and the fallback for an unset or unusable
+/// `$SHELL`.
+#[cfg(any(target_os = "macos", test))]
+const DEFAULT_LOGIN_SHELL: &str = "/bin/zsh";
+#[cfg(any(target_os = "macos", test))]
+const LOGIN_SHELL_LOOKUP: &str = "command -v codex";
+#[cfg(any(target_os = "macos", test))]
+const LOGIN_SHELL_VERSION: &str = "codex --version >/dev/null 2>&1";
+#[cfg(any(target_os = "macos", test))]
+const LOGIN_SHELL_EXEC: &str = "exec codex app-server --stdio";
+
+/// The shell whose login profile is asked to find `codex`: the user's own
+/// `$SHELL` when it is a supported shell given as an absolute path to an
+/// executable file, otherwise `/bin/zsh`. A bash or fish user's PATH lives in
+/// that shell's profile, which zsh never reads.
+#[cfg(any(target_os = "macos", test))]
+fn pick_login_shell(
+    shell_env: Option<&std::ffi::OsStr>,
+    is_executable: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    shell_env
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| LOGIN_SHELLS.contains(&name))
+        })
+        .filter(|path| is_executable(path))
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_LOGIN_SHELL))
+}
+
+#[cfg(any(target_os = "macos", all(unix, test)))]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+/// Runs a probe with no terminal attached and reports whether it succeeded
+/// within `PROBE_TIMEOUT`. A probe that overruns is killed (kill_on_drop).
+async fn probe_succeeds(mut command: Command) -> bool {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+    matches!(
+        timeout(PROBE_TIMEOUT, child.wait()).await,
+        Ok(Ok(status)) if status.success()
+    )
 }
 
 async fn find_codex_cli() -> Result<CodexExecutable, String> {
@@ -489,32 +560,23 @@ async fn find_codex_cli() -> Result<CodexExecutable, String> {
         let mut probe = Command::new(&candidate);
         #[cfg(target_os = "windows")]
         probe.creation_flags(0x08000000);
-        if probe
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .is_ok_and(|status| status.success())
-        {
+        probe.arg("--version");
+        if probe_succeeds(probe).await {
             return Ok(CodexExecutable::Direct(candidate));
         }
     }
     #[cfg(target_os = "macos")]
     {
-        let shell_lookup = Command::new("/bin/zsh")
-            .args(["-lc", "command -v codex"])
-            .output()
-            .await
-            .map_err(|error| error.to_string())?;
-        if shell_lookup.status.success()
-            && Command::new("/bin/zsh")
-                .args(["-lc", "codex --version >/dev/null 2>&1"])
-                .status()
-                .await
-                .is_ok_and(|status| status.success())
-        {
-            return Ok(CodexExecutable::LoginShell);
+        // Apps opened from Finder get launchd's minimal PATH, so a `codex`
+        // installed through nvm, asdf or a custom prefix is only reachable
+        // through the user's login profile.
+        let shell = pick_login_shell(std::env::var_os("SHELL").as_deref(), is_executable_file);
+        let mut lookup = Command::new(&shell);
+        lookup.args(["-lc", LOGIN_SHELL_LOOKUP]);
+        let mut version = Command::new(&shell);
+        version.args(["-lc", LOGIN_SHELL_VERSION]);
+        if probe_succeeds(lookup).await && probe_succeeds(version).await {
+            return Ok(CodexExecutable::LoginShell(shell));
         }
     }
     Err("The official `codex` command could not be executed. Install or repair the Codex CLI, then reconnect.".into())
@@ -533,4 +595,131 @@ fn now_unix_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    fn pick(shell: Option<&str>, executable: bool) -> PathBuf {
+        pick_login_shell(shell.map(OsStr::new), |_| executable)
+    }
+
+    #[test]
+    fn the_users_own_login_shell_is_used_when_it_is_usable() {
+        assert_eq!(pick(Some("/bin/bash"), true), PathBuf::from("/bin/bash"));
+        assert_eq!(
+            pick(Some("/opt/homebrew/bin/fish"), true),
+            PathBuf::from("/opt/homebrew/bin/fish")
+        );
+        assert_eq!(pick(Some("/bin/zsh"), true), PathBuf::from("/bin/zsh"));
+    }
+
+    #[test]
+    fn an_unusable_login_shell_falls_back_to_zsh() {
+        let zsh = PathBuf::from(DEFAULT_LOGIN_SHELL);
+        // Unset, empty, or relative: nothing safe to run.
+        assert_eq!(pick(None, true), zsh);
+        assert_eq!(pick(Some(""), true), zsh);
+        assert_eq!(pick(Some("fish"), true), zsh);
+        // Missing or not executable.
+        assert_eq!(pick(Some("/usr/local/bin/fish"), false), zsh);
+        // Shells that do not take `-lc` or `command -v` as written.
+        assert_eq!(pick(Some("/bin/tcsh"), true), zsh);
+        assert_eq!(pick(Some("/opt/homebrew/bin/nu"), true), zsh);
+        // Only the file name counts, not a directory that happens to match.
+        assert_eq!(pick(Some("/opt/bash/bin/elvish"), true), zsh);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_executable_files_count_as_a_shell() {
+        assert!(is_executable_file(Path::new("/bin/sh")));
+        let dir = std::env::temp_dir().join(format!("usagebar-shell-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let plain = dir.join("fish");
+        std::fs::write(&plain, "").expect("plain file");
+        assert!(!is_executable_file(&plain));
+        assert!(!is_executable_file(&dir));
+        assert!(!is_executable_file(&dir.join("missing")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Runs the three login-shell scripts through every supported shell that
+    /// is installed, with a stand-in `codex` reachable only through that
+    /// shell's login profile, the way a Finder-launched app meets it.
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_scripts_work_in_every_supported_shell() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let root = std::env::temp_dir().join(format!("usagebar-login-{}", std::process::id()));
+        let home = root.join("home");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(home.join(".config/fish")).expect("home");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let codex = bin.join("codex");
+        std::fs::write(
+            &codex,
+            "#!/bin/sh\n\
+             [ \"$1\" = --version ] && { echo codex-cli 0.0.0; exit 0; }\n\
+             [ \"$1 $2\" = 'app-server --stdio' ] && { read -r line; echo \"got:$line\"; exit 0; }\n\
+             exit 3\n",
+        )
+        .expect("stand-in codex");
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let bin = bin.display();
+        let posix_profile = format!("export PATH=\"{bin}:$PATH\"\n");
+        std::fs::write(home.join(".zprofile"), &posix_profile).expect("zprofile");
+        std::fs::write(home.join(".bash_profile"), &posix_profile).expect("bash_profile");
+        std::fs::write(
+            home.join(".config/fish/config.fish"),
+            format!("set -gx PATH {bin} $PATH\n"),
+        )
+        .expect("config.fish");
+
+        let login = |shell: &Path, script: &str| {
+            let mut command = Command::new(shell);
+            command
+                .args(["-lc", script])
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", "/usr/bin:/bin")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            command
+        };
+
+        let mut tried = 0;
+        for name in LOGIN_SHELLS {
+            let Ok(shell) = which::which(name) else {
+                continue;
+            };
+            tried += 1;
+            let status = |script| login(&shell, script).status().expect("shell runs");
+            assert!(status(LOGIN_SHELL_LOOKUP).success(), "{name}: lookup");
+            assert!(status(LOGIN_SHELL_VERSION).success(), "{name}: version");
+
+            let mut server = login(&shell, LOGIN_SHELL_EXEC).spawn().expect("spawn");
+            server
+                .stdin
+                .take()
+                .expect("stdin")
+                .write_all(b"{\"id\":1}\n")
+                .expect("write");
+            let output = server.wait_with_output().expect("app server");
+            assert!(output.status.success(), "{name}: exec");
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("got:{\"id\":1}"),
+                "{name}: stdin and stdout reach codex"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        // Every Mac and Linux machine has bash, so a silent pass is impossible.
+        assert!(tried > 0, "no supported shell was installed");
+    }
 }
