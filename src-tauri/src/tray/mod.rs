@@ -808,8 +808,9 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         };
         app.state::<PrefsStore>()
             .update(|prefs| prefs.set_tray_window(provider.key(), window_id.to_owned()));
-        app.state::<TrayMenuState>().invalidate();
-        refresh_tray(app);
+        // Also tells the renderer, whose settings picker would otherwise
+        // keep showing the previous window.
+        apply_preference_change(app);
         return;
     }
 
@@ -826,7 +827,8 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         "toggle-alerts" => {
             app.state::<PrefsStore>()
                 .update(|prefs| prefs.usage_alerts = !prefs.usage_alerts);
-            app.state::<TrayMenuState>().invalidate();
+            // Keeps the settings panel's switch in step with the menu.
+            apply_preference_change(app);
         }
         "toggle-autostart" => {
             let autolaunch = app.autolaunch();
@@ -838,7 +840,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             if let Err(error) = result {
                 eprintln!("usagebar: launch-at-login toggle failed: {error}");
             }
-            app.state::<TrayMenuState>().invalidate();
+            apply_preference_change(app);
         }
         "check-updates" => {
             let handle = app.clone();
