@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run && node --test tools/tibo-watch/lib.test.mjs tools/versions.test.mjs tools/tauri-args.test.mjs",
+    "test": "vitest run && node --test tools/tibo-watch/lib.test.mjs tools/versions.test.mjs tools/tauri-args.test.mjs tools/sim/contact-sheet.test.mjs",
     "versions:check": "node tools/versions.mjs check",
     "versions:set": "node tools/versions.mjs set",
     "check:macos": "bash ./tools/check-macos.sh",
@@ -36,6 +36,7 @@
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
     "jsdom": "^30.0.1",
+    "playwright": "1.63.0",
     "typescript": "^7.0.2",
     "vite": "^8.2.1",
     "vitest": "^4.1.10"

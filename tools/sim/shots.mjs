@@ -3,7 +3,8 @@
 // backend (sim.html). Starts Vite on a free port, drives Chromium through
 // Playwright, writes PNGs + report.json to sim-shots/ (gitignored), and
 // exits non-zero if the page throws, logs a console error, or invokes an IPC
-// command the simulator does not know.
+// command the simulator does not know. Also writes index.html and
+// contact-sheet.png (tools/sim/contact-sheet.mjs) to skim the run at a glance.
 //
 //   npm run sim:shots
 //   npm run sim:shots -- --scenarios busy,errors --themes dark --no-full
@@ -16,7 +17,8 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, renameSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { writeIndex } from "./contact-sheet.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
@@ -64,12 +66,13 @@ const strictCsp = argv.includes("--strict-csp");
 const concurrency = Number(opt("concurrency", "4")) || 4;
 const copyTo = opt("copy-to", null);
 const VIEWPORT = { width: 388, height: 720 };
+const startedAt = Date.now();
 
 let playwright;
 try {
   playwright = require("playwright");
 } catch {
-  console.error("Playwright is not installed. Install it globally (npm i -g playwright) or as a devDependency.");
+  console.error("Playwright is not installed. Run `npm ci` (it is a devDependency) or install it globally (npm i -g playwright).");
   process.exit(2);
 }
 
@@ -178,7 +181,10 @@ async function ready(page, url) {
 
 async function shot(page, name) {
   const path = join(outDir, `${name}.png`);
-  await page.screenshot({ path });
+  // "disabled" finishes transitions and stops infinite animations (status
+  // pulse, meter sheen, spinners) at their first frame, so a capture does
+  // not depend on when in the cycle it was taken.
+  await page.screenshot({ path, animations: "disabled" });
   files.push(path);
   return path;
 }
@@ -323,7 +329,7 @@ async function timelapse(browser, base) {
       if (frame) await page.evaluate(() => window.__sim.advance("15m"));
       await page.waitForTimeout(350);
       const path = join(frames, `frame-${String(frame).padStart(3, "0")}.png`);
-      await page.screenshot({ path });
+      await page.screenshot({ path, animations: "disabled" });
       files.push(path);
     }
   });
@@ -381,6 +387,55 @@ async function walkthrough(browser, base) {
   rmSync(videoDir, { recursive: true, force: true });
 }
 
+/**
+ * Which installed fonts Chromium actually drew the UI and the numbers with.
+ * The app uses system fonts (-apple-system … Inter, sans-serif; ui-monospace …
+ * monospace), so on Linux the result depends on what is installed: CI
+ * installs Inter (fonts-inter) to match a typical Linux dev box. Recorded in
+ * report.json so a font change is visible instead of looking like a UI change.
+ */
+async function probeFonts(browser, base) {
+  const { context, page } = await openPage(browser);
+  try {
+    await ready(page, simUrl(base, { scenario: "default" }));
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("DOM.enable");
+    await cdp.send("CSS.enable");
+    const { root: documentNode } = await cdp.send("DOM.getDocument", { depth: -1 });
+    const fonts = {};
+    for (const [role, selector] of [["ui", ".quota-heading h2"], ["mono", ".section-label"]]) {
+      const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: documentNode.nodeId, selector });
+      if (!nodeId) continue;
+      const { fonts: used } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+      fonts[role] = used;
+    }
+    return fonts;
+  } catch (caught) {
+    return { error: String(caught?.message ?? caught) };
+  } finally {
+    await context.close();
+  }
+}
+
+/** contact-sheet.png: the index page (popover grid + extras) as one image. */
+async function contactSheet(browser, indexPath) {
+  const context = await browser.newContext({ viewport: { width: 1000, height: 800 }, deviceScaleFactor: 1, colorScheme: "light" });
+  const page = await context.newPage();
+  try {
+    await page.goto(pathToFileURL(indexPath).href, { waitUntil: "load" });
+    // Lazy images below the fold load only when scrolled to; take them all now.
+    await page.evaluate(async () => {
+      for (const img of document.images) img.loading = "eager";
+      await Promise.all([...document.images].map((img) => (img.complete ? null : new Promise((done) => { img.onload = img.onerror = done; }))));
+    });
+    const path = join(outDir, "contact-sheet.png");
+    await page.screenshot({ path, fullPage: true });
+    return path;
+  } finally {
+    await context.close();
+  }
+}
+
 async function pool(tasks, size, browser) {
   const queue = [...tasks];
   await Promise.all(
@@ -393,18 +448,27 @@ async function pool(tasks, size, browser) {
 // ---- main ------------------------------------------------------------------
 mkdirSync(outDir, { recursive: true });
 for (const entry of readdirSync(outDir)) {
-  if (entry.endsWith(".png") || entry === "report.json") rmSync(join(outDir, entry), { force: true });
+  if (entry.endsWith(".png") || entry === "report.json" || entry === "index.html") rmSync(join(outDir, entry), { force: true });
 }
 const server = await startServer();
 console.log(`sim page: ${server.url}/sim.html (${prod ? "production build, report-only CSP" : "vite dev"})`);
-const browser = await playwright.chromium.launch();
+let browser;
+try {
+  browser = await playwright.chromium.launch();
+} catch (caught) {
+  await server.close();
+  console.error(String(caught?.message ?? caught).split("\n").slice(0, 3).join("\n"));
+  console.error("\nChromium for this Playwright version is missing. Install it once with:\n  npx playwright install chromium   (Linux CI: add --with-deps)");
+  process.exit(2);
+}
 let exitCode = 0;
+let fonts = null;
 try {
   await pool(captureJobs(server.url), concurrency, browser);
   if (argv.includes("--timelapse")) await timelapse(browser, server.url);
   if (argv.includes("--video")) await walkthrough(browser, server.url);
+  fonts = await probeFonts(browser, server.url);
 } finally {
-  await browser.close();
   await server.close();
 }
 
@@ -419,27 +483,44 @@ const failures = results.filter(
 const cspCount = results.reduce((sum, result) => sum + result.issues.csp.length, 0);
 const report = {
   createdAt: new Date().toISOString(),
+  durationMs: Date.now() - startedAt,
   mode: prod ? "prod" : "dev",
+  strictCsp,
   seed,
   start,
+  scenarios,
+  themes,
+  densities,
+  browser: `chromium ${browser.version()}`,
+  fonts,
   files: files.map((path) => path.slice(outDir.length + 1)),
   failures: failures.map((result) => result.name),
   results,
 };
 writeFileSync(join(outDir, "report.json"), JSON.stringify(report, null, 2));
+const indexPath = writeIndex(outDir);
+const sheetPath = await contactSheet(browser, indexPath).catch((caught) => {
+  console.warn(`contact sheet: ${caught?.message ?? caught}`);
+  return null;
+});
+await browser.close();
 
 if (copyTo && copyTo !== true) {
   const target = resolve(String(copyTo));
   mkdirSync(target, { recursive: true });
   // Only this run's output (sim-shots/ may also hold sim:linux builds).
-  for (const path of [...files, join(outDir, "report.json")]) {
+  for (const path of [...files, join(outDir, "report.json"), indexPath, ...(sheetPath ? [sheetPath] : [])]) {
     const dest = join(target, path.slice(outDir.length + 1));
     mkdirSync(dirname(dest), { recursive: true });
     cpSync(path, dest);
   }
 }
 
-console.log(`\n${files.length} files in ${outDir}`);
+console.log(`\n${files.length} files in ${outDir} — open ${join(outDir, "index.html")} (or contact-sheet.png)`);
+if (fonts && !fonts.error) {
+  const names = (list) => [...new Set((list ?? []).map((font) => font.familyName))].join(", ") || "?";
+  console.log(`fonts: UI ${names(fonts.ui)}, mono ${names(fonts.mono)}`);
+}
 if (cspCount) console.log(`${cspCount} CSP report(s) — see report.json (issues.csp)`);
 for (const result of failures) {
   console.log(`\nFAILED ${result.name}`);
