@@ -69,8 +69,14 @@ export function observeBuckets(provider: string, buckets: RateLimitBucket[]): Re
     history.push(snapshot);
   }
 
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-MAX_HISTORY)));
-  localStorage.setItem(EVENT_KEY, JSON.stringify(detected.slice(-100)));
+  // History only feeds sparklines and reset detection. A full or blocked
+  // store must not throw into the hook that applies fresh meter state.
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-MAX_HISTORY)));
+    localStorage.setItem(EVENT_KEY, JSON.stringify(detected.slice(-100)));
+  } catch {
+    /* The live meter is already updated; this sample is simply not kept. */
+  }
   return newEvents;
 }
 

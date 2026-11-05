@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { isPossibleSurpriseReset } from "./history";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { isPossibleSurpriseReset, observeBuckets } from "./history";
 import type { QuotaSnapshot } from "../types/codex";
 
 const base: QuotaSnapshot = {
@@ -40,5 +40,30 @@ describe("surprise reset detection", () => {
         remainingPercent: 100,
       }),
     ).toBe(false);
+  });
+});
+
+describe("recording history", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps going when local storage refuses the write", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+      },
+    });
+    const bucket = {
+      id: "session:primary",
+      limitId: "session",
+      windowKind: "primary" as const,
+      usedPercent: 40,
+      remainingPercent: 60,
+      windowDurationMins: 300,
+      reached: false,
+    };
+    expect(() => observeBuckets("claude", [bucket])).not.toThrow();
   });
 });

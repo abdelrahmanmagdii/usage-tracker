@@ -207,14 +207,31 @@ impl PrefsStore {
         mutate(&mut state);
         let snapshot = state.clone();
         drop(state);
-        if let Some(parent) = self.path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
         if let Ok(bytes) = serde_json::to_vec_pretty(&snapshot) {
-            let _ = fs::write(&self.path, bytes);
+            let _ = write_atomically(&self.path, &bytes);
         }
         snapshot
     }
+}
+
+/// Writes `bytes` next to `path` and renames the copy into place, so a crash
+/// or power loss mid-write leaves the previous file intact instead of a
+/// truncated one that fails to parse and silently resets every preference.
+fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+    {
+        let mut file = fs::File::create(&temporary)?;
+        std::io::Write::write_all(&mut file, bytes)?;
+        file.sync_all()?;
+    }
+    fs::rename(&temporary, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temporary);
+    })
 }
 
 fn parse_prefs(raw: &str) -> Option<AppPrefs> {
@@ -337,5 +354,28 @@ mod tests {
         assert!(!reloaded.get().combined_tray);
         assert!(reloaded.get().usage_alerts);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn saving_replaces_the_file_whole_and_leaves_no_temporary_copy() {
+        let dir = std::env::temp_dir().join(format!(
+            "usagebar-prefs-atomic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        // The config directory does not exist yet on a first launch.
+        let path = dir.join("nested").join("preferences.json");
+        let store = PrefsStore::load(path.clone());
+        store.update(|prefs| prefs.dense_layout = true);
+        store.update(|prefs| prefs.onboarding_complete = true);
+
+        let saved = parse_prefs(&fs::read_to_string(&path).unwrap()).expect("valid prefs");
+        assert!(saved.dense_layout);
+        assert!(saved.onboarding_complete);
+        assert!(!dir.join("nested").join("preferences.json.tmp").exists());
+        let _ = fs::remove_dir_all(dir);
     }
 }
