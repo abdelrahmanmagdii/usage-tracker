@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run && node --test tools/tibo-watch/lib.test.mjs tools/versions.test.mjs",
+    "test": "vitest run && node --test tools/tibo-watch/lib.test.mjs tools/versions.test.mjs tools/tauri-args.test.mjs",
     "versions:check": "node tools/versions.mjs check",
     "versions:set": "node tools/versions.mjs set",
     "test:watch": "vitest",
