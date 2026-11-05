@@ -10,7 +10,7 @@ import {
   useDevinMeter,
   useOpenCodeMeter,
 } from "../hooks/useClaudeMeter";
-import { formatCountdown, formatLocalReset } from "../lib/rateLimits";
+import { formatCountdown, formatLocalReset, windowDurationLabel } from "../lib/rateLimits";
 import { freshness } from "../lib/time";
 import { previewPrefs } from "../lib/preview";
 import { DEFAULT_PREFS, type AppPrefs, type ProviderId, isVisible, normalizePrefs } from "../lib/providers";
@@ -31,6 +31,61 @@ function worstTone(a?: RateLimitBucket, b?: RateLimitBucket) {
   if (toneA === "danger" || toneB === "danger") return "danger";
   if (toneA === "warning" || toneB === "warning") return "warning";
   return "normal";
+}
+
+/**
+ * The two windows a card shows: the 5-hour one (else the first that is not
+ * the weekly one) and the weekly one. Falling back to "the first bucket" for
+ * the 5-hour slot showed a weekly-only plan's weekly window twice, once
+ * under a 5h label.
+ */
+export function pickWindows(buckets: RateLimitBucket[]): {
+  fiveHour?: RateLimitBucket;
+  weekly?: RateLimitBucket;
+} {
+  const weekly = buckets.find((b) => b.windowDurationMins === 10_080);
+  const fiveHour = buckets.find((b) => b.windowDurationMins === 300) ?? buckets.find((b) => b !== weekly);
+  return { fiveHour, weekly };
+}
+
+/**
+ * Compact tag from the window's own length ("5h", "1d", "30d"), so a
+ * Cursor month or a Devin day is not labelled 5h. `fallback` covers a
+ * window that did not report its length.
+ */
+export function windowTag(bucket: RateLimitBucket | undefined, fallback: string): string {
+  const mins = bucket?.windowDurationMins;
+  if (!mins || !Number.isFinite(mins) || mins <= 0) return fallback;
+  if (mins % 1_440 === 0) return `${mins / 1_440}d`;
+  if (mins % 60 === 0) return `${mins / 60}h`;
+  return `${mins}m`;
+}
+
+/** Spoken window name ("5-hour", "Weekly", "Daily") for meter labels. */
+function windowName(bucket: RateLimitBucket | undefined, fallback: string): string {
+  const mins = bucket?.windowDurationMins;
+  return mins && Number.isFinite(mins) && mins > 0 ? windowDurationLabel(mins) : fallback;
+}
+
+/** One status vocabulary for every provider, including stale readings. */
+function connectionStatus(
+  state: CodexBackendState,
+  readingStale: boolean,
+  signIn: string,
+  missing: string,
+): string {
+  switch (state.connection) {
+    case "connected":
+      return readingStale ? "Stale reading" : "Live quota";
+    case "not_authenticated":
+      return signIn;
+    case "cli_not_found":
+      return missing;
+    case "starting":
+      return "Connecting…";
+    default:
+      return "Reconnecting…";
+  }
 }
 
 function planLabel(account: unknown): string | null {
@@ -278,174 +333,100 @@ export function CodexWidget() {
       }
     }
 
-    // 2. Codex
-    const showCodex = isVisible(prefs, "codex");
-    if (showCodex && (codex.state.connection === "connected" || codex.buckets.length > 0)) {
-      const subscription = codex.buckets.filter((b) => b.limitId === "codex");
-      const candidates = subscription.length ? subscription : codex.buckets;
-      const fiveHour = candidates.find((b) => b.windowDurationMins === 300) ?? candidates[0];
-      const weekly = candidates.find((b) => b.windowDurationMins === 10_080);
-      const age = freshness(codex.state.updatedAt, now);
-      const stale = codex.state.connection !== "connected" || age?.stale === true;
-      const status =
-        codex.state.connection === "connected"
-          ? age?.stale
-            ? "Stale reading"
-            : "Live quota"
-          : codex.state.connection === "not_authenticated"
-            ? "Sign in to Codex"
-            : codex.state.connection === "cli_not_found"
-              ? "Codex CLI missing"
-              : codex.state.connection === "starting"
-                ? "Connecting…"
-                : "Reconnecting…";
-
-      list.push({
-        id: "codex",
+    // 2-6. Single-card providers, in widget order.
+    const simple: Array<{
+      provider: Exclude<ProviderId, "antigravity" | "gemini">;
+      name: string;
+      shortLabel: string;
+      signIn: string;
+      missing: string;
+      meter: { state: CodexBackendState; buckets: RateLimitBucket[]; refresh: () => Promise<void> };
+      buckets: RateLimitBucket[];
+    }> = [
+      {
         provider: "codex",
         name: "Codex",
         shortLabel: "Codex",
-        fiveHourBucket: fiveHour,
-        weeklyBucket: weekly,
-        stale,
-        status,
-        plan: planLabel(codex.state.account),
-        state: codex.state,
-        refresh: codex.refresh,
-      });
-    }
-
-    // 3. Claude Code
-    const showClaude = isVisible(prefs, "claude");
-    if (showClaude && (claude.state.connection === "connected" || claude.buckets.length > 0)) {
-      const age = freshness(claude.state.updatedAt, now);
-      const stale = claude.state.connection !== "connected" || age?.stale === true;
-      const status =
-        claude.state.connection === "connected"
-          ? age?.stale
-            ? "Stale reading"
-            : "Live quota"
-          : claude.state.connection === "not_authenticated"
-            ? "Sign in to Claude"
-            : claude.state.connection === "cli_not_found"
-              ? "Claude CLI missing"
-              : claude.state.connection === "starting"
-                ? "Connecting…"
-                : "Reconnecting…";
-
-      list.push({
-        id: "claude",
+        signIn: "Sign in to Codex",
+        missing: "Codex CLI missing",
+        meter: codex,
+        // Model-scoped Codex limits ride along in the payload; the card
+        // follows the subscription limit when there is one.
+        buckets: codex.buckets.some((b) => b.limitId === "codex")
+          ? codex.buckets.filter((b) => b.limitId === "codex")
+          : codex.buckets,
+      },
+      {
         provider: "claude",
         name: "Claude Code",
         shortLabel: "Claude",
-        fiveHourBucket: claude.buckets.find((b) => b.windowDurationMins === 300) ?? claude.buckets[0],
-        weeklyBucket: claude.buckets.find((b) => b.windowDurationMins === 10_080),
-        stale,
-        status,
-        plan: planLabel(claude.state.account),
-        state: claude.state,
-        refresh: claude.refresh,
-      });
-    }
-
-    // 4. OpenCode Go
-    const showOpenCode = isVisible(prefs, "opencode");
-    if (showOpenCode && (opencode.state.connection === "connected" || opencode.buckets.length > 0)) {
-      const age = freshness(opencode.state.updatedAt, now);
-      const stale = opencode.state.connection !== "connected" || age?.stale === true;
-
-      list.push({
-        id: "opencode",
+        signIn: "Sign in to Claude",
+        missing: "Claude CLI missing",
+        meter: claude,
+        buckets: claude.buckets,
+      },
+      {
         provider: "opencode",
         name: "OpenCode Go",
         shortLabel: "OpenCode",
-        fiveHourBucket:
-          opencode.buckets.find((b) => b.windowDurationMins === 300) ?? opencode.buckets[0],
-        weeklyBucket: opencode.buckets.find((b) => b.windowDurationMins === 10_080),
-        stale,
-        status: opencode.state.connection === "connected" ? "Live quota" : "Connecting…",
-        plan: planLabel(opencode.state.account),
-        state: opencode.state,
-        refresh: opencode.refresh,
-      });
-    }
-
-    // 5. Cursor
-    const showCursor = isVisible(prefs, "cursor");
-    if (showCursor && (cursor.state.connection === "connected" || cursor.buckets.length > 0)) {
-      const age = freshness(cursor.state.updatedAt, now);
-      const stale = cursor.state.connection !== "connected" || age?.stale === true;
-
-      list.push({
-        id: "cursor",
+        signIn: "Sign in to OpenCode",
+        missing: "OpenCode missing",
+        meter: opencode,
+        buckets: opencode.buckets,
+      },
+      {
         provider: "cursor",
         name: "Cursor",
         shortLabel: "Cursor",
-        fiveHourBucket: cursor.buckets[0],
-        weeklyBucket: undefined,
-        stale,
-        status: cursor.state.connection === "connected" ? "Live quota" : "Connecting…",
-        plan: planLabel(cursor.state.account),
-        state: cursor.state,
-        refresh: cursor.refresh,
-      });
-    }
-
-    // 6. Devin
-    const showDevin = isVisible(prefs, "devin");
-    if (showDevin && (devin.state.connection === "connected" || devin.buckets.length > 0)) {
-      const age = freshness(devin.state.updatedAt, now);
-      const stale = devin.state.connection !== "connected" || age?.stale === true;
-
-      list.push({
-        id: "devin",
+        signIn: "Sign in to Cursor",
+        missing: "Cursor missing",
+        meter: cursor,
+        buckets: cursor.buckets,
+      },
+      {
         provider: "devin",
         name: "Devin",
         shortLabel: "Devin",
-        fiveHourBucket: devin.buckets[0],
-        weeklyBucket: devin.buckets.find((b) => b.windowDurationMins === 10_080),
-        stale,
-        status: devin.state.connection === "connected" ? "Live quota" : "Connecting…",
-        plan: planLabel(devin.state.account),
-        state: devin.state,
-        refresh: devin.refresh,
-      });
-    }
+        signIn: "Sign in to Devin",
+        missing: "Devin missing",
+        meter: devin,
+        buckets: devin.buckets,
+      },
+    ];
 
-    // Default fallback if nothing is currently connected
-    if (list.length === 0) {
-      const subscription = codex.buckets.filter((b) => b.limitId === "codex");
-      const candidates = subscription.length ? subscription : codex.buckets;
-      const fiveHour = candidates.find((b) => b.windowDurationMins === 300);
-      const weekly = candidates.find((b) => b.windowDurationMins === 10_080);
-      const age = freshness(codex.state.updatedAt, now);
-      const stale = codex.state.connection !== "connected" || age?.stale === true;
-      const status =
-        codex.state.connection === "connected"
-          ? age?.stale
-            ? "Stale reading"
-            : "Live quota"
-          : codex.state.connection === "not_authenticated"
-            ? "Sign in to Codex"
-            : codex.state.connection === "cli_not_found"
-              ? "Codex CLI missing"
-              : codex.state.connection === "starting"
-                ? "Connecting…"
-                : "Reconnecting…";
-
-      list.push({
-        id: "codex",
-        provider: "codex",
-        name: "Codex",
-        shortLabel: "Codex",
+    const cardFor = (entry: (typeof simple)[number]): WidgetModelItem => {
+      const { state } = entry.meter;
+      const age = freshness(state.updatedAt, now);
+      const { fiveHour, weekly } = pickWindows(entry.buckets);
+      return {
+        id: entry.provider,
+        provider: entry.provider,
+        name: entry.name,
+        shortLabel: entry.shortLabel,
         fiveHourBucket: fiveHour,
         weeklyBucket: weekly,
-        stale,
-        status,
-        plan: planLabel(codex.state.account),
-        state: codex.state,
-        refresh: codex.refresh,
-      });
+        stale: state.connection !== "connected" || age?.stale === true,
+        // OpenCode, Cursor and Devin used to say "Live quota" over a stale
+        // reading and "Connecting…" when signed out.
+        status: connectionStatus(state, age?.stale === true, entry.signIn, entry.missing),
+        plan: planLabel(state.account),
+        state,
+        refresh: entry.meter.refresh,
+      };
+    };
+
+    for (const entry of simple) {
+      if (!isVisible(prefs, entry.provider)) continue;
+      if (entry.meter.state.connection !== "connected" && entry.meter.buckets.length === 0) continue;
+      list.push(cardFor(entry));
+    }
+
+    // Nothing to show yet: a placeholder card for the first tool the user
+    // keeps visible, so it says what that tool is waiting on. It used to
+    // always be Codex, even with Codex hidden.
+    if (list.length === 0) {
+      const placeholder = simple.find((entry) => isVisible(prefs, entry.provider)) ?? simple[0];
+      list.push(cardFor(placeholder));
     }
 
     return list;
@@ -481,7 +462,10 @@ export function CodexWidget() {
     devin.refreshing;
 
   const refreshAll = async () => {
-    await Promise.allSettled(items.map((it) => it.refresh()));
+    // Antigravity fills up to three cards from one meter; refresh it once,
+    // not once per card.
+    const refreshers = new Set(items.map((it) => it.refresh));
+    await Promise.allSettled([...refreshers].map((refresh) => refresh()));
   };
 
 function formatCompactTime(resetsAt?: number, nowMs = Date.now()): string {
@@ -573,6 +557,18 @@ function formatCompactTime(resetsAt?: number, nowMs = Date.now()): string {
   };
   changeExpandedRef.current = changeExpanded;
 
+  // The expanded size was only sent at the moment of expanding. A tool that
+  // connects (or drops out) while the panel is open changes how many cards
+  // it holds, and the window kept its old height, clipping the new card.
+  useEffect(() => {
+    if (!expandedRef.current || !("__TAURI_INTERNALS__" in window)) return;
+    void invoke("set_widget_expanded", {
+      expanded: true,
+      width: expandedWidth,
+      height: expandedHeight,
+    }).catch(() => undefined);
+  }, [expandedWidth, expandedHeight]);
+
   useEffect(() => {
     if (
       !("__TAURI_INTERNALS__" in window) ||
@@ -662,7 +658,9 @@ function formatCompactTime(resetsAt?: number, nowMs = Date.now()): string {
           <div className="widget-compact-quotas" ref={quotasRef}>
             {items.map((item) => {
               const bucket = item.fiveHourBucket ?? item.weeklyBucket;
-              const windowLabel = item.fiveHourBucket || !item.weeklyBucket ? "5h" : "7d";
+              const slotIsWeekly = !(item.fiveHourBucket || !item.weeklyBucket);
+              const windowLabel = windowTag(bucket, slotIsWeekly ? "7d" : "5h");
+              const spokenWindow = windowName(bucket, slotIsWeekly ? "Weekly" : "5-hour");
               const remaining = bucket ? Math.round(bucket.remainingPercent) : undefined;
               const tone = quotaTone(bucket);
               const countdown = bucket?.resetsAt ? formatCountdown(bucket.resetsAt, now) : "";
@@ -687,19 +685,19 @@ function formatCompactTime(resetsAt?: number, nowMs = Date.now()): string {
                   <strong className="widget-model-percent">
                     {remaining === undefined ? "—" : `${item.stale ? "~" : ""}${remaining}%`}
                   </strong>
-                  {bucket?.resetsAt && (
+                  {bucket?.resetsAt ? (
                     <time className="widget-compact-time">
                       {formatCompactTime(bucket.resetsAt, now)}
                     </time>
-                  )}
+                  ) : null}
                   {bucket && (
                     <span
                       className="widget-chip-track"
                       role="meter"
                       aria-label={
                         items.length === 1
-                          ? `${windowLabel === "7d" ? "Weekly" : "5-hour"} quota remaining`
-                          : `${item.shortLabel} ${windowLabel === "7d" ? "weekly" : "5-hour"} quota remaining`
+                          ? `${spokenWindow} quota remaining`
+                          : `${item.shortLabel} ${spokenWindow.toLowerCase()} quota remaining`
                       }
                       aria-valuemin={0}
                       aria-valuemax={100}
@@ -825,7 +823,7 @@ function formatCompactTime(resetsAt?: number, nowMs = Date.now()): string {
                   )}
                   {(item.fiveHourBucket || !item.weeklyBucket) && (
                     <QuotaRow
-                      label="5h"
+                      label={windowTag(item.fiveHourBucket, "5h")}
                       bucket={item.fiveHourBucket}
                       now={now}
                       stale={item.stale}
