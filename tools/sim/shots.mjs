@@ -108,7 +108,7 @@ async function startServer() {
     await server.listen();
     return { url: `http://127.0.0.1:${port}`, close: () => server.close() };
   }
-  const distDir = join(root, "node_modules/.sim-dist");
+  const distDir = join(outDir, ".dist"); // per checkout; node_modules may be shared
   await vite.build({
     root,
     logLevel: "warn",
