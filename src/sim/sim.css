@@ -1,0 +1,62 @@
+/* Simulator-only styles: the desktop behind the transparent popover, and the
+   optional HUD. Loaded only by sim.html. */
+
+html[data-sim-bg="wallpaper"] body {
+  background:
+    radial-gradient(120% 80% at 10% 0%, #c9d6ff 0%, transparent 60%),
+    radial-gradient(90% 70% at 100% 100%, #f3d4e8 0%, transparent 60%),
+    linear-gradient(160deg, #e9e4f7, #dcd8ee);
+}
+html[data-sim-bg="white"] body { background: #fff; }
+html[data-sim-bg="black"] body { background: #000; }
+
+@media (prefers-color-scheme: dark) {
+  html[data-sim-bg="wallpaper"] body {
+    background:
+      radial-gradient(120% 80% at 10% 0%, #2b2f6b 0%, transparent 60%),
+      radial-gradient(90% 70% at 100% 100%, #4a2142 0%, transparent 60%),
+      linear-gradient(160deg, #15131f, #1d1a2b);
+  }
+}
+
+.sim-hud {
+  position: fixed;
+  z-index: 2147483000;
+  left: 8px;
+  right: 8px;
+  bottom: 64px;
+  font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #f4f2ff;
+  pointer-events: none;
+}
+.sim-hud > * { pointer-events: auto; }
+.sim-hud-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 8px;
+  background: rgba(20, 16, 34, .82);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .25);
+}
+.sim-hud-tray { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.sim-hud-time { opacity: .75; white-space: nowrap; }
+.sim-hud button, .sim-hud select {
+  font: inherit;
+  color: inherit;
+  background: rgba(255, 255, 255, .12);
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.sim-hud select option { color: #111; }
+.sim-hud-panel {
+  display: none;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(20, 16, 34, .9);
+}
+.sim-hud.open .sim-hud-panel { display: grid; gap: 6px; }
+.sim-hud-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
