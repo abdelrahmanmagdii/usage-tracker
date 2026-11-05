@@ -1017,7 +1017,10 @@ backtrace:
         assert!(report.contains("message: hook-test boom at ~/x with token=[redacted]"));
         assert!(!report.contains("f0e1f0e1"));
         assert!(report.contains("thread: crash-test"));
-        assert!(report.contains("location: src/crashlog.rs:"));
+        assert!(
+            report.contains("location: src/crashlog.rs:")
+                || report.contains("location: src\\crashlog.rs:")
+        );
         assert!(report.contains(&format!("version: {}", env!("CARGO_PKG_VERSION"))));
         assert!(report.contains(&format!("os: {} (", std::env::consts::OS)));
         assert!(report.contains("backtrace:"));

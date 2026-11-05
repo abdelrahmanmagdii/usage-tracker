@@ -656,6 +656,7 @@ mod tests {
         pick_login_shell(shell.map(OsStr::new), |_| executable)
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_users_own_login_shell_is_used_when_it_is_usable() {
         assert_eq!(pick(Some("/bin/bash"), true), PathBuf::from("/bin/bash"));
