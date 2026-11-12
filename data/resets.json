@@ -1,6 +1,13 @@
 {
-  "updatedAt": "2026-10-07T21:18:49.345Z",
+  "updatedAt": "2026-11-12T23:54:22.840Z",
   "events": [
+    {
+      "id": "tibo-bsky-3n25htoboge2d",
+      "announcedAt": "2026-11-12T21:59:39.000Z",
+      "source": "tibo",
+      "text": "We shipped some good updates to dots today and the banked reset has been activated and should land in everyones accounts sometime soon!",
+      "sourceUrl": "https://bsky.app/profile/thsottiaux-bot.eurosky.social/post/3n25htoboge2d"
+    },
     {
       "id": "tibo-bsky-3mxco5ryiip2k",
       "announcedAt": "2026-10-07T19:19:17.000Z",
