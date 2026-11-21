@@ -28,11 +28,17 @@ export function QuotaSection({
   now,
   dense = false,
   live = true,
+  scopeId,
+  historyAllowed = true,
 }: {
   provider: string;
   bucket: RateLimitBucket;
   now: number;
   dense?: boolean;
+  /** The account this reading belongs to; history is read from its series only. */
+  scopeId?: string;
+  /** False for a native reading with no known account: nothing is charted. */
+  historyAllowed?: boolean;
   /** False when the provider is failing, signed out or stale: the recorded
    * history still shows, but no "runs out in" projection is made from it. */
   live?: boolean;
@@ -49,8 +55,8 @@ export function QuotaSection({
   // tick. The read is cached in history.ts, but the memo also keeps the
   // array identity stable for the memos below.
   const history = useMemo(
-    () => historySeries(provider, bucket.id),
-    [provider, bucket.id, bucket.usedPercent, bucket.resetsAt],
+    () => (historyAllowed ? historySeries(provider, bucket.id, scopeId) : []),
+    [provider, bucket.id, scopeId, historyAllowed, bucket.usedPercent, bucket.resetsAt],
   );
   // Minute resolution is plenty for the pace estimate and the chart's "now";
   // it keeps both from recomputing on every one-second tick.

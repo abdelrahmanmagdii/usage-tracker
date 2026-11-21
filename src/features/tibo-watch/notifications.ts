@@ -1,10 +1,12 @@
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
 import type { ResetEvent } from "../../types/codex";
 import { formatLeadTime } from "../../lib/time";
+import { PROVIDER_CATALOG } from "../../lib/providers";
+import {
+  canPostInBackground,
+  getNotificationStatus,
+  postUsageNotification,
+  requestNotificationPermission,
+} from "../../lib/notificationDelivery";
 import { tweetKey } from "../../../tools/tibo-watch/lib.mjs";
 
 const NOTIFIED_KEY = "codex-meter.notified-events.v1";
@@ -92,8 +94,20 @@ export function selectLandedResetNotifications(
   });
 }
 
+const providerLabel = (id?: string): string | undefined =>
+  PROVIDER_CATALOG.find((provider) => provider.id === id)?.label;
+
+/** "weekly " for a local detection's window; nothing for the generic "Limit". */
+const windowPhrase = (event: ResetEvent): string =>
+  event.windowLabel && event.windowLabel !== "Limit" ? `${event.windowLabel.toLowerCase()} ` : "";
+
 export function resetNotificationTitle(event: ResetEvent, nowMs = Date.now()): string {
-  if (event.source === "detected") return "Possible Codex quota reset detected";
+  if (event.source === "detected") {
+    const provider = providerLabel(event.provider);
+    return provider
+      ? `${provider}: possible ${windowPhrase(event)}quota reset detected`
+      : "Possible quota reset detected";
+  }
   const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
   // The advance warning is the headline: knowing a reset is incoming means
   // remaining quota can be spent freely before it refreshes anyway.
@@ -108,7 +122,7 @@ export function planSummary(event: ResetEvent): string | null {
 
 export function resetNotificationBody(event: ResetEvent, nowMs = Date.now()): string {
   if (event.source === "detected") {
-    return "Your available quota jumped before its scheduled renewal.";
+    return `Your ${windowPhrase(event) || "available "}quota jumped before its scheduled renewal.`;
   }
   const occursAt = event.occursAt ? Date.parse(event.occursAt) : Number.NaN;
   const plans = planSummary(event);
@@ -129,9 +143,10 @@ let notifyQueue: Promise<void> = Promise.resolve();
 
 /**
  * Sends a macOS notification for fresh public announcements and locally
- * detected surprise resets. Only notifications accepted by the native bridge
- * are recorded as delivered; denied permission is remembered for the batch so
- * the app does not repeatedly ask about the same event.
+ * detected surprise resets. Only notifications the system accepted are
+ * recorded as delivered. Without permission nothing is posted or recorded, so
+ * a still-fresh event goes out once permission is granted. Background calls
+ * never prompt for permission.
  */
 export function notifyFreshResets(
   events: ResetEvent[],
@@ -172,22 +187,17 @@ async function deliverFreshResets(
     })),
   ].slice(0, MAX_PER_BATCH);
   if (queue.length === 0) return;
+  const permission = await getNotificationStatus().then(
+    (status) => status.permission,
+    () => "unavailable" as const,
+  );
+  if (!canPostInBackground(permission)) return;
   let changed = false;
   try {
-    let granted = await isPermissionGranted();
-    if (!granted) granted = (await requestPermission()) === "granted";
-    if (!granted) {
-      for (const item of queue) {
-        notified.add(item.key);
-        notified.add(announcedKey(item.event));
-      }
-      writeNotified(notified);
-      return;
-    }
     for (const item of queue) {
-      // Await delivery before recording: an un-awaited rejection used to
-      // mark the event notified without ever showing the notification.
-      await sendNotification({ title: item.title, body: item.body });
+      // Await delivery before recording: a rejected post must leave the
+      // event eligible for a later retry.
+      await postUsageNotification("reset", item.title, item.body);
       notified.add(item.key);
       if (item.event.source !== "detected") notified.add(announcedKey(item.event));
       // A landed event is the final word on that announcement.
@@ -195,27 +205,33 @@ async function deliverFreshResets(
       changed = true;
     }
   } catch {
-    /* Keep failed events eligible for a later retry (e.g. after installing a signed build). */
+    /* Keep failed events eligible for a later retry; the native side keeps the reason. */
   } finally {
     if (changed) writeNotified(notified);
   }
 }
 
-export type TestNotificationResult = "sent" | "denied" | "unavailable";
+export type TestNotificationResult = "sent" | "denied" | "failed" | "unavailable";
 
-/** Sends a sample alert so a muted or denied permission shows up now, not on reset day. */
+/**
+ * Sends a sample alert so a muted or denied permission shows up now, not on
+ * reset day. "sent" means the system accepted it; Focus can still hide it.
+ * This is an explicit user action, so it may ask for permission.
+ */
 export async function sendTestNotification(): Promise<TestNotificationResult> {
   if (!("__TAURI_INTERNALS__" in window)) return "unavailable";
+  let { permission } = await getNotificationStatus();
+  if (permission === "notDetermined") permission = (await requestNotificationPermission()).permission;
+  if (permission === "unavailable") return "unavailable";
+  if (!canPostInBackground(permission)) return "denied";
   try {
-    let granted = await isPermissionGranted();
-    if (!granted) granted = (await requestPermission()) === "granted";
-    if (!granted) return "denied";
-    await sendNotification({
-      title: "UsageBar notifications work",
-      body: "You'll hear about Tibo's resets and your usage alerts like this.",
-    });
+    await postUsageNotification(
+      "test",
+      "UsageBar notifications work",
+      "You'll hear about Tibo's resets and your usage alerts like this.",
+    );
     return "sent";
   } catch {
-    return "unavailable";
+    return "failed";
   }
 }

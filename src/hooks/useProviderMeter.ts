@@ -4,8 +4,13 @@ import { listen } from "@tauri-apps/api/event";
 import type { CodexBackendState } from "../types/codex";
 import { extractRateLimitBuckets } from "../lib/rateLimits";
 import { observeBuckets } from "../lib/history";
+import { accountContext } from "../lib/accounts";
 import { stateAfterRefreshFailure } from "../lib/providers";
 import { isDevPreview } from "../lib/preview";
+
+/** Native readings need a known account to keep history; previews do not. */
+const historyAllowed = (scopeId: string | undefined): boolean =>
+  scopeId !== undefined || !("__TAURI_INTERNALS__" in window);
 
 const initialState: CodexBackendState = { connection: "starting" };
 /** Outside Tauri there is no backend: the tool reads as absent and hides. */
@@ -63,11 +68,17 @@ export function useProviderMeter({
     shownUpdatedAt.current = next.updatedAt;
     setState(next);
     const buckets = extractRateLimitBuckets(next.rateLimits);
-    const signature = buckets
+    const { scopeId } = accountContext(next.account);
+    const bucketSignature = buckets
       .map((bucket) => `${bucket.id}:${bucket.usedPercent}:${bucket.resetsAt ?? ""}`)
       .join("|");
-    if (observeHistory && signature && signature !== observedSignature.current) {
-      observeBuckets(provider, buckets);
+    // The scope is part of the signature: the same numbers under another
+    // account are a new observation, never a repeat.
+    const signature = bucketSignature && `${scopeId ?? ""}#${bucketSignature}`;
+    // A native reading with no known account is neither recorded nor charted,
+    // so two accounts can never share one series.
+    if (observeHistory && signature && historyAllowed(scopeId) && signature !== observedSignature.current) {
+      observeBuckets(provider, buckets, scopeId);
       observedSignature.current = signature;
     }
   }, [provider, observeHistory]);
@@ -110,15 +121,23 @@ export function useProviderMeter({
     };
   }, [event, getCommand, preview, fallbackState, applyState]);
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const { scopeId, sourceLabel, maskedIdentity } = accountContext(state.account);
+    return {
       state,
       buckets: extractRateLimitBuckets(state.rateLimits),
       refreshing,
       refresh,
-    }),
-    [state, refreshing, refresh],
-  );
+      scopeId,
+      sourceLabel,
+      maskedIdentity,
+      historyAllowed: historyAllowed(scopeId),
+    };
+  }, [state, refreshing, refresh]);
 }
 
-export type ProviderMeter = ReturnType<typeof useProviderMeter>;
+type MeterAccountKeys = "scopeId" | "sourceLabel" | "maskedIdentity" | "historyAllowed";
+
+/** The account fields are optional so a hand-built meter (tests, previews) still fits. */
+export type ProviderMeter = Omit<ReturnType<typeof useProviderMeter>, MeterAccountKeys> &
+  Partial<Pick<ReturnType<typeof useProviderMeter>, MeterAccountKeys>>;

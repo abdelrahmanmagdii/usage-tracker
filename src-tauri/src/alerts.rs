@@ -7,9 +7,9 @@ use std::collections::{HashMap, VecDeque};
 
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Mutex;
 
+use crate::notifications::{self, Source};
 use crate::prefs::PrefsStore;
 
 /// Fallback levels when preferences are unavailable. The stored preference
@@ -484,7 +484,34 @@ impl UsageAlerts {
     /// mark themselves connected with a fresh `updated_at`, so every reading
     /// here is live: a failing or signed-out provider feeds nothing, and the
     /// pace warning can never extrapolate from a stale number.
-    pub async fn observe(&self, app: &AppHandle, provider: &str, payload: &Value) {
+    pub async fn observe_for(
+        &self,
+        app: &AppHandle,
+        provider: &str,
+        source: &crate::accounts::ActiveSource,
+        context: &crate::accounts::AccountContext,
+        payload: &Value,
+    ) {
+        let suffix = alert_suffix(provider, source);
+        let account = AlertAccount {
+            scope: context.scope_id.as_deref(),
+            profile_label: suffix.as_deref(),
+        };
+        self.observe(app, provider, &account, payload).await;
+    }
+
+    pub async fn observe(
+        &self,
+        app: &AppHandle,
+        provider: &str,
+        account: &AlertAccount<'_>,
+        payload: &Value,
+    ) {
+        // Without a stable account there is nothing safe to compare readings
+        // against: a switch could read as a fresh window or a threshold jump.
+        let Some(scope) = account.scope else {
+            return;
+        };
         let prefs = app.try_state::<PrefsStore>().map(|store| store.get());
         let enabled = prefs.as_ref().map(|p| p.usage_alerts).unwrap_or(true);
         let pace_enabled = enabled && prefs.as_ref().map(|p| p.pace_alerts).unwrap_or(true);
@@ -492,24 +519,58 @@ impl UsageAlerts {
             .as_ref()
             .map(|p| p.alert_thresholds())
             .unwrap_or_else(|| DEFAULT_THRESHOLDS.to_vec());
-        let top_threshold = thresholds.iter().copied().reduce(f64::max).unwrap_or(100.0);
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
+        let display = account.display_name(provider);
+        let pending = self
+            .collect(
+                &display,
+                provider,
+                scope,
+                payload,
+                enabled,
+                pace_enabled,
+                &thresholds,
+                now_ms,
+            )
+            .await;
+        for (source, title, body) in pending {
+            let _ = notifications::dispatch(app, source, &title, &body).await;
+        }
+    }
+
+    /// Feeds one payload through the state machine and returns what to post.
+    /// Both mutexes are released before the caller awaits any delivery.
+    #[allow(clippy::too_many_arguments)]
+    async fn collect(
+        &self,
+        display: &str,
+        provider: &str,
+        scope: &str,
+        payload: &Value,
+        enabled: bool,
+        pace_enabled: bool,
+        thresholds: &[f64],
+        now_ms: u64,
+    ) -> Vec<(Source, String, String)> {
+        let top_threshold = thresholds.iter().copied().reduce(f64::max).unwrap_or(100.0);
         let now = now_ms / 1000;
+        let mut pending: Vec<(Source, String, String)> = Vec::new();
         let mut seen = self.seen.lock().await;
         let mut pace = self.pace.lock().await;
         for window in extract_windows(provider, payload) {
+            let state_key = scoped_key(scope, &window.key);
             let current = window.observation();
-            let previous = seen.insert(window.key.clone(), current);
+            let previous = seen.insert(state_key.clone(), current);
             let alert = match previous {
-                Some(previous) if enabled => crossing(&previous, &current, now, &thresholds),
+                Some(previous) if enabled => crossing(&previous, &current, now, thresholds),
                 _ => None,
             };
             // Always recorded, so turning pace alerts on mid-window has
             // history to work with; a first sighting only seeds it.
-            let warning = pace.entry(window.key.clone()).or_default().observe(
+            let warning = pace.entry(state_key).or_default().observe(
                 &window,
                 now_ms,
                 PaceContext {
@@ -519,15 +580,16 @@ impl UsageAlerts {
                 },
             );
             if let Some(warning) = warning {
-                let (title, body) = pace_notification(provider, &window, warning);
-                let _ = app.notification().builder().title(title).body(body).show();
+                let (title, body) = pace_notification(display, &window, warning);
+                pending.push((Source::Pace, title, body));
             }
             let Some(alert) = alert else {
                 continue;
             };
-            let (title, body) = match alert {
+            let (source, title, body) = match alert {
                 AlertKind::Threshold(threshold) => (
-                    format!("{provider}: {} window at {threshold:.0}%", window.label),
+                    Source::Threshold,
+                    format!("{display}: {} window at {threshold:.0}%", window.label),
                     match window.resets_at {
                         Some(resets_at) if resets_at > now => format!(
                             "{:.0}% used · resets in {}",
@@ -538,11 +600,50 @@ impl UsageAlerts {
                     },
                 ),
                 AlertKind::FreshWindow => (
-                    format!("{provider}: fresh {} window", window.label),
+                    Source::FreshWindow,
+                    format!("{display}: fresh {} window", window.label),
                     format!("Usage is back down to {:.0}%", window.used),
                 ),
             };
-            let _ = app.notification().builder().title(title).body(body).show();
+            pending.push((source, title, body));
+        }
+        pending
+    }
+}
+
+/// The source named in an alert title: custom profiles and explicit built-in
+/// choices, never the default. A leading provider name is dropped, so Devin
+/// Desktop reads "Devin (Desktop)" rather than "Devin (Devin Desktop)".
+fn alert_suffix(provider: &str, source: &crate::accounts::ActiveSource) -> Option<String> {
+    if source.id == crate::accounts::DEFAULT_ID {
+        return None;
+    }
+    let trimmed = source
+        .label
+        .strip_prefix(provider)
+        .map(str::trim)
+        .filter(|rest| !rest.is_empty());
+    Some(trimmed.unwrap_or(&source.label).to_owned())
+}
+
+/// Alert state is kept per account scope, so one account's window can never
+/// be compared with another's.
+fn scoped_key(scope: &str, window_key: &str) -> String {
+    format!("{scope}:{window_key}")
+}
+
+/// Who a reading belongs to. `scope` is `None` when no stable account is known.
+pub struct AlertAccount<'a> {
+    pub scope: Option<&'a str>,
+    /// Shown in the title for a custom profile, so alerts say which login fired.
+    pub profile_label: Option<&'a str>,
+}
+
+impl AlertAccount<'_> {
+    fn display_name(&self, provider: &str) -> String {
+        match self.profile_label {
+            Some(label) => format!("{provider} ({label})"),
+            None => provider.to_owned(),
         }
     }
 }
@@ -1150,5 +1251,90 @@ mod tests {
             );
         }
         assert!(tracker.samples.len() <= PACE_MAX_SAMPLES);
+    }
+
+    fn payload(used: f64) -> Value {
+        serde_json::json!({
+            "rateLimitsByLimitId": {
+                "weekly": { "primary": { "usedPercent": used, "windowDurationMins": 10_080.0 } }
+            }
+        })
+    }
+
+    async fn run(alerts: &UsageAlerts, scope: &str, used: f64) -> Vec<(Source, String, String)> {
+        alerts
+            .collect(
+                "Codex",
+                "Codex",
+                scope,
+                &payload(used),
+                true,
+                true,
+                &[95.0, 80.0],
+                T0_MS,
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn switching_accounts_is_never_a_fresh_window_or_a_threshold_jump() {
+        let alerts = UsageAlerts::default();
+        assert!(run(&alerts, "scope-a", 50.0).await.is_empty());
+        let crossed = run(&alerts, "scope-a", 90.0).await;
+        assert!(matches!(crossed[0].0, Source::Threshold));
+        // Account B appears at 5% right after A sat at 90%: a first sighting.
+        assert!(run(&alerts, "scope-b", 5.0).await.is_empty());
+        // And A returning to 90% is no new crossing.
+        assert!(run(&alerts, "scope-a", 90.0).await.is_empty());
+        // Within one account a real drop still announces a fresh window.
+        let fresh = run(&alerts, "scope-a", 3.0).await;
+        assert!(fresh
+            .iter()
+            .any(|(source, _, _)| matches!(source, Source::FreshWindow)));
+    }
+
+    #[test]
+    fn a_custom_profile_label_appears_in_alert_titles() {
+        let account = AlertAccount {
+            scope: Some("s"),
+            profile_label: Some("Work"),
+        };
+        assert_eq!(account.display_name("Codex"), "Codex (Work)");
+        let plain = AlertAccount {
+            scope: Some("s"),
+            profile_label: None,
+        };
+        assert_eq!(plain.display_name("Codex"), "Codex");
+    }
+
+    #[test]
+    fn explicit_builtin_sources_are_named_without_repeating_the_provider() {
+        use crate::accounts::{ActiveSource, Source};
+        let source = |id: &str, label: &str| ActiveSource {
+            id: id.into(),
+            label: label.into(),
+            source: Source::Default,
+            problem: None,
+        };
+        assert_eq!(
+            alert_suffix("Devin", &source("default", "Devin CLI (default)")),
+            None
+        );
+        assert_eq!(
+            alert_suffix("Devin", &source("devin-desktop", "Devin Desktop")).as_deref(),
+            Some("Desktop")
+        );
+        assert_eq!(
+            alert_suffix(
+                "Claude Code",
+                &source("claude-file", "Claude CLI file only")
+            )
+            .as_deref(),
+            Some("Claude CLI file only")
+        );
+        assert_eq!(
+            alert_suffix("Codex", &source("custom-1", "Work")).as_deref(),
+            Some("Work")
+        );
     }
 }

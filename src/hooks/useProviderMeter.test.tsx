@@ -41,6 +41,10 @@ function reading(updatedAt: number | undefined, usedPercent: number, connection:
   };
 }
 
+function scoped(state: CodexBackendState, scopeId: string): CodexBackendState {
+  return { ...state, account: { scopeId, sourceLabel: "Work", maskedIdentity: "a***@b.com" } };
+}
+
 const preview = () => reading(1, 1);
 const options = {
   provider: "claude",
@@ -94,14 +98,38 @@ describe("useProviderMeter at startup", () => {
     const { result } = renderHook(() => useProviderMeter(options));
     await flush();
 
-    emit("claude://state", reading(200, 40));
+    emit("claude://state", scoped(reading(200, 40), "scope-a"));
     expect(result.current.state.updatedAt).toBe(200);
 
-    await act(async () => initial.resolve(reading(100, 10)));
+    await act(async () => initial.resolve(scoped(reading(100, 10), "scope-a")));
     expect(result.current.state.updatedAt).toBe(200);
     expect(result.current.buckets[0]?.usedPercent).toBe(40);
     // The stale read never reaches the history either.
     expect(history.observeBuckets).toHaveBeenCalledTimes(1);
+    expect(history.observeBuckets).toHaveBeenCalledWith("claude", expect.any(Array), "scope-a");
+  });
+
+  it("never records a native reading that names no account", async () => {
+    ipc.invoke.mockResolvedValue(reading(100, 10));
+    const { result } = renderHook(() => useProviderMeter(options));
+    await flush();
+    expect(result.current.scopeId).toBeUndefined();
+    expect(result.current.historyAllowed).toBe(false);
+    expect(history.observeBuckets).not.toHaveBeenCalled();
+  });
+
+  it("records the same numbers again under another account, but not twice under one", async () => {
+    ipc.invoke.mockResolvedValue(scoped(reading(100, 10), "scope-a"));
+    const { result } = renderHook(() => useProviderMeter(options));
+    await flush();
+    emit("claude://state", scoped(reading(101, 10), "scope-a"));
+    expect(history.observeBuckets).toHaveBeenCalledTimes(1);
+    emit("claude://state", scoped(reading(102, 10), "scope-b"));
+    expect(history.observeBuckets).toHaveBeenCalledTimes(2);
+    expect(history.observeBuckets).toHaveBeenLastCalledWith("claude", expect.any(Array), "scope-b");
+    expect(result.current.scopeId).toBe("scope-b");
+    expect(result.current.sourceLabel).toBe("Work");
+    expect(result.current.maskedIdentity).toBe("a***@b.com");
   });
 
   it("still applies an equal or missing timestamp so connection changes go through", async () => {
@@ -174,7 +202,7 @@ describe("useCodexMeter", () => {
     expect(result.current.buckets).toHaveLength(2);
     expect(result.current.resetCredits.availableCount).toBe(1);
     expect(result.current.usage?.lifetimeTokens).toBe(2_470_000);
-    expect(history.observeBuckets).toHaveBeenCalledWith("codex", expect.any(Array));
+    expect(history.observeBuckets).toHaveBeenCalledWith("codex", expect.any(Array), undefined);
   });
 
   it("leaves the history alone for the widget window", async () => {

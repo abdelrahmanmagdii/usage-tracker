@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import App from "./App";
+import App, { HeaderSummary } from "./App";
+import { NowProvider } from "./hooks/useNow";
 import type { AppPrefs } from "./lib/providers";
 import type { CodexBackendState } from "./types/codex";
 
@@ -20,11 +21,6 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ startDragging: vi.fn() }) }));
-vi.mock("@tauri-apps/plugin-notification", () => ({
-  isPermissionGranted: async () => false,
-  requestPermission: async () => "denied",
-  sendNotification: vi.fn(),
-}));
 // The reset feed polls the network; the popover only needs its list.
 vi.mock("./features/tibo-watch/useResetEvents", () => ({ useResetEvents: () => [] }));
 // The popover calls useProviderMeters once per render, so counting the calls
@@ -231,5 +227,49 @@ describe("App", () => {
       expect(ipc.invoke).toHaveBeenCalledWith("complete_onboarding");
       expect(ipc.invoke).not.toHaveBeenCalledWith("hide_window");
     });
+  });
+});
+
+describe("HeaderSummary", () => {
+  const bucket = (remaining: number, mins = 300) => ({
+    id: `b-${remaining}`,
+    limitId: "x",
+    windowKind: "primary" as const,
+    usedPercent: 100 - remaining,
+    remainingPercent: remaining,
+    windowDurationMins: mins,
+    reached: false,
+  });
+  const now = Date.parse("2026-10-03T12:00:00Z");
+  const fresh = Math.floor(now / 1000) - 30;
+  const stale = Math.floor(now / 1000) - 3 * 3600;
+
+  it("names the provider and window, and prefers a live reading over a lower stale one", () => {
+    render(
+      <NowProvider value={now}>
+        <HeaderSummary
+          entries={[
+            { provider: "Claude Code", bucket: bucket(5, 10_080), connection: "connected", updatedAt: stale },
+            { provider: "Devin", bucket: bucket(60, 10_080), connection: "connected", updatedAt: fresh },
+          ]}
+        />
+      </NowProvider>,
+    );
+    expect(screen.getByText(/Left · Devin · Weekly/)).toBeTruthy();
+    expect(screen.queryByText(/Claude Code/)).toBeNull();
+  });
+
+  it("says last known when nothing is live", () => {
+    render(
+      <NowProvider value={now}>
+        <HeaderSummary
+          entries={[
+            { provider: "Claude Code", bucket: bucket(5, 10_080), connection: "error", updatedAt: fresh },
+            { provider: "Devin", bucket: bucket(60, 10_080), connection: "connected", updatedAt: stale },
+          ]}
+        />
+      </NowProvider>,
+    );
+    expect(screen.getByText(/Last known · Claude Code · Weekly/)).toBeTruthy();
   });
 });

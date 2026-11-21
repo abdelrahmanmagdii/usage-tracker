@@ -18,6 +18,7 @@ use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::accounts::{self, ActiveSource, Source};
 use crate::codex::process::ConnectionState;
 use crate::provider::{
     finite_f64, http_client, now_unix_seconds, parse_reset_timestamp, rate_limits_map,
@@ -63,6 +64,14 @@ struct ManagedHub {
 struct CachedAccessToken {
     access_token: String,
     expires_at: f64,
+    /// Who the token belongs to; only the same person may reuse it.
+    identity: Option<String>,
+}
+
+/// The token a request is made with, and the stable identity bound to it.
+struct UsedToken {
+    access_token: String,
+    stable: String,
 }
 
 impl AntigravityManager {
@@ -84,7 +93,6 @@ impl AntigravityManager {
         };
         let _ = hub.child.kill().await;
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), hub.child.wait()).await;
-        let _ = std::fs::remove_file(&hub.hub_file);
     }
 
     pub async fn snapshot(&self) -> ProviderState {
@@ -101,6 +109,12 @@ impl AntigravityManager {
             .get()
             .is_visible(crate::prefs::PROVIDER_ANTIGRAVITY)
         {
+            return false;
+        }
+        if !matches!(
+            accounts::active(&self.app, "antigravity").source,
+            Source::Default | Source::AntigravityApp
+        ) {
             return false;
         }
         let Some(newest) = logged_endpoints().await.into_iter().next() else {
@@ -135,64 +149,76 @@ impl AntigravityManager {
         }
 
         let _guard = self.refresh_lock.lock().await;
-        let logged = logged_endpoints().await;
-        *self.last_local_endpoint.lock().await = logged.first().cloned();
-        if let Some(local) = fetch_local_usage(&logged).await {
-            self.publish(&local.plan, local.payload).await?;
+        let source = accounts::active(&self.app, "antigravity");
+        if source.source == Source::Unavailable {
+            self.hide_missing(source.problem.clone()).await;
             return Ok(self.snapshot().await);
+        }
+        let missing = missing_message(&source);
+        let looks_at_app = matches!(source.source, Source::Default | Source::AntigravityApp);
+        if looks_at_app {
+            let logged = logged_endpoints().await;
+            *self.last_local_endpoint.lock().await = logged.first().cloned();
+            if let Some(local) = fetch_local_usage(&logged).await {
+                self.publish_local(local, &source).await?;
+                return Ok(self.snapshot().await);
+            }
+            // Only the running app was asked for: no cloud fallback.
+            if source.source == Source::AntigravityApp {
+                if self.snapshot().await.updated_at.is_none() {
+                    self.hide_missing(Some(missing)).await;
+                }
+                return Ok(self.snapshot().await);
+            }
         }
 
         // No editor/IDE hub is running: start a hidden `agy --hub` process so
         // Antigravity quota stays live without opening VS Code or the IDE.
-        if let Some(endpoint) = self.ensure_managed_hub().await {
-            let client = local_http_client();
-            if let Some(local) = probe_endpoints(&client, &[endpoint]).await {
-                *self.last_local_endpoint.lock().await = logged_endpoints().await.into_iter().next();
-                self.publish(&local.plan, local.payload).await?;
-                return Ok(self.snapshot().await);
+        // Only the Automatic choice may start the vendor CLI.
+        if source.source.uses_default_cli() {
+            if let Some(endpoint) = self.ensure_managed_hub().await {
+                let client = local_http_client();
+                if let Some(local) = probe_endpoints(&client, &[endpoint]).await {
+                    *self.last_local_endpoint.lock().await =
+                        logged_endpoints().await.into_iter().next();
+                    self.publish_local(local, &source).await?;
+                    return Ok(self.snapshot().await);
+                }
+                // Signed out or unusable: don't keep an idle hub running.
+                self.shutdown().await;
             }
-            // Signed out or unusable — don't keep an idle hub running.
-            self.shutdown().await;
         }
 
         // The app and the CLI are closed. No login hides the meter. An
-        // unreadable store keeps a meter that is already showing, and can
-        // still use a cached token. Users do not have to run every tool.
-        let stored = load_credentials(allow_keychain_prompt).await;
-        let has_cached = self.cached_usable_token().await.is_some();
+        // unreadable store keeps a meter that is already showing, but never
+        // makes a fresh reading for an account it could not verify.
+        let stored = load_credentials(&source.source, allow_keychain_prompt).await;
         let has_shown = self.snapshot().await.updated_at.is_some();
-        let access_token = match login_action(stored, has_cached, has_shown) {
+        let used = match login_action(stored, has_shown) {
             LoginAction::Hide => {
-                self.hide_missing().await;
+                self.hide_missing(Some(missing)).await;
                 return Ok(self.snapshot().await);
             }
             LoginAction::KeepLast => return Ok(self.snapshot().await),
-            LoginAction::UseCached => match self.cached_usable_token().await {
-                Some(token) => token,
-                None if has_shown => return Ok(self.snapshot().await),
-                None => {
-                    self.hide_missing().await;
-                    return Ok(self.snapshot().await);
-                }
-            },
             LoginAction::UseStored(token) => match self.resolve_access_token(&token).await {
-                Ok(access_token) => access_token,
+                Ok(used) => used,
                 Err(_) => {
-                    self.hide_missing().await;
+                    self.hide_missing(Some(missing)).await;
                     return Ok(self.snapshot().await);
                 }
             },
         };
+        let access_token = used.access_token.clone();
 
         let payload = match self.fetch_quota(&access_token).await {
             Ok(payload) => payload,
             Err(QuotaFetch::Unauthorized) => {
-                self.hide_missing().await;
+                self.hide_missing(None).await;
                 return Ok(self.snapshot().await);
             }
             Err(QuotaFetch::Failed(message)) => {
                 if self.snapshot().await.updated_at.is_none() {
-                    self.hide_missing().await;
+                    self.hide_missing(None).await;
                     return Ok(self.snapshot().await);
                 }
                 self.set_connection(ConnectionState::Error, Some(message.clone()))
@@ -201,11 +227,33 @@ impl AntigravityManager {
             }
         };
 
-        self.publish("Antigravity", payload).await?;
+        let context = accounts::context_from("antigravity", &source, Some(&used.stable), None);
+        self.publish("Antigravity", payload, &source, &context)
+            .await?;
         Ok(self.snapshot().await)
     }
 
-    async fn publish(&self, plan: &str, payload: Value) -> Result<(), String> {
+    async fn publish_local(&self, local: LocalUsage, source: &ActiveSource) -> Result<(), String> {
+        let context = accounts::context_from(
+            "antigravity",
+            source,
+            local.identity.as_ref().map(|(stable, _)| stable.as_str()),
+            local
+                .identity
+                .as_ref()
+                .and_then(|(_, masked)| masked.clone()),
+        );
+        self.publish(&local.plan, local.payload, source, &context)
+            .await
+    }
+
+    async fn publish(
+        &self,
+        plan: &str,
+        payload: Value,
+        source: &ActiveSource,
+        context: &accounts::AccountContext,
+    ) -> Result<(), String> {
         let Some(normalized) = normalize_usage(&payload) else {
             let message = "Antigravity did not report any quota windows".to_owned();
             self.set_connection(ConnectionState::Error, Some(message.clone()))
@@ -217,59 +265,65 @@ impl AntigravityManager {
             let mut state = self.state.write().await;
             state.connection = ConnectionState::Connected;
             state.diagnostic = None;
-            state.account = Some(json!({
+            state.account = Some(context.apply(json!({
                 "type": "oauth",
                 "planType": plan,
-            }));
+            })));
             state.rate_limits = Some(normalized.rate_limits.clone());
             state.updated_at = Some(now_unix_seconds());
         }
         if let Some(alerts) = self.app.try_state::<crate::alerts::UsageAlerts>() {
             alerts
-                .observe(&self.app, "Antigravity", &normalized.rate_limits)
+                .observe_for(
+                    &self.app,
+                    "Antigravity",
+                    source,
+                    context,
+                    &normalized.rate_limits,
+                )
                 .await;
         }
         self.emit_state().await;
         Ok(())
     }
 
-    async fn resolve_access_token(&self, token: &OAuthToken) -> Result<String, String> {
+    async fn resolve_access_token(&self, token: &OAuthToken) -> Result<UsedToken, String> {
         let now = now_unix_seconds() as f64;
         let cached = self.token_cache.lock().await.clone();
         match pick_access_token(token, cached.as_ref(), now) {
             TokenChoice::Stored => {
-                self.store_cached_token(token.access_token.clone(), token.expires_at)
-                    .await;
-                Ok(token.access_token.clone())
+                self.store_cached_token(token).await;
+                Ok(UsedToken {
+                    access_token: token.access_token.clone(),
+                    stable: token_stable(token),
+                })
             }
-            TokenChoice::Cached(access_token) => Ok(access_token),
+            TokenChoice::Cached(access_token) => Ok(UsedToken {
+                access_token,
+                stable: token_stable(token),
+            }),
             TokenChoice::Expired => Err("Antigravity token is not usable".to_owned()),
         }
     }
 
-    async fn cached_usable_token(&self) -> Option<String> {
-        let now = now_unix_seconds() as f64;
-        let cache = self.token_cache.lock().await;
-        cache.as_ref().and_then(|cached| {
-            (cached.expires_at - EXPIRY_SKEW_SECS > now).then(|| cached.access_token.clone())
-        })
-    }
-
     /// Drop the meter. No running Antigravity session and no usable token.
-    async fn hide_missing(&self) {
+    async fn hide_missing(&self, diagnostic: Option<String>) {
         *self.token_cache.lock().await = None;
         {
             let mut state = self.state.write().await;
-            crate::provider::conceal_provider(&mut state, None);
+            crate::provider::conceal_provider(&mut state, diagnostic);
         }
         self.emit_state().await;
     }
 
-    async fn store_cached_token(&self, access_token: String, expires_at: Option<f64>) {
-        let expires_at = expires_at.unwrap_or(now_unix_seconds() as f64 + 3_600.0);
+    async fn store_cached_token(&self, token: &OAuthToken) {
+        let expires_at = token
+            .expires_at
+            .unwrap_or(now_unix_seconds() as f64 + 3_600.0);
         *self.token_cache.lock().await = Some(CachedAccessToken {
-            access_token,
+            access_token: token.access_token.clone(),
             expires_at,
+            identity: token.identity.clone(),
         });
     }
 
@@ -332,7 +386,6 @@ impl AntigravityManager {
                     }
                     return None;
                 }
-                let _ = std::fs::remove_file(&hub.hub_file);
                 *slot = None;
             }
         }
@@ -340,7 +393,7 @@ impl AntigravityManager {
         let agy = find_agy_cli()?;
         let home = crate::platform::home_dir()?;
         let port = pick_free_loopback_port()?;
-        let hub_file = std::path::PathBuf::from(home)
+        let hub_file = home
             .join(".gemini/antigravity/daemon")
             .join(format!("hub_{port}.json"));
 
@@ -379,7 +432,6 @@ impl AntigravityManager {
             ready
         } else {
             let _ = child.kill().await;
-            let _ = std::fs::remove_file(&hub_file);
             None
         }
     }
@@ -392,7 +444,7 @@ fn find_agy_cli() -> Option<std::path::PathBuf> {
         } else {
             "agy"
         };
-        let bundled = std::path::PathBuf::from(home).join(".gemini/bin").join(name);
+        let bundled = home.join(".gemini/bin").join(name);
         if bundled.is_file() {
             return Some(bundled);
         }
@@ -409,6 +461,26 @@ fn pick_free_loopback_port() -> Option<u16> {
 struct LocalUsage {
     plan: String,
     payload: Value,
+    /// Stable id and masked email from the same status answer. Never tier,
+    /// port or endpoint: those say nothing about who is signed in.
+    identity: Option<(String, Option<String>)>,
+}
+
+fn local_identity(status: &Value) -> Option<(String, Option<String>)> {
+    let text = |name: &str| {
+        status
+            .pointer(&format!("/userStatus/{name}"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && value.len() <= 320)
+    };
+    let email = text("email");
+    let masked = email.and_then(accounts::mask_email);
+    ["userId", "user_id"]
+        .iter()
+        .find_map(|name| text(name))
+        .map(|id| (format!("user:{id}"), masked.clone()))
+        .or_else(|| email.map(|email| (format!("email:{}", email.to_ascii_lowercase()), masked)))
 }
 
 /// Asks a running Antigravity app, IDE, VS Code extension, or `agy` session
@@ -448,8 +520,10 @@ async fn probe_endpoints(
         if normalize_usage(&quota).is_none() {
             continue;
         }
+        let status = status.unwrap_or(Value::Null);
         return Some(LocalUsage {
-            plan: plan_from_status(status.as_ref().unwrap_or(&Value::Null)),
+            plan: plan_from_status(&status),
+            identity: local_identity(&status),
             payload: quota,
         });
     }
@@ -563,14 +637,18 @@ async fn logged_endpoints() -> Vec<LocalEndpoint> {
 }
 
 fn collect_logged_endpoints() -> Vec<LocalEndpoint> {
-    let mut endpoints = daemon_hub_endpoints();
+    #[cfg(not(target_os = "windows"))]
+    return daemon_hub_endpoints();
     #[cfg(target_os = "windows")]
-    for endpoint in windows_logged_endpoints() {
-        if !endpoints.contains(&endpoint) {
-            endpoints.push(endpoint);
+    {
+        let mut endpoints = daemon_hub_endpoints();
+        for endpoint in windows_logged_endpoints() {
+            if !endpoints.contains(&endpoint) {
+                endpoints.push(endpoint);
+            }
         }
+        endpoints
     }
-    endpoints
 }
 
 /// Newer `agy` / Antigravity extension builds (v1.5+) write each running hub's
@@ -580,7 +658,7 @@ fn daemon_hub_endpoints() -> Vec<LocalEndpoint> {
     let Some(home) = crate::platform::home_dir() else {
         return Vec::new();
     };
-    daemon_hub_endpoints_in(&std::path::PathBuf::from(home).join(".gemini/antigravity/daemon"))
+    daemon_hub_endpoints_in(&home.join(".gemini/antigravity/daemon"))
 }
 
 fn daemon_hub_endpoints_in(daemon_dir: &std::path::Path) -> Vec<LocalEndpoint> {
@@ -982,6 +1060,8 @@ struct OAuthToken {
     #[allow(dead_code)]
     refresh_token: Option<String>,
     expires_at: Option<f64>,
+    /// `iss` and `sub` from an id token, when the file has one. Metadata only.
+    identity: Option<String>,
 }
 
 impl OAuthToken {
@@ -1002,7 +1082,6 @@ enum CredentialRead {
 enum LoginAction {
     Hide,
     KeepLast,
-    UseCached,
     UseStored(OAuthToken),
 }
 
@@ -1013,10 +1092,28 @@ enum TokenChoice {
     Expired,
 }
 
+fn token_stable(token: &OAuthToken) -> String {
+    token
+        .identity
+        .clone()
+        .unwrap_or_else(|| accounts::credential_stable(&token.access_token))
+}
+
+fn missing_message(source: &ActiveSource) -> String {
+    match source.source {
+        Source::Default => "No Antigravity login was found on this computer".to_owned(),
+        Source::AntigravityApp => {
+            "The Antigravity app is not running. Open it to read its quota.".to_owned()
+        }
+        _ => format!("No Antigravity login was found for “{}”.", source.label),
+    }
+}
+
 /// The stored login is what Antigravity is using now, so a still-valid one
 /// wins. Preferring the cache kept sending a token Antigravity had already
 /// replaced (after a re-login, possibly for another account) until it aged
-/// out. The cache only covers a stored token that has since expired.
+/// out. The cache only covers a stored token that has since expired, and only
+/// when both name the same person.
 fn pick_access_token(
     stored: &OAuthToken,
     cached: Option<&CachedAccessToken>,
@@ -1026,7 +1123,11 @@ fn pick_access_token(
         return TokenChoice::Stored;
     }
     match cached {
-        Some(cached) if cached.expires_at - EXPIRY_SKEW_SECS > now => {
+        Some(cached)
+            if cached.expires_at - EXPIRY_SKEW_SECS > now
+                && stored.identity.is_some()
+                && stored.identity == cached.identity =>
+        {
             TokenChoice::Cached(cached.access_token.clone())
         }
         _ => TokenChoice::Expired,
@@ -1034,16 +1135,11 @@ fn pick_access_token(
 }
 
 /// No stored login hides the meter. An unreadable store keeps the last
-/// reading, and prefers a still-valid cached token over hiding.
-fn login_action(
-    read: CredentialRead,
-    has_cached_token: bool,
-    has_shown_usage: bool,
-) -> LoginAction {
+/// reading and never makes a fresh one.
+fn login_action(read: CredentialRead, has_shown_usage: bool) -> LoginAction {
     match read {
         CredentialRead::Found(token) => LoginAction::UseStored(token),
         CredentialRead::Absent => LoginAction::Hide,
-        CredentialRead::Unavailable(_) if has_cached_token => LoginAction::UseCached,
         CredentialRead::Unavailable(_) if has_shown_usage => LoginAction::KeepLast,
         CredentialRead::Unavailable(_) => LoginAction::Hide,
     }
@@ -1107,13 +1203,13 @@ async fn load_from_keychain(allow_prompt: bool) -> CredentialRead {
     }
 }
 
-fn token_file_path() -> Option<std::path::PathBuf> {
+fn default_token_file() -> Option<std::path::PathBuf> {
     let home = crate::platform::home_dir()?;
     Some(home.join(".gemini/antigravity-cli/antigravity-oauth-token"))
 }
 
-async fn load_from_file() -> CredentialRead {
-    let Some(path) = token_file_path() else {
+async fn load_from_file(path: Option<std::path::PathBuf>) -> CredentialRead {
+    let Some(path) = path else {
         return CredentialRead::Unavailable(
             "The home directory is unavailable, so the Antigravity token file could not be located"
                 .to_owned(),
@@ -1128,10 +1224,21 @@ async fn load_from_file() -> CredentialRead {
     }
 }
 
-async fn load_credentials(allow_keychain_prompt: bool) -> CredentialRead {
-    let file = load_from_file().await;
-    let keychain = load_from_keychain(allow_keychain_prompt).await;
-    combine_reads(keychain, file, now_unix_seconds() as f64)
+/// Which stores a selection may read. A pinned source never falls through to
+/// another one.
+async fn load_credentials(source: &Source, allow_keychain_prompt: bool) -> CredentialRead {
+    match source {
+        Source::Directory(root) => {
+            load_from_file(Some(accounts::marker_path(root, "antigravity-oauth-token"))).await
+        }
+        Source::AntigravityKeychain => load_from_keychain(allow_keychain_prompt).await,
+        Source::Default => {
+            let file = load_from_file(default_token_file()).await;
+            let keychain = load_from_keychain(allow_keychain_prompt).await;
+            combine_reads(keychain, file, now_unix_seconds() as f64)
+        }
+        _ => CredentialRead::Absent,
+    }
 }
 
 fn combine_reads(first: CredentialRead, second: CredentialRead, now: f64) -> CredentialRead {
@@ -1235,10 +1342,19 @@ fn parse_oauth_value(value: &Value) -> Option<OAuthToken> {
         .or_else(|| token.get("expires_at"))
         .or_else(|| token.get("expiresAt"))
         .and_then(parse_expiry);
+    let identity = token
+        .get("id_token")
+        .or_else(|| token.get("idToken"))
+        .and_then(Value::as_str)
+        .map(accounts::jwt_subject)
+        .and_then(|(subject, issuer)| {
+            subject.map(|subject| format!("jwt:{}:{subject}", issuer.unwrap_or_default()))
+        });
     Some(OAuthToken {
         access_token,
         refresh_token,
         expires_at,
+        identity,
     })
 }
 
@@ -1832,7 +1948,10 @@ server.go:569] Language server listening on random port at 53573 for HTTP
                 csrf: Some("token-https".to_owned()),
             })
         );
-        assert_eq!(parse_daemon_hub(r#"{"httpPort":57698,"csrfToken":""}"#), None);
+        assert_eq!(
+            parse_daemon_hub(r#"{"httpPort":57698,"csrfToken":""}"#),
+            None
+        );
 
         let temp = std::env::temp_dir().join(format!("usagebar-hub-daemon-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp);
@@ -2141,63 +2260,127 @@ server.go:569] Language server listening on random port at 53573 for HTTP
         ));
     }
 
+    fn token(access: &str, expires_at: f64, identity: Option<&str>) -> OAuthToken {
+        OAuthToken {
+            access_token: access.into(),
+            refresh_token: None,
+            expires_at: Some(expires_at),
+            identity: identity.map(str::to_owned),
+        }
+    }
+
     #[test]
     fn a_valid_stored_token_beats_the_cache() {
         let now = 1_800_000_000.0;
         let cached = CachedAccessToken {
             access_token: "old-session".into(),
             expires_at: now + 1_800.0,
+            identity: Some("jwt::a".into()),
         };
-        let fresh = OAuthToken {
-            access_token: "new-session".into(),
-            refresh_token: None,
-            expires_at: Some(now + 3_600.0),
-        };
+        let fresh = token("new-session", now + 3_600.0, Some("jwt::b"));
         assert_eq!(
             pick_access_token(&fresh, Some(&cached), now),
             TokenChoice::Stored
         );
-        let expired = OAuthToken {
-            access_token: "stale".into(),
-            refresh_token: None,
-            expires_at: Some(now - 10.0),
-        };
+        let expired_same = token("stale", now - 10.0, Some("jwt::a"));
         assert_eq!(
-            pick_access_token(&expired, Some(&cached), now),
+            pick_access_token(&expired_same, Some(&cached), now),
             TokenChoice::Cached("old-session".into())
         );
-        assert_eq!(pick_access_token(&expired, None, now), TokenChoice::Expired);
-    }
-
-    fn stored_token() -> OAuthToken {
-        OAuthToken {
-            access_token: "ya29".into(),
-            refresh_token: None,
-            expires_at: Some(9_999_999_999.0),
-        }
+        assert_eq!(
+            pick_access_token(&expired_same, None, now),
+            TokenChoice::Expired
+        );
     }
 
     #[test]
-    fn an_unreadable_antigravity_store_keeps_a_live_meter() {
+    fn an_expired_token_for_b_never_borrows_the_cached_token_of_a() {
+        let now = 1_800_000_000.0;
+        let cached = CachedAccessToken {
+            access_token: "token-a".into(),
+            expires_at: now + 1_800.0,
+            identity: Some("jwt::a".into()),
+        };
+        assert_eq!(
+            pick_access_token(
+                &token("token-b", now - 10.0, Some("jwt::b")),
+                Some(&cached),
+                now
+            ),
+            TokenChoice::Expired
+        );
+        assert_eq!(
+            pick_access_token(&token("token-b", now - 10.0, None), Some(&cached), now),
+            TokenChoice::Expired
+        );
+    }
+
+    #[test]
+    fn local_identity_comes_from_the_user_status_only() {
+        let status = json!({ "userStatus": { "userId": "u-9", "email": "Dana@Example.com", "userTier": { "name": "Pro" } } });
+        let (stable, masked) = local_identity(&status).unwrap();
+        assert_eq!(stable, "user:u-9");
+        assert_eq!(masked.as_deref(), Some("D***@Example.com"));
+        let email_only = json!({ "userStatus": { "email": "Dana@Example.com" } });
+        assert_eq!(
+            local_identity(&email_only).unwrap().0,
+            "email:dana@example.com"
+        );
+        // A tier or a port says nothing about who is signed in.
+        assert!(
+            local_identity(&json!({ "userStatus": { "userTier": { "name": "Pro" } } })).is_none()
+        );
+        assert!(local_identity(&Value::Null).is_none());
+    }
+
+    fn stored_token() -> OAuthToken {
+        token("ya29", 9_999_999_999.0, None)
+    }
+
+    #[test]
+    fn an_unreadable_antigravity_store_keeps_the_last_reading_only() {
         assert!(matches!(
-            login_action(CredentialRead::Absent, true, true),
+            login_action(CredentialRead::Absent, true),
             LoginAction::Hide
         ));
         assert!(matches!(
-            login_action(CredentialRead::Unavailable("busy".into()), false, false),
+            login_action(CredentialRead::Unavailable("busy".into()), false),
             LoginAction::Hide
         ));
         assert!(matches!(
-            login_action(CredentialRead::Unavailable("busy".into()), true, true),
-            LoginAction::UseCached
-        ));
-        assert!(matches!(
-            login_action(CredentialRead::Unavailable("busy".into()), false, true),
+            login_action(CredentialRead::Unavailable("busy".into()), true),
             LoginAction::KeepLast
         ));
         assert!(matches!(
-            login_action(CredentialRead::Found(stored_token()), false, false),
+            login_action(CredentialRead::Found(stored_token()), false),
             LoginAction::UseStored(_)
         ));
+    }
+
+    #[test]
+    fn pinned_sources_read_only_their_own_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let read =
+            |source: &Source| tauri::async_runtime::block_on(load_credentials(source, false));
+        assert!(matches!(
+            read(&Source::Directory(root.clone())),
+            CredentialRead::Absent
+        ));
+        std::fs::write(
+            root.join("antigravity-oauth-token"),
+            br#"{"access_token":"ya29.file"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            read(&Source::Directory(root.clone())),
+            CredentialRead::Found(token) if token.access_token == "ya29.file"
+        ));
+        assert!(matches!(
+            read(&Source::AntigravityApp),
+            CredentialRead::Absent
+        ));
+        assert!(matches!(read(&Source::Unavailable), CredentialRead::Absent));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

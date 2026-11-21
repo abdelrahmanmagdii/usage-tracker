@@ -8,7 +8,8 @@
  * charts look up.
  */
 import { extractRateLimitBuckets } from "../lib/rateLimits";
-import { SIM_PROVIDERS, type SimModel, type SimProvider } from "./model";
+import { historyLimitId } from "../lib/history";
+import { SIM_PROVIDERS, simScope, type SimModel, type SimProvider } from "./model";
 
 export const HISTORY_KEY = "codex-meter.quota-history.v1";
 const MAX_HISTORY = 900; // src/lib/history.ts keeps the newest 900 samples
@@ -49,7 +50,7 @@ export function buildHistory(
       for (const bucket of buckets) {
         const sample: Sample = {
           timestamp: new Date(t * 1000).toISOString(),
-          limitId: `${provider}:${bucket.id}`,
+          limitId: historyLimitId(provider, bucket.id, simScope(provider, "default")),
           usedPercent: bucket.usedPercent,
           remainingPercent: bucket.remainingPercent,
           windowDurationMins: bucket.windowDurationMins,

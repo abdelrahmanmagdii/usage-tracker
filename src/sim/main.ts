@@ -129,11 +129,16 @@ mockIPC(async (cmd, rawArgs) => {
   }
   record({ kind: "invoke", name: cmd, detail: args });
   if (cmd.startsWith("plugin:window|") || cmd.startsWith("plugin:webview|")) return null;
-  if (cmd === "plugin:notification|is_permission_granted") return Notification.permission === "granted";
-  if (cmd === "plugin:notification|request_permission") return Notification.permission;
-  if (cmd === "plugin:notification|notify") {
-    const options = (args.options ?? {}) as Json;
-    backend.notify(String(options.title ?? ""), String(options.body ?? ""));
+  const simPermission = () =>
+    Notification.permission === "granted" ? "granted" : Notification.permission === "denied" ? "denied" : "notDetermined";
+  if (cmd === "get_notification_status") return { permission: simPermission(), lastError: null };
+  if (cmd === "request_notification_permission") {
+    await Notification.requestPermission();
+    return { permission: simPermission(), lastError: null };
+  }
+  if (cmd === "post_usage_notification") {
+    if (Notification.permission !== "granted") throw "Notifications are not allowed for UsageBar.";
+    backend.notify(String(args.title ?? ""), String(args.body ?? ""));
     return null;
   }
   if (cmd.startsWith("plugin:notification|")) return [];

@@ -1,3 +1,4 @@
+mod accounts;
 mod alerts;
 mod antigravity;
 mod claude;
@@ -8,6 +9,7 @@ mod cursor;
 mod demo;
 mod devin;
 mod gemini;
+mod notifications;
 mod opencode;
 mod platform;
 mod prefs;
@@ -148,7 +150,9 @@ pub fn run() {
 
             let prefs_path = app.path().app_config_dir()?.join("preferences.json");
             app.manage(prefs::PrefsStore::load(prefs_path));
+            accounts::install(app)?;
             app.manage(alerts::UsageAlerts::default());
+            app.manage(notifications::NotificationLog::default());
             app.manage(tray::ResetRadar::default());
             app.manage(tray::TrayMenuState::default());
             app.manage(tray::TrayRenderCache::default());
@@ -290,6 +294,14 @@ pub fn run() {
             commands::set_usage_alerts,
             commands::set_pace_alerts,
             commands::set_reset_alerts,
+            accounts::get_account_sources,
+            accounts::add_account_profile,
+            accounts::forget_account_profile,
+            accounts::switch_account_profile,
+            accounts::reset_account_mapping,
+            notifications::get_notification_status,
+            notifications::request_notification_permission,
+            notifications::post_usage_notification,
             commands::open_post_url,
             commands::set_dense_layout,
             commands::set_usage_alert_thresholds,

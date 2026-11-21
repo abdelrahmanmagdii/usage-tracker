@@ -23,6 +23,7 @@ use tokio::{
 
 use super::coalesce::RefreshCoalescer;
 use super::protocol::{route_line, unsupported_request_reply, RoutedMessage};
+use crate::accounts::{self, ActiveSource, Source};
 
 /// How long a rate-limit notification waits before refreshing, so the rest of
 /// a burst lands first and one refresh covers all of it. Short enough that
@@ -130,6 +131,13 @@ impl CodexManager {
                 Err(_) => self.stop_child().await,
             }
         }
+        let profile = match codex_profile(&accounts::active(&self.app, "codex")) {
+            Ok(profile) => profile,
+            Err(message) => {
+                self.signed_out(message).await;
+                return Ok(self.snapshot().await);
+            }
+        };
         self.set_connection(ConnectionState::Starting, None).await;
 
         let cli = match find_codex_cli().await {
@@ -144,16 +152,36 @@ impl CodexManager {
         let mut command = match cli {
             CodexExecutable::Direct(path) => {
                 let mut command = Command::new(path);
+                if profile.is_some() {
+                    command.args(["-c", AUTH_STORE_FILE]);
+                }
                 command.arg("app-server").arg("--stdio");
                 command
             }
             #[cfg(target_os = "macos")]
             CodexExecutable::LoginShell(shell) => {
-                let mut command = Command::new(shell);
-                command.args(["-lc", LOGIN_SHELL_EXEC]);
+                let mut command = Command::new(&shell);
+                match &profile {
+                    Some(root) => {
+                        command
+                            .args(["-lc", login_shell_profile_exec(&shell), "sh"])
+                            .arg(root);
+                    }
+                    None => {
+                        command.args(["-lc", LOGIN_SHELL_EXEC]);
+                    }
+                }
                 command
             }
         };
+        // Only this child sees the profile, and a custom profile never
+        // inherits an API key that would override its saved login.
+        if let Some(root) = &profile {
+            command.env("CODEX_HOME", root);
+            for name in PROFILE_ENV_REMOVED {
+                command.env_remove(name);
+            }
+        }
         #[cfg(target_os = "windows")]
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         command
@@ -266,17 +294,20 @@ impl CodexManager {
             return Ok(self.snapshot().await);
         }
         let _guard = self.refresh_lock.lock().await;
+        let source = accounts::active(&self.app, "codex");
+        if let Err(message) = codex_profile(&source) {
+            self.stop_child().await;
+            self.signed_out(message).await;
+            return Ok(self.snapshot().await);
+        }
         let account = self
             .request("account/read", Some(json!({ "refreshToken": false })))
             .await?;
         if account.get("account").is_none_or(Value::is_null) {
-            let mut state = self.state.write().await;
-            state.connection = ConnectionState::NotAuthenticated;
-            state.diagnostic = Some("Codex is not signed in".into());
-            drop(state);
-            self.emit_state().await;
+            self.signed_out("Codex is not signed in".into()).await;
             return Ok(self.snapshot().await);
         }
+        let context = codex_context(&source, &account);
 
         let (rate_limits, usage) = tokio::join!(
             self.request("account/rateLimits/read", None),
@@ -286,17 +317,21 @@ impl CodexManager {
         let usage = usage.ok();
         {
             let mut state = self.state.write().await;
+            let previous_scope = account_scope(state.account.as_ref());
             state.connection = ConnectionState::Connected;
             state.diagnostic = None;
-            state.account = sanitize_account(&account);
+            state.account = sanitize_account(&account, &context);
             state.rate_limits = Some(rate_limits.clone());
-            if usage.is_some() {
+            // Last account's usage never stands in for this account's.
+            if usage.is_some() || context.scope_id.is_none() || previous_scope != context.scope_id {
                 state.usage = usage;
             }
             state.updated_at = Some(now_unix_seconds());
         }
         if let Some(alerts) = self.app.try_state::<crate::alerts::UsageAlerts>() {
-            alerts.observe(&self.app, "Codex", &rate_limits).await;
+            alerts
+                .observe_for(&self.app, "Codex", &source, &context, &rate_limits)
+                .await;
         }
         self.emit_state().await;
         Ok(self.snapshot().await)
@@ -455,6 +490,21 @@ impl CodexManager {
         self.stop_child().await;
     }
 
+    /// Not signed in (or the chosen profile is unusable): the former account
+    /// and its numbers go with it.
+    async fn signed_out(&self, message: String) {
+        {
+            let mut state = self.state.write().await;
+            state.connection = ConnectionState::NotAuthenticated;
+            state.diagnostic = Some(message);
+            state.account = None;
+            state.rate_limits = None;
+            state.usage = None;
+            state.updated_at = None;
+        }
+        self.emit_state().await;
+    }
+
     async fn set_connection(&self, connection: ConnectionState, diagnostic: Option<String>) {
         {
             let mut state = self.state.write().await;
@@ -538,6 +588,78 @@ const LOGIN_SHELL_LOOKUP: &str = "command -v codex";
 const LOGIN_SHELL_VERSION: &str = "codex --version >/dev/null 2>&1";
 #[cfg(any(target_os = "macos", test))]
 const LOGIN_SHELL_EXEC: &str = "exec codex app-server --stdio";
+const AUTH_STORE_FILE: &str = "cli_auth_credentials_store=\"file\"";
+const PROFILE_ENV_REMOVED: [&str; 3] = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"];
+/// The profile folder arrives as the last argument, never inside the script,
+/// and is exported after the login profile ran so a `CODEX_HOME` set there
+/// cannot win.
+#[cfg(any(target_os = "macos", test))]
+const LOGIN_SHELL_PROFILE_EXEC: &str = "CODEX_HOME=\"$1\"; export CODEX_HOME; unset OPENAI_API_KEY CODEX_API_KEY CODEX_ACCESS_TOKEN; exec codex -c 'cli_auth_credentials_store=\"file\"' app-server --stdio";
+#[cfg(any(target_os = "macos", test))]
+const LOGIN_SHELL_PROFILE_EXEC_FISH: &str = "set -gx CODEX_HOME \"$argv[-1]\"; set -e OPENAI_API_KEY CODEX_API_KEY CODEX_ACCESS_TOKEN; exec codex -c 'cli_auth_credentials_store=\"file\"' app-server --stdio";
+
+#[cfg(any(target_os = "macos", test))]
+fn login_shell_profile_exec(shell: &Path) -> &'static str {
+    if shell.file_name().and_then(|name| name.to_str()) == Some("fish") {
+        LOGIN_SHELL_PROFILE_EXEC_FISH
+    } else {
+        LOGIN_SHELL_PROFILE_EXEC
+    }
+}
+
+/// The folder a custom profile points at, after a metadata-only check that it
+/// still holds `auth.json`. `Ok(None)` is the default CLI login. The file's
+/// contents are never read.
+fn codex_profile(source: &ActiveSource) -> Result<Option<PathBuf>, String> {
+    match &source.source {
+        Source::Default => Ok(None),
+        Source::Directory(root) => {
+            let signed_in = std::fs::metadata(accounts::marker_path(root, "auth.json"))
+                .is_ok_and(|metadata| metadata.is_file());
+            if signed_in {
+                Ok(Some(root.clone()))
+            } else {
+                Err(format!(
+                    "The Codex profile “{}” has no saved login. Sign in to it with Codex, or choose another profile.",
+                    source.label
+                ))
+            }
+        }
+        _ => Err(source
+            .problem
+            .clone()
+            .unwrap_or_else(|| "The selected Codex profile is unavailable.".into())),
+    }
+}
+
+fn account_scope(account: Option<&Value>) -> Option<String> {
+    account?.get("scopeId")?.as_str().map(str::to_owned)
+}
+
+/// A stable id (or email) and a masked email from `account/read`. Read before
+/// the account is sanitized, since sanitizing drops both.
+fn codex_context(source: &ActiveSource, result: &Value) -> accounts::AccountContext {
+    let account = result.get("account");
+    let text = |key: &str| {
+        account
+            .and_then(|account| account.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && value.len() <= 320)
+    };
+    let email = text("email");
+    let stable = ["id", "accountId", "account_id", "userId", "user_id"]
+        .iter()
+        .find_map(|key| text(key))
+        .map(|id| format!("id:{id}"))
+        .or_else(|| email.map(|email| format!("email:{}", email.to_ascii_lowercase())));
+    accounts::context_from(
+        "codex",
+        source,
+        stable.as_deref(),
+        email.and_then(accounts::mask_email),
+    )
+}
 
 /// The shell whose login profile is asked to find `codex`: the user's own
 /// `$SHELL` when it is a supported shell given as an absolute path to an
@@ -632,12 +754,12 @@ async fn find_codex_cli() -> Result<CodexExecutable, String> {
     Err("The official `codex` command could not be executed. Install or repair the Codex CLI, then reconnect.".into())
 }
 
-fn sanitize_account(result: &Value) -> Option<Value> {
+fn sanitize_account(result: &Value, context: &accounts::AccountContext) -> Option<Value> {
     let account = result.get("account")?;
-    Some(json!({
+    Some(context.apply(json!({
         "type": account.get("type").cloned().unwrap_or(Value::Null),
         "planType": account.get("planType").cloned().unwrap_or(Value::Null)
-    }))
+    })))
 }
 
 fn now_unix_seconds() -> u64 {
@@ -772,5 +894,120 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         // Every Mac and Linux machine has bash, so a silent pass is impossible.
         assert!(tried > 0, "no supported shell was installed");
+    }
+
+    fn source(kind: Source) -> ActiveSource {
+        ActiveSource {
+            id: "custom-1".into(),
+            label: "Work".into(),
+            source: kind,
+            problem: None,
+        }
+    }
+
+    #[test]
+    fn a_custom_profile_needs_auth_json_and_never_falls_back() {
+        let dir =
+            std::env::temp_dir().join(format!("usagebar-codex-profile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let profile = source(Source::Directory(dir.clone()));
+        assert!(codex_profile(&profile).is_err());
+        std::fs::write(dir.join("auth.json"), b"{\"secret\":true}").unwrap();
+        assert_eq!(codex_profile(&profile), Ok(Some(dir.clone())));
+        std::fs::remove_file(dir.join("auth.json")).unwrap();
+        assert!(codex_profile(&profile).is_err());
+        assert!(codex_profile(&source(Source::Unavailable)).is_err());
+        assert_eq!(codex_profile(&source(Source::Default)), Ok(None));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn identity_comes_from_the_account_before_it_is_sanitized() {
+        let profile = source(Source::Default);
+        let result = json!({ "account": { "type": "chatgpt", "email": "Alice@Example.com", "planType": "pro" } });
+        let context = codex_context(&profile, &result);
+        let other = codex_context(
+            &profile,
+            &json!({ "account": { "email": "bob@example.com" } }),
+        );
+        assert_ne!(context.scope_id, other.scope_id);
+        assert_eq!(context.masked_identity.as_deref(), Some("A***@Example.com"));
+        let account = sanitize_account(&result, &context).unwrap();
+        let text = account.to_string();
+        assert!(!text.contains("lice@"));
+        assert_eq!(account["planType"], "pro");
+        // Case does not split one account into two series.
+        let lower = codex_context(
+            &profile,
+            &json!({ "account": { "email": "alice@example.com" } }),
+        );
+        assert_eq!(context.scope_id, lower.scope_id);
+        // An API-key login names nobody: no scope, so no shared history.
+        let anonymous = codex_context(&profile, &json!({ "account": { "type": "apiKey" } }));
+        assert!(anonymous.scope_id.is_none());
+        assert_eq!(account_scope(Some(&account)), context.scope_id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_profile_folder_wins_in_every_login_shell_even_with_odd_characters() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let root =
+            std::env::temp_dir().join(format!("usagebar-profile-shell-{}", std::process::id()));
+        let home = root.join("home");
+        let bin = root.join("bin");
+        let profile = root.join("it's $HOME \"x\" `y`");
+        std::fs::create_dir_all(home.join(".config/fish")).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        let codex = bin.join("codex");
+        std::fs::write(
+            &codex,
+            "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n' \"$CODEX_HOME\" \"$OPENAI_API_KEY\" \"$*\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let bin_dir = bin.display();
+        let posix = format!("export PATH=\"{bin_dir}:$PATH\"\nexport CODEX_HOME=/wrong\nexport OPENAI_API_KEY=leak\n");
+        std::fs::write(home.join(".zprofile"), &posix).unwrap();
+        std::fs::write(home.join(".bash_profile"), &posix).unwrap();
+        std::fs::write(
+            home.join(".config/fish/config.fish"),
+            format!("set -gx PATH {bin_dir} $PATH\nset -gx CODEX_HOME /wrong\nset -gx OPENAI_API_KEY leak\n"),
+        )
+        .unwrap();
+
+        let mut tried = 0;
+        for name in LOGIN_SHELLS {
+            let Ok(shell) = which::which(name) else {
+                continue;
+            };
+            tried += 1;
+            let output = Command::new(&shell)
+                .args(["-lc", login_shell_profile_exec(&shell), "sh"])
+                .arg(&profile)
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", "/usr/bin:/bin")
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&output.stdout).into_owned();
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(
+                lines.first().copied(),
+                Some(profile.to_str().unwrap()),
+                "{name}: {text}"
+            );
+            assert_eq!(lines.get(1).copied(), Some(""), "{name}: key removed");
+            assert_eq!(
+                lines.get(2).copied(),
+                Some("-c cli_auth_credentials_store=\"file\" app-server --stdio"),
+                "{name}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(tried > 0);
     }
 }

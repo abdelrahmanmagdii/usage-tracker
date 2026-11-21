@@ -54,6 +54,17 @@ pub fn http_client() -> reqwest::Client {
         .expect("reqwest client construction is infallible with these options")
 }
 
+/// A client that never follows redirects, for requests whose body carries a
+/// credential: a redirect would re-send it to a host the user never approved.
+pub fn http_client_no_redirect() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(concat!("usagebar/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("reqwest client construction is infallible with these options")
+}
+
 pub fn now_unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

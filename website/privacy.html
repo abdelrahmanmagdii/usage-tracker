@@ -42,15 +42,16 @@
         <li>Claude Code from Keychain or <code>~/.claude</code>, then Anthropic’s usage endpoint.</li>
         <li>Cursor’s local login database, then Cursor’s usage API.</li>
         <li>OpenCode Go’s <code>auth.json</code>, then OpenCode’s usage API.</li>
-        <li>Devin CLI’s <code>~/.local/share/devin/credentials.toml</code>, then Cognition’s usage API.</li>
+        <li>Devin CLI’s <code>~/.local/share/devin/credentials.toml</code> or, if you pick it in Settings, Devin Desktop’s local sign-in record, then Cognition’s usage API.</li>
         <li>Antigravity from the running Antigravity app on this computer. If the app is closed, a still-valid token from Keychain or <code>~/.gemini</code> goes only to Google Cloud Code’s usage endpoint.</li>
         <li>Gemini CLI’s <code>~/.gemini/oauth_creds.json</code>, then Google’s quota endpoint.</li>
       </ul>
+      <p>In Settings you can point a tool at another independently signed-in folder. UsageBar saves only that folder’s path and a name you choose, reads the tool’s own login file there, and never copies or changes a login.</p>
       <p>Those companies process that traffic under their own policies. I don’t get a copy.</p>
     </section>
     <section class="sec">
       <h2>What’s stored here</h2>
-      <p>Preferences, a short quota history (used to notice surprise resets), and a Tibo Watch cache. All of that lives in the app’s container on your Mac.</p>
+      <p>Preferences, the list of folders you saved as profiles (paths and names only), a short quota history kept per account under an opaque id and a masked identifier (used to notice surprise resets), and a Tibo Watch cache. All of that lives in the app’s container on your Mac.</p>
     </section>
     <section class="sec">
       <h2>Network</h2>

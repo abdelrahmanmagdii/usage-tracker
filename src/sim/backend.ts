@@ -9,7 +9,7 @@
  * `tray::apply_preference_change` (but not `complete_onboarding`).
  */
 import type { SimClock } from "./clock";
-import { SIM_PROVIDERS, type SimModel, type SimProvider } from "./model";
+import { SIM_PROVIDERS, simScope, type SimModel, type SimProvider } from "./model";
 import { currentWindowSamples, projectedRunOut } from "../lib/history";
 import type { QuotaSnapshot } from "../types/codex";
 
@@ -240,6 +240,21 @@ export class SimPaceTracker {
   }
 }
 
+/** A second sample account reads differently, so a switch is visible. */
+function usedElsewhere(rateLimits: unknown): unknown {
+  const copy = structuredClone(rateLimits) as Json;
+  const byId = (copy.rateLimitsByLimitId ?? {}) as Record<string, Json>;
+  for (const snapshot of Object.values(byId)) {
+    for (const kind of ["primary", "secondary"]) {
+      const window = snapshot?.[kind] as Json | undefined;
+      if (window && typeof window.usedPercent === "number") {
+        window.usedPercent = Math.min(99, window.usedPercent + 20);
+      }
+    }
+  }
+  return copy;
+}
+
 const emptyState = (connection: string, diagnostic?: string): ProviderStatePayload => ({
   connection,
   diagnostic: diagnostic ?? null,
@@ -269,9 +284,11 @@ export class SimBackend {
   resetIncomingUntil: number | null = null;
   readonly states = new Map<SimProvider, ProviderStatePayload>();
   readonly notifications: Array<{ simAt: string; title: string; body: string }> = [];
-  private readonly lastGood = new Map<SimProvider, { rateLimits: unknown; updatedAt: number; usage?: unknown }>();
+  private readonly lastGood = new Map<string, { rateLimits: unknown; updatedAt: number; usage?: unknown }>();
   private readonly nextPoll = new Map<SimProvider, number>();
   private readonly seen = new Map<string, number>();
+  /** The sample profile each tool reads: "default" (A) or "sample-b". */
+  private readonly profile = new Map<SimProvider, string>();
   private readonly pace = new Map<string, SimPaceTracker>();
   private timer = 0;
 
@@ -324,18 +341,26 @@ export class SimBackend {
     this.nextPoll.set(provider, t + spec.pollSecs);
     const { connection, diagnostic } = this.model.connection(provider, t);
     let state: ProviderStatePayload;
-    const account = { type: spec.accountType, planType: spec.plan };
+    const profile = this.profile.get(provider) ?? "default";
+    const scope = simScope(provider, profile);
+    const account = {
+      type: spec.accountType,
+      planType: spec.plan,
+      scopeId: scope,
+      sourceLabel: profile === "default" ? "Sample profile A" : "Sample profile B",
+      maskedIdentity: profile === "default" ? "s***@sample.test" : "t***@sample.test",
+    };
     if (connection === "connected") {
-      const rateLimits = this.model.rateLimits(provider, t);
+      const rateLimits = this.limits(provider, profile, t);
       const usage = provider === "codex" ? this.model.codexUsage(t) : undefined;
-      this.lastGood.set(provider, { rateLimits, updatedAt: t, usage });
+      this.lastGood.set(scope, { rateLimits, updatedAt: t, usage });
       state = { connection, diagnostic: null, account, rateLimits, updatedAt: t };
       if (usage) state.usage = usage;
-      this.observeAlerts(provider, rateLimits);
+      this.observeAlerts(provider, scope, rateLimits);
     } else if (connection === "cli_not_found" || connection === "starting") {
       state = emptyState(connection, diagnostic);
     } else {
-      const last = this.lastGood.get(provider);
+      const last = this.lastGood.get(scope);
       state = {
         connection,
         diagnostic: diagnostic ?? null,
@@ -350,20 +375,28 @@ export class SimBackend {
     return state;
   }
 
+  /** One profile's numbers: a second sample account reads differently. */
+  private limits(provider: SimProvider, profile: string, t: number): unknown {
+    const rateLimits = this.model.rateLimits(provider, t);
+    return profile === "default" ? rateLimits : usedElsewhere(rateLimits);
+  }
+
   /** A provider that starts out failing still shows its last reading. */
   private recoverLastGood(provider: SimProvider, t: number): void {
     const spec = this.model.spec(provider);
+    const profile = this.profile.get(provider) ?? "default";
+    const scope = simScope(provider, profile);
     if (this.model.connection(provider, t).connection === "connected") return;
     for (let back = 1; back <= 240; back += 1) {
       const at = t - back * spec.pollSecs;
       if (this.model.connection(provider, at).connection !== "connected") continue;
-      const rateLimits = this.model.rateLimits(provider, at);
-      this.lastGood.set(provider, {
+      const rateLimits = this.limits(provider, profile, at);
+      this.lastGood.set(scope, {
         rateLimits,
         updatedAt: at,
         usage: provider === "codex" ? this.model.codexUsage(at) : undefined,
       });
-      this.observeAlerts(provider, rateLimits, true);
+      this.observeAlerts(provider, scope, rateLimits, true);
       return;
     }
   }
@@ -373,12 +406,12 @@ export class SimBackend {
    * warnings need `usageAlerts` and `paceAlerts`, and wait a refresh when a
    * threshold or fresh-window alert just went out for the same window.
    */
-  private observeAlerts(provider: SimProvider, rateLimits: unknown, seedOnly = false): void {
+  private observeAlerts(provider: SimProvider, scope: string, rateLimits: unknown, seedOnly = false): void {
     const thresholds = [...this.prefs.usageAlertThresholds].sort((a, b) => b - a);
     const topThreshold = thresholds[0] ?? 100;
     const t = this.nowSecs();
     for (const window of collectTrayWindows(rateLimits)) {
-      const key = `${provider}:${window.id}`;
+      const key = `${scope}:${provider}:${window.id}`;
       const previous = this.seen.get(key);
       this.seen.set(key, window.usedPercent);
       const live = previous !== undefined && !seedOnly;
@@ -495,6 +528,37 @@ export class SimBackend {
       }
     }
     switch (cmd) {
+      case "get_account_sources": {
+        const provider = String(args.provider ?? "") as SimProvider;
+        if (!(SIM_PROVIDERS as readonly string[]).includes(provider)) throw `Unknown provider: ${provider}`;
+        return ok({
+          activeId: this.profile.get(provider) ?? "default",
+          choices: [
+            { id: "default", label: "Sample profile A", custom: false },
+            { id: "sample-b", label: "Sample profile B", custom: true },
+          ],
+          folderHint: "Simulated profiles. Nothing is read from this computer.",
+          diagnostic: null,
+          unavailable: null,
+        });
+      }
+      case "switch_account_profile": {
+        const provider = String(args.provider ?? "") as SimProvider;
+        const id = String(args.id ?? "");
+        if (!(SIM_PROVIDERS as readonly string[]).includes(provider)) throw `Unknown provider: ${provider}`;
+        if (id !== "default" && id !== "sample-b") throw "That profile is not available for this provider.";
+        if ((this.profile.get(provider) ?? "default") !== id) {
+          this.profile.set(provider, id);
+          this.poll(provider, true);
+        }
+        return ok(null);
+      }
+      case "add_account_profile":
+        return ok(null);
+      case "forget_account_profile":
+        throw "Sample profiles cannot be forgotten in the simulator.";
+      case "reset_account_mapping":
+        return ok(null);
       case "get_app_prefs":
         return ok(this.appPrefs());
       case "is_demo_mode":

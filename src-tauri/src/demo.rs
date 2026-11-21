@@ -26,6 +26,8 @@ use crate::provider::ProviderState;
 /// Stored on each sample snapshot. The connected UI does not render this;
 /// the header's "Demo data" label does. It is here so a dumped state is
 /// obviously not a live account.
+/// Sample meters keep a history of their own, under a scope no real account has.
+const DEMO_SCOPE: &str = "demo-sample";
 pub const SAMPLE_NOTE: &str = "Sample data for UsageBar demo mode. Not a live account.";
 
 const DEFAULT_PORT: u16 = 47621;
@@ -446,7 +448,9 @@ fn connected(plan: &str, limits: Value) -> ProviderState {
     ProviderState {
         connection: ConnectionState::Connected,
         diagnostic: Some(SAMPLE_NOTE.to_owned()),
-        account: Some(json!({ "type": "oauth", "planType": plan })),
+        account: Some(
+            json!({ "type": "oauth", "planType": plan, "scopeId": DEMO_SCOPE, "sourceLabel": "Demo data" }),
+        ),
         rate_limits: Some(limits),
         updated_at: Some(now_secs()),
     }
@@ -456,7 +460,9 @@ fn codex_fixture() -> CodexState {
     CodexState {
         connection: ConnectionState::Connected,
         diagnostic: Some(SAMPLE_NOTE.to_owned()),
-        account: Some(json!({ "type": "oauth", "planType": "Plus" })),
+        account: Some(
+            json!({ "type": "oauth", "planType": "Plus", "scopeId": DEMO_SCOPE, "sourceLabel": "Demo data" }),
+        ),
         rate_limits: Some(codex_limits()),
         usage: Some(codex_usage()),
         updated_at: Some(now_secs()),
@@ -467,7 +473,9 @@ fn claude_fixture() -> crate::claude::ClaudeState {
     crate::claude::ClaudeState {
         connection: ConnectionState::Connected,
         diagnostic: Some(SAMPLE_NOTE.to_owned()),
-        account: Some(json!({ "type": "oauth", "planType": "Max" })),
+        account: Some(
+            json!({ "type": "oauth", "planType": "Max", "scopeId": DEMO_SCOPE, "sourceLabel": "Demo data" }),
+        ),
         rate_limits: Some(claude_limits()),
         updated_at: Some(now_secs()),
     }

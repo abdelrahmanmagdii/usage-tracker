@@ -12,6 +12,7 @@ use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::accounts::{self, Source};
 use crate::codex::process::ConnectionState;
 use crate::provider::{
     finite_f64, http_client, now_unix_seconds, parse_reset_timestamp, rate_limits_map,
@@ -59,14 +60,29 @@ impl CursorManager {
         }
 
         let _guard = self.refresh_lock.lock().await;
-        let token = match load_access_token().await {
+        let source = accounts::active(&self.app, "cursor");
+        if source.source == Source::Unavailable {
+            self.set_connection(
+                ConnectionState::CliNotFound,
+                Some(
+                    source
+                        .problem
+                        .clone()
+                        .unwrap_or_else(|| "The selected Cursor profile is unavailable".into()),
+                ),
+            )
+            .await;
+            return Ok(self.snapshot().await);
+        }
+        let missing_login = match source.source {
+            Source::Default => "No Cursor login was found on this computer".to_owned(),
+            _ => format!("No Cursor login was found for “{}”.", source.label),
+        };
+        let token = match load_access_token(&source.source).await {
             CredentialRead::Found(token) => token,
             CredentialRead::Absent => {
-                self.set_connection(
-                    ConnectionState::CliNotFound,
-                    Some("No Cursor login was found on this computer".into()),
-                )
-                .await;
+                self.set_connection(ConnectionState::CliNotFound, Some(missing_login))
+                    .await;
                 return Ok(self.snapshot().await);
             }
             CredentialRead::Unavailable(message) => {
@@ -75,11 +91,15 @@ impl CursorManager {
                     snapshot.connection,
                     snapshot.updated_at.is_some(),
                 ) {
-                    self.set_connection(
-                        ConnectionState::CliNotFound,
-                        Some("No Cursor login was found on this computer".into()),
-                    )
-                    .await;
+                    // A chosen profile that cannot be read says why, instead of
+                    // passing for a signed-out login.
+                    if source.source != Source::Default {
+                        self.set_connection(ConnectionState::Error, Some(message.clone()))
+                            .await;
+                        return Err(message);
+                    }
+                    self.set_connection(ConnectionState::CliNotFound, Some(missing_login))
+                        .await;
                     return Ok(self.snapshot().await);
                 }
                 self.set_connection(ConnectionState::Error, Some(message.clone()))
@@ -114,19 +134,23 @@ impl CursorManager {
             .and_then(Value::as_str)
             .map(str::to_owned);
 
+        let context =
+            accounts::context_from("cursor", &source, Some(&token_identity(&token)), None);
         {
             let mut state = self.state.write().await;
             state.connection = ConnectionState::Connected;
             state.diagnostic = None;
-            state.account = Some(json!({
+            state.account = Some(context.apply(json!({
                 "type": "oauth",
                 "planType": plan,
-            }));
+            })));
             state.rate_limits = Some(rate_limits.clone());
             state.updated_at = Some(now_unix_seconds());
         }
         if let Some(alerts) = self.app.try_state::<crate::alerts::UsageAlerts>() {
-            alerts.observe(&self.app, "Cursor", &rate_limits).await;
+            alerts
+                .observe_for(&self.app, "Cursor", &source, &context, &rate_limits)
+                .await;
         }
         self.emit_state().await;
         Ok(self.snapshot().await)
@@ -213,8 +237,27 @@ fn state_db_path() -> Option<std::path::PathBuf> {
     Some(home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"))
 }
 
-async fn load_access_token() -> CredentialRead {
-    let Some(path) = state_db_path() else {
+/// The JWT subject (and issuer) when the token carries one, else a digest of
+/// the token. Identity metadata only: it never decides what the token may do.
+fn token_identity(token: &str) -> String {
+    match accounts::jwt_subject(token) {
+        (Some(subject), issuer) => format!("jwt:{}:{subject}", issuer.unwrap_or_default()),
+        _ => accounts::credential_stable(token),
+    }
+}
+
+fn selected_db_path(source: &Source) -> Option<std::path::PathBuf> {
+    match source {
+        Source::Directory(root) => Some(accounts::marker_path(
+            root,
+            "User/globalStorage/state.vscdb",
+        )),
+        _ => state_db_path(),
+    }
+}
+
+async fn load_access_token(source: &Source) -> CredentialRead {
+    let Some(path) = selected_db_path(source) else {
         return CredentialRead::Unavailable(
             "The home directory is unavailable, so Cursor's login database could not be located"
                 .to_owned(),
@@ -240,45 +283,32 @@ async fn load_access_token() -> CredentialRead {
     }
 }
 
-fn sqlite_readonly_uri(path: &std::path::Path, immutable: bool) -> String {
-    let encoded = path
-        .to_string_lossy()
-        .replace('\\', "/")
-        .replace('%', "%25")
-        .replace('#', "%23")
-        .replace('?', "%3F")
-        .replace(' ', "%20");
-    if immutable {
-        format!("file:{encoded}?mode=ro&immutable=1")
-    } else {
-        format!("file:{encoded}?mode=ro")
-    }
+/// Opens the database read-only by plain path. SQLite's normal locking sees
+/// the WAL, where a fresh sign-in or sign-out lands; `immutable` would ignore
+/// it and hand back a login that was already replaced, so it is never used,
+/// and a database that cannot be read is reported rather than guessed at.
+pub(crate) fn open_login_db(
+    path: &std::path::Path,
+) -> Result<rusqlite::Connection, rusqlite::Error> {
+    let conn = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    // The app may be mid-checkpoint; wait briefly rather than fail the poll.
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(2));
+    Ok(conn)
 }
 
 fn read_cursor_token(path: &std::path::Path) -> CredentialRead {
-    // Read through SQLite's normal locking first. Cursor keeps the database
-    // open in WAL mode and writes a refreshed access token into the WAL;
-    // `immutable=1` ignores the WAL, so it can hand back the token Cursor
-    // already replaced, and the request then fails as a rejected login.
-    // Immutable stays as the fallback for a database a read-only connection
-    // cannot open normally (for example when the WAL index cannot be created).
-    match query_cursor_token(&sqlite_readonly_uri(path, false)) {
+    match query_cursor_token(path) {
         Ok(read) => read,
-        Err(first) => match query_cursor_token(&sqlite_readonly_uri(path, true)) {
-            Ok(read) => read,
-            Err(_) => CredentialRead::Unavailable(first),
-        },
+        Err(reason) => CredentialRead::Unavailable(reason),
     }
 }
 
-fn query_cursor_token(uri: &str) -> Result<CredentialRead, String> {
-    let conn = rusqlite::Connection::open_with_flags(
-        uri,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    )
-    .map_err(|error| format!("Cursor's login database could not be opened ({error})"))?;
-    // Cursor may be mid-checkpoint; wait briefly rather than fail the poll.
-    let _ = conn.busy_timeout(std::time::Duration::from_secs(2));
+fn query_cursor_token(path: &std::path::Path) -> Result<CredentialRead, String> {
+    let conn = open_login_db(path)
+        .map_err(|error| format!("Cursor's login database could not be opened ({error})"))?;
     let value: Result<rusqlite::types::Value, rusqlite::Error> = conn.query_row(
         "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1",
         [],
@@ -442,24 +472,6 @@ mod tests {
             Some("abc.def.ghi")
         );
         assert!(parse_stored_token("   ").is_none());
-    }
-
-    #[test]
-    fn encodes_spaces_in_the_sqlite_uri() {
-        let path = std::path::Path::new("/Users/me/Library/Application Support/Cursor/state.vscdb");
-        assert_eq!(
-            sqlite_readonly_uri(path, true),
-            "file:/Users/me/Library/Application%20Support/Cursor/state.vscdb?mode=ro&immutable=1"
-        );
-    }
-
-    #[test]
-    fn normalizes_windows_paths_in_sqlite_uris() {
-        let path = std::path::Path::new(r"C:\Users\Example User\Cursor\state.vscdb");
-        assert_eq!(
-            sqlite_readonly_uri(path, true),
-            "file:C:/Users/Example%20User/Cursor/state.vscdb?mode=ro&immutable=1"
-        );
     }
 
     #[test]
@@ -630,5 +642,77 @@ mod tests {
             normalized.pointer("/rateLimitsByLimitId/premium/primary/usedPercent"),
             Some(&json!(30.0))
         );
+    }
+
+    #[test]
+    fn a_custom_profile_reads_its_own_database_and_never_the_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let storage = root.join("User/globalStorage");
+        std::fs::create_dir_all(&storage).unwrap();
+        let path = storage.join("state.vscdb");
+        let writer = rusqlite::Connection::open(&path).unwrap();
+        writer
+            .execute_batch(
+                "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+                 INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', 'profile-token');",
+            )
+            .unwrap();
+        drop(writer);
+        let source = Source::Directory(root.clone());
+        assert_eq!(selected_db_path(&source), Some(path));
+        assert!(matches!(
+            tauri::async_runtime::block_on(load_access_token(&source)),
+            CredentialRead::Found(token) if token == "profile-token"
+        ));
+        // A profile whose database is gone is signed out, not the default login.
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(matches!(
+            tauri::async_runtime::block_on(load_access_token(&source)),
+            CredentialRead::Absent
+        ));
+    }
+
+    #[test]
+    fn token_identity_uses_the_jwt_subject_only_as_metadata() {
+        use base64::Engine as _;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"sub":"auth0|user_1","iss":"https://auth.example"}"#);
+        let jwt = format!("h.{payload}.sig");
+        let rotated = format!("h2.{payload}.other-signature");
+        assert_eq!(token_identity(&jwt), token_identity(&rotated));
+        assert!(token_identity(&jwt).contains("auth0|user_1"));
+        let opaque = token_identity("opaque-token");
+        assert!(opaque.starts_with("cred:") && !opaque.contains("opaque-token"));
+    }
+
+    #[test]
+    fn a_sign_out_in_the_wal_never_returns_the_checkpointed_login() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("state.vscdb");
+        let writer = rusqlite::Connection::open(&path).expect("open");
+        writer
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA wal_autocheckpoint=0;
+                 CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+                 INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', 'token-a');
+                 PRAGMA wal_checkpoint(TRUNCATE);
+                 DELETE FROM ItemTable;",
+            )
+            .expect("seed");
+        assert!(matches!(read_cursor_token(&path), CredentialRead::Absent));
+        drop(writer);
+    }
+
+    #[test]
+    fn an_unreadable_database_is_reported_never_guessed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("state.vscdb");
+        std::fs::write(&path, vec![7_u8; 4096]).expect("garbage");
+        assert!(matches!(
+            read_cursor_token(&path),
+            CredentialRead::Unavailable(_)
+        ));
     }
 }

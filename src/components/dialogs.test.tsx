@@ -10,6 +10,10 @@ const backend = vi.hoisted(() => ({
   handlers: [] as Array<(event: { payload: AppPrefs }) => void>,
   prefsReads: [] as Array<(prefs: AppPrefs) => void>,
   deferPrefsRead: false,
+  permission: "granted" as string,
+  accountActive: "default",
+  accountReply: null as unknown,
+  lastError: null as null | { source: string; message: string; at: number },
 }));
 
 const invoke = vi.hoisted(() =>
@@ -33,6 +37,27 @@ const invoke = vi.hoisted(() =>
         };
       case "get_autostart":
         return backend.autostart;
+      case "get_account_sources":
+        return {
+          activeId: backend.accountActive,
+          choices: [
+            { id: "default", label: "Codex CLI (default)", custom: false },
+            { id: "custom-1", label: "Work", custom: true },
+          ],
+          folderHint: "A Codex home folder that holds auth.json.",
+          diagnostic: null,
+          unavailable: null,
+        };
+      case "add_account_profile":
+        return backend.accountReply;
+      case "switch_account_profile":
+        backend.accountActive = (_args as { id: string }).id;
+        return undefined;
+      case "get_notification_status":
+        return { permission: backend.permission, lastError: backend.lastError };
+      case "request_notification_permission":
+        backend.permission = "granted";
+        return { permission: backend.permission, lastError: null };
       default:
         return undefined;
     }
@@ -46,11 +71,6 @@ vi.mock("@tauri-apps/api/event", () => ({
       backend.handlers = backend.handlers.filter((entry) => entry !== handler);
     };
   }),
-}));
-vi.mock("@tauri-apps/plugin-notification", () => ({
-  isPermissionGranted: vi.fn().mockResolvedValue(false),
-  requestPermission: vi.fn().mockResolvedValue("granted"),
-  sendNotification: vi.fn(),
 }));
 
 import { SettingsModal, parseThreshold, replaceThreshold } from "./SettingsModal";
@@ -78,6 +98,10 @@ beforeEach(() => {
   backend.handlers = [];
   backend.prefsReads = [];
   backend.deferPrefsRead = false;
+  backend.permission = "granted";
+  backend.lastError = null;
+  backend.accountActive = "default";
+  backend.accountReply = null;
   Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
 });
 
@@ -258,6 +282,174 @@ describe("SettingsModal", () => {
     }
     expect(commands("set_usage_alert_thresholds")).toEqual([]);
     expect(last.value).toBe("95");
+  });
+});
+
+describe("SettingsModal notifications", () => {
+  it("shows the real permission and offers Enable only before it is decided", async () => {
+    backend.permission = "granted";
+    const view = await openSettings();
+    expect(screen.getByText("Notifications are allowed for UsageBar.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Enable notifications/ })).toBeNull();
+    view.unmount();
+
+    backend.permission = "notDetermined";
+    await openSettings();
+    const enable = screen.getByRole("button", { name: /Enable notifications/ });
+    await act(async () => {
+      fireEvent.click(enable);
+    });
+    expect(commands("request_notification_permission")).toHaveLength(1);
+    expect(screen.getByText("Notifications are allowed for UsageBar.")).toBeTruthy();
+  });
+
+  it("explains how to fix blocked permission and never requests it unprompted", async () => {
+    backend.permission = "denied";
+    await openSettings();
+    expect(screen.getByText(/Notifications are blocked\. Turn them on in/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Enable notifications/ })).toBeNull();
+    expect(commands("request_notification_permission")).toEqual([]);
+  });
+
+  it("re-reads the permission when the window regains focus", async () => {
+    backend.permission = "denied";
+    await openSettings();
+    backend.permission = "granted";
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(screen.getByText("Notifications are allowed for UsageBar.")).toBeTruthy();
+  });
+
+  it("tests with reset alerts off, saying accepted rather than delivered", async () => {
+    backend.prefs = { ...backend.prefs, resetAlerts: false };
+    await openSettings();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Send test notification/ }));
+    });
+    expect(commands("post_usage_notification")).toEqual([
+      expect.objectContaining({ source: "test" }),
+    ]);
+    expect(screen.getByText("Accepted by macOS. Focus can still hide the banner.")).toBeTruthy();
+  });
+
+  it("shows the last delivery error", async () => {
+    backend.lastError = { source: "pace", message: "Notifications are turned off for UsageBar.", at: 1 };
+    await openSettings();
+    expect(screen.getByText(/Last alert failed: Notifications are turned off/)).toBeTruthy();
+  });
+});
+
+describe("SettingsModal accounts outside the desktop app", () => {
+  it("explains instead of calling the backend", async () => {
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    render(<SettingsModal onClose={() => undefined} onShowGuide={() => undefined} />);
+    await act(async () => {});
+    expect(screen.getByText("Open the desktop app to choose a local account.")).toBeTruthy();
+    expect(commands("get_account_sources")).toEqual([]);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("SettingsModal accounts", () => {
+  const sourceSelect = () => screen.getByLabelText("Login source") as HTMLSelectElement;
+
+  it("lists the saved sources and enables the switch only for a different one", async () => {
+    await openSettings();
+    expect(sourceSelect().value).toBe("default");
+    const use = screen.getByRole("button", { name: "Use profile and restart UsageBar" }) as HTMLButtonElement;
+    expect(use.disabled).toBe(true);
+    fireEvent.change(sourceSelect(), { target: { value: "custom-1" } });
+    expect(use.disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(use);
+    });
+    expect(commands("switch_account_profile")).toEqual([{ provider: "codex", id: "custom-1" }]);
+    expect(screen.getByText(/Switching restarts UsageBar only/)).toBeTruthy();
+    // A backend that does not restart is re-read, so "(active)" follows.
+    expect(screen.getByRole("option", { name: "Work (active)" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Use profile and restart UsageBar" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("keeps the selection and explains when a switch fails", async () => {
+    backend.failing.add("switch_account_profile");
+    await openSettings();
+    fireEvent.change(sourceSelect(), { target: { value: "custom-1" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use profile and restart UsageBar" }));
+    });
+    expect(sourceSelect().value).toBe("custom-1");
+    expect(screen.getByRole("alert").textContent).toMatch(/switch_account_profile failed/);
+  });
+
+  it("adds a local profile with an optional name and treats cancel as nothing", async () => {
+    await openSettings();
+    fireEvent.change(screen.getByLabelText("Profile name (optional)"), { target: { value: "Team" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Add local profile/ }));
+    });
+    expect(commands("add_account_profile")).toEqual([{ provider: "codex", label: "Team" }]);
+    expect(sourceSelect().value).toBe("default");
+    backend.accountReply = {
+      activeId: "default",
+      choices: [
+        { id: "default", label: "Codex CLI (default)", custom: false },
+        { id: "custom-1", label: "Work", custom: true },
+        { id: "custom-2", label: "Team", custom: true },
+      ],
+      folderHint: "x",
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Add local profile/ }));
+    });
+    expect(sourceSelect().value).toBe("custom-2");
+  });
+
+  it("forgets only an inactive custom profile", async () => {
+    await openSettings();
+    const forget = screen.getByRole("button", { name: /Forget profile/ }) as HTMLButtonElement;
+    expect(forget.disabled).toBe(true);
+    fireEvent.change(sourceSelect(), { target: { value: "custom-1" } });
+    expect(forget.disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(forget);
+    });
+    expect(commands("forget_account_profile")).toEqual([{ provider: "codex", id: "custom-1" }]);
+  });
+
+  it("shows an inline error and re-reads the stored prefs when a save fails", async () => {
+    backend.failing.add("set_dense_layout");
+    await openSettings();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: /Compact cards/ }));
+    });
+    expect(screen.getByText(/Could not save the change/)).toBeTruthy();
+    expect(commands("get_app_prefs").length).toBeGreaterThan(1);
+  });
+});
+
+describe("Onboarding notifications", () => {
+  const providers = [{ label: "Codex", connected: true, detail: "Connected", onRetry: () => undefined }];
+
+  async function resetsStep() {
+    render(<Onboarding providers={providers} onClose={() => undefined} />);
+    for (let index = 0; index < 4 && !screen.queryByRole("heading", { name: "Resets" }); index += 1) {
+      fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    }
+    await act(async () => {});
+  }
+
+  it("offers Enable only while permission is undecided", async () => {
+    backend.permission = "notDetermined";
+    await resetsStep();
+    expect(screen.getByRole("button", { name: "Enable notifications" })).toBeTruthy();
+  });
+
+  it.each(["denied", "unavailable", "unknown"])("shows a settings hint instead of Enable when %s", async (permission) => {
+    backend.permission = permission;
+    await resetsStep();
+    expect(screen.queryByRole("button", { name: "Enable notifications" })).toBeNull();
+    expect(screen.getByText(/Notifications are blocked|unavailable|cannot check/)).toBeTruthy();
   });
 });
 

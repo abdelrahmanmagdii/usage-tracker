@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { SIM_PROVIDERS, SCENARIOS, SimModel, scenarioById } from "./model";
-import { SimPaceTracker, collectTrayWindows, normalizeThresholds, serializePrefs, defaultPrefs } from "./backend";
-import { buildHistory } from "./seed";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { SIM_PROVIDERS, SCENARIOS, SimModel, scenarioById, simScope } from "./model";
+import { SimBackend, SimPaceTracker, collectTrayWindows, normalizeThresholds, serializePrefs, defaultPrefs } from "./backend";
+import { buildHistory, seedHistory } from "./seed";
+import { SimClock } from "./clock";
+import { historySeries } from "../lib/history";
+import { extractRateLimitBuckets } from "../lib/rateLimits";
 import { parseDuration } from "./clock";
 
 const T0 = Date.parse("2026-11-05T15:00:00Z") / 1000;
@@ -76,7 +79,7 @@ describe("simulation model", () => {
     const model = new SimModel(scenarioById("default"), 1, T0);
     const history = buildHistory(model, ["codex"], { hours: 12, stepMinutes: 15, endSecs: T0 });
     expect(history.length).toBeGreaterThan(2);
-    const weekly = history.filter((sample) => sample.limitId.startsWith("codex:codex:secondary"));
+    const weekly = history.filter((sample) => sample.limitId.startsWith(`["codex","${simScope("codex")}","codex:secondary`));
     expect(weekly.at(-1)?.usedPercent).toBe(47);
   });
 });
@@ -119,5 +122,51 @@ describe("simulated backend helpers", () => {
     expect(parseDuration("1h30m")).toBe(5_400_000);
     expect(parseDuration("90")).toBe(90_000);
     expect(parseDuration(2)).toBe(2_000);
+  });
+});
+
+describe("simulated accounts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("seeds chart history under the scope the default profile reads with", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    });
+    const model = new SimModel(scenarioById("busy"), 1, T0);
+    expect(seedHistory(model, { hours: 6, stepMinutes: 5, endSecs: T0 })).toBeGreaterThan(0);
+    const bucket = extractRateLimitBuckets(model.rateLimits("codex", T0))[0];
+    expect(historySeries("codex", bucket.id, simScope("codex")).length).toBeGreaterThan(1);
+    expect(historySeries("codex", bucket.id)).toEqual([]);
+    expect(historySeries("codex", bucket.id, simScope("codex", "sample-b"))).toEqual([]);
+  });
+
+  it("keeps sample B's alerts and cached readings apart from sample A's", async () => {
+    const model = new SimModel(scenarioById("busy"), 1, T0);
+    const backend = new SimBackend({
+      model,
+      clock: new SimClock(T0 * 1000, 0),
+      prefs: defaultPrefs(),
+      demo: false,
+      autostart: false,
+      refreshLatency: [0, 0],
+      emit: () => undefined,
+      log: () => undefined,
+    });
+    expect(backend.notifications).toEqual([]);
+    for (const provider of SIM_PROVIDERS) {
+      await backend.handle("switch_account_profile", { provider, id: "sample-b" });
+    }
+    // B's first sighting seeds silently, however far it sits from A's numbers.
+    expect(backend.notifications).toEqual([]);
+    const caches = (backend as unknown as { lastGood: Map<string, unknown> }).lastGood;
+    for (const provider of SIM_PROVIDERS) {
+      const state = backend.states.get(provider) as { account?: { scopeId?: string } };
+      if (state.account) expect(state.account.scopeId).toBe(simScope(provider, "sample-b"));
+      if (caches.has(simScope(provider, "sample-b"))) {
+        expect(caches.get(simScope(provider, "sample-b"))).not.toBe(caches.get(simScope(provider)));
+      }
+    }
   });
 });

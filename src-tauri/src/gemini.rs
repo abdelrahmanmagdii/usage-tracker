@@ -24,6 +24,7 @@ use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::accounts::{self, Source};
 use crate::codex::process::ConnectionState;
 use crate::provider::{
     finite_f64, http_client, now_unix_seconds, parse_reset_timestamp, rate_limits_map,
@@ -49,6 +50,15 @@ pub struct GeminiManager {
 struct CachedAccessToken {
     access_token: String,
     expires_at: f64,
+    /// Who the token belongs to. A cached token only stands in for a stored
+    /// one that names the same person.
+    identity: Option<String>,
+}
+
+/// The token a request is made with, and the stable identity it was bound to.
+struct UsedToken {
+    access_token: String,
+    stable: String,
 }
 
 /// The CLI's stored OAuth session, or why there is none usable.
@@ -63,6 +73,8 @@ enum CredentialRead {
 struct OAuthToken {
     access_token: String,
     expires_at: Option<f64>,
+    /// `iss` and `sub` from the id token, when it has them. Metadata only.
+    identity: Option<String>,
 }
 
 impl OAuthToken {
@@ -104,32 +116,30 @@ impl GeminiManager {
 
         let _guard = self.refresh_lock.lock().await;
 
-        let has_cached = self.cached_usable_token().await.is_some();
+        let source = accounts::active(&self.app, "gemini");
+        if source.source == Source::Unavailable {
+            self.hide_missing(source.problem.clone()).await;
+            return Ok(self.snapshot().await);
+        }
         let has_shown = self.snapshot().await.updated_at.is_some();
-        let read = load_credentials().await;
+        let read = load_credentials(&source.source).await;
         // An unreadable store leaves a note for the state snapshot even though
         // the meter hides; the missing-tools UI keys off the stored login name.
         let hide_reason = match &read {
             CredentialRead::Unavailable(reason) => Some(reason.clone()),
             _ => None,
         };
-        let access_token = match login_action(read, has_cached, has_shown) {
+        let used = match login_action(read, has_shown) {
             LoginAction::Hide => {
                 self.hide_missing(hide_reason).await;
                 return Ok(self.snapshot().await);
             }
+            // An unverified account never gets a fresh reading: the last one
+            // stays, marked stale by its age.
             LoginAction::KeepLast => return Ok(self.snapshot().await),
-            LoginAction::UseCached => match self.cached_usable_token().await {
-                Some(token) => token,
-                None if has_shown => return Ok(self.snapshot().await),
-                None => {
-                    self.hide_missing(None).await;
-                    return Ok(self.snapshot().await);
-                }
-            },
             LoginAction::UseStored(token) => {
                 match self.resolve_access_token(&token).await {
-                    Ok(access_token) => access_token,
+                    Ok(used) => used,
                     // An expired file stays expired until the CLI runs and
                     // rewrites it — UsageBar never refreshes it itself.
                     Err(_) => {
@@ -143,6 +153,7 @@ impl GeminiManager {
                 }
             }
         };
+        let access_token = used.access_token.clone();
 
         // Project and tier are nice-to-have; quota answers without them.
         let identity = self
@@ -154,7 +165,10 @@ impl GeminiManager {
             .fetch_quota(&access_token, identity.project.as_deref())
             .await
         {
-            Ok(payload) => self.publish(identity.plan.as_deref(), &payload).await?,
+            Ok(payload) => {
+                self.publish(identity.plan.as_deref(), &payload, &source, &used.stable)
+                    .await?
+            }
             Err(QuotaFetch::Unauthorized) => {
                 // Includes the consumer-tier shutdown signal: this Mac's
                 // Gemini login is one the Antigravity provider covers instead.
@@ -174,7 +188,13 @@ impl GeminiManager {
         Ok(self.snapshot().await)
     }
 
-    async fn publish(&self, plan: Option<&str>, payload: &Value) -> Result<(), String> {
+    async fn publish(
+        &self,
+        plan: Option<&str>,
+        payload: &Value,
+        source: &crate::accounts::ActiveSource,
+        stable: &str,
+    ) -> Result<(), String> {
         let Some(normalized) = normalize_quota(payload) else {
             let message = "Gemini CLI did not report any quota windows".to_owned();
             self.set_connection(ConnectionState::Error, Some(message.clone()))
@@ -182,27 +202,34 @@ impl GeminiManager {
             return Err(message);
         };
 
+        let context = accounts::context_from("gemini", source, Some(stable), None);
         {
             let mut state = self.state.write().await;
             state.connection = ConnectionState::Connected;
             state.diagnostic = None;
-            state.account = Some(json!({
+            state.account = Some(context.apply(json!({
                 "type": "oauth",
                 "planType": plan.unwrap_or("Gemini CLI"),
-            }));
+            })));
             state.rate_limits = Some(normalized.rate_limits.clone());
             state.updated_at = Some(now_unix_seconds());
         }
         if let Some(alerts) = self.app.try_state::<crate::alerts::UsageAlerts>() {
             alerts
-                .observe(&self.app, "Gemini", &normalized.rate_limits)
+                .observe_for(
+                    &self.app,
+                    "Gemini",
+                    source,
+                    &context,
+                    &normalized.rate_limits,
+                )
                 .await;
         }
         self.emit_state().await;
         Ok(())
     }
 
-    async fn resolve_access_token(&self, token: &OAuthToken) -> Result<String, String> {
+    async fn resolve_access_token(&self, token: &OAuthToken) -> Result<UsedToken, String> {
         let now = now_unix_seconds() as f64;
         let mut cache = self.token_cache.lock().await;
         match pick_access_token(token, cache.as_ref(), now) {
@@ -210,22 +237,21 @@ impl GeminiManager {
                 *cache = Some(CachedAccessToken {
                     access_token: token.access_token.clone(),
                     expires_at: token.expires_at.unwrap_or(now + 3_600.0),
+                    identity: token.identity.clone(),
                 });
-                Ok(token.access_token.clone())
+                Ok(UsedToken {
+                    access_token: token.access_token.clone(),
+                    stable: token_stable(token),
+                })
             }
-            TokenChoice::Cached(access_token) => Ok(access_token),
+            TokenChoice::Cached(access_token) => Ok(UsedToken {
+                access_token,
+                stable: token_stable(token),
+            }),
             TokenChoice::Expired => {
                 Err("The Gemini CLI login has expired; run `gemini` once to renew it".to_owned())
             }
         }
-    }
-
-    async fn cached_usable_token(&self) -> Option<String> {
-        let now = now_unix_seconds() as f64;
-        let cache = self.token_cache.lock().await;
-        cache.as_ref().and_then(|cached| {
-            (cached.expires_at - EXPIRY_SKEW_SECS > now).then(|| cached.access_token.clone())
-        })
     }
 
     /// Drop the meter. No OAuth session, or Google stopped serving it.
@@ -329,7 +355,6 @@ enum QuotaFetch {
 enum LoginAction {
     Hide,
     KeepLast,
-    UseCached,
     UseStored(OAuthToken),
 }
 
@@ -340,10 +365,21 @@ enum TokenChoice {
     Expired,
 }
 
+/// The stable identity of a stored token: the id token's subject, else a
+/// digest of the access token.
+fn token_stable(token: &OAuthToken) -> String {
+    token
+        .identity
+        .clone()
+        .unwrap_or_else(|| accounts::credential_stable(&token.access_token))
+}
+
 /// The file is the CLI's current session, so a still-valid stored token wins.
 /// Preferring the cache sent a token the CLI had already replaced (after a
 /// re-login, possibly for another account) until that token aged out. The
-/// cache only covers the case where the file now holds an expired token.
+/// cache only covers the case where the file now holds an expired token, and
+/// only when both name the same person: an expired token for B never borrows
+/// the cached token of A.
 fn pick_access_token(
     stored: &OAuthToken,
     cached: Option<&CachedAccessToken>,
@@ -353,7 +389,11 @@ fn pick_access_token(
         return TokenChoice::Stored;
     }
     match cached {
-        Some(cached) if cached.expires_at - EXPIRY_SKEW_SECS > now => {
+        Some(cached)
+            if cached.expires_at - EXPIRY_SKEW_SECS > now
+                && stored.identity.is_some()
+                && stored.identity == cached.identity =>
+        {
             TokenChoice::Cached(cached.access_token.clone())
         }
         _ => TokenChoice::Expired,
@@ -361,31 +401,21 @@ fn pick_access_token(
 }
 
 /// No stored login hides the meter. An unreadable store keeps the last
-/// reading, and prefers a still-valid cached token over hiding.
-fn login_action(
-    read: CredentialRead,
-    has_cached_token: bool,
-    has_shown_usage: bool,
-) -> LoginAction {
+/// reading and never makes a fresh one.
+fn login_action(read: CredentialRead, has_shown_usage: bool) -> LoginAction {
     match read {
         CredentialRead::Found(token) => LoginAction::UseStored(token),
         CredentialRead::Absent => LoginAction::Hide,
-        CredentialRead::Unavailable(_) if has_cached_token => LoginAction::UseCached,
         CredentialRead::Unavailable(_) if has_shown_usage => LoginAction::KeepLast,
         CredentialRead::Unavailable(_) => LoginAction::Hide,
     }
 }
 
-fn home_dir() -> Option<std::path::PathBuf> {
-    crate::platform::home_dir()
-}
-
-fn credentials_path() -> Option<std::path::PathBuf> {
-    Some(home_dir()?.join(".gemini/oauth_creds.json"))
-}
-
-fn settings_path() -> Option<std::path::PathBuf> {
-    Some(home_dir()?.join(".gemini/settings.json"))
+fn gemini_dir(source: &Source) -> Option<std::path::PathBuf> {
+    match source {
+        Source::Directory(root) => Some(root.clone()),
+        _ => Some(crate::platform::home_dir()?.join(".gemini")),
+    }
 }
 
 /// The auth modes that never keep an OAuth session for UsageBar to read.
@@ -398,12 +428,17 @@ fn oauth_supported(settings: &Value) -> bool {
     !matches!(auth.as_deref(), Some("api-key") | Some("vertex-ai"))
 }
 
-async fn load_credentials() -> CredentialRead {
-    let Some(path) = settings_path() else {
+/// Settings and login are read from the same folder, so a custom profile
+/// never consults the default `~/.gemini/settings.json`.
+async fn load_credentials(source: &Source) -> CredentialRead {
+    let Some(dir) = gemini_dir(source) else {
         return CredentialRead::Unavailable("The home directory is unavailable".to_owned());
     };
-    if let Ok(bytes) =
-        crate::platform::read_capped(&path, crate::platform::CREDENTIAL_FILE_LIMIT).await
+    if let Ok(bytes) = crate::platform::read_capped(
+        &dir.join("settings.json"),
+        crate::platform::CREDENTIAL_FILE_LIMIT,
+    )
+    .await
     {
         if let Ok(settings) = serde_json::from_slice::<Value>(&bytes) {
             if !oauth_supported(&settings) {
@@ -412,9 +447,7 @@ async fn load_credentials() -> CredentialRead {
         }
     }
 
-    let Some(path) = credentials_path() else {
-        return CredentialRead::Unavailable("The home directory is unavailable".to_owned());
-    };
+    let path = dir.join("oauth_creds.json");
     match crate::platform::read_capped(&path, crate::platform::CREDENTIAL_FILE_LIMIT).await {
         Ok(bytes) => classify_oauth_file(&bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => CredentialRead::Absent,
@@ -446,9 +479,15 @@ fn parse_oauth_value(bytes: &[u8]) -> Option<OAuthToken> {
     let value: Value = serde_json::from_slice(bytes).ok()?;
     let access_token = first_string(&value, &["access_token", "accessToken"])?;
     let expires_at = first_expiry(&value);
+    let identity = first_string(&value, &["id_token", "idToken"])
+        .map(|token| accounts::jwt_subject(&token))
+        .and_then(|(subject, issuer)| {
+            subject.map(|subject| format!("jwt:{}:{subject}", issuer.unwrap_or_default()))
+        });
     Some(OAuthToken {
         access_token,
         expires_at,
+        identity,
     })
 }
 
@@ -838,30 +877,110 @@ mod tests {
         ));
     }
 
+    fn token(access: &str, expires_at: f64, identity: Option<&str>) -> OAuthToken {
+        OAuthToken {
+            access_token: access.into(),
+            expires_at: Some(expires_at),
+            identity: identity.map(str::to_owned),
+        }
+    }
+
     #[test]
     fn a_valid_stored_token_beats_the_cache() {
         let now = 1_800_000_000.0;
         let cached = CachedAccessToken {
             access_token: "old-session".into(),
             expires_at: now + 1_800.0,
+            identity: Some("jwt::a".into()),
         };
-        let fresh = OAuthToken {
-            access_token: "new-session".into(),
-            expires_at: Some(now + 3_600.0),
-        };
+        let fresh = token("new-session", now + 3_600.0, Some("jwt::b"));
         assert_eq!(
             pick_access_token(&fresh, Some(&cached), now),
             TokenChoice::Stored
         );
-        let expired = OAuthToken {
-            access_token: "stale".into(),
-            expires_at: Some(now - 10.0),
-        };
+        let expired_same = token("stale", now - 10.0, Some("jwt::a"));
         assert_eq!(
-            pick_access_token(&expired, Some(&cached), now),
+            pick_access_token(&expired_same, Some(&cached), now),
             TokenChoice::Cached("old-session".into())
         );
-        assert_eq!(pick_access_token(&expired, None, now), TokenChoice::Expired);
+        assert_eq!(
+            pick_access_token(&expired_same, None, now),
+            TokenChoice::Expired
+        );
+    }
+
+    #[test]
+    fn an_expired_token_for_b_never_borrows_the_cached_token_of_a() {
+        let now = 1_800_000_000.0;
+        let cached = CachedAccessToken {
+            access_token: "token-a".into(),
+            expires_at: now + 1_800.0,
+            identity: Some("jwt::a".into()),
+        };
+        let expired_b = token("token-b", now - 10.0, Some("jwt::b"));
+        assert_eq!(
+            pick_access_token(&expired_b, Some(&cached), now),
+            TokenChoice::Expired
+        );
+        // Without a named identity on either side there is nothing to match.
+        let unnamed = token("token-b", now - 10.0, None);
+        assert_eq!(
+            pick_access_token(&unnamed, Some(&cached), now),
+            TokenChoice::Expired
+        );
+        let unnamed_cache = CachedAccessToken {
+            identity: None,
+            ..cached
+        };
+        let expired_a = token("token-a2", now - 10.0, None);
+        assert_eq!(
+            pick_access_token(&expired_a, Some(&unnamed_cache), now),
+            TokenChoice::Expired
+        );
+    }
+
+    #[test]
+    fn identity_comes_from_the_id_token_subject_else_the_credential() {
+        use base64::Engine as _;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"sub":"1234","iss":"https://accounts.google.com","email":"a@b.com"}"#);
+        let file = format!(r#"{{"access_token":"ya29.x","id_token":"h.{payload}.s"}}"#);
+        let parsed = parse_oauth_value(file.as_bytes()).unwrap();
+        assert_eq!(
+            parsed.identity.as_deref(),
+            Some("jwt:https://accounts.google.com:1234")
+        );
+        assert_eq!(
+            token_stable(&parsed),
+            "jwt:https://accounts.google.com:1234"
+        );
+        let bare = parse_oauth_value(br#"{"access_token":"ya29.y"}"#).unwrap();
+        assert!(bare.identity.is_none());
+        assert!(token_stable(&bare).starts_with("cred:"));
+        assert!(!token_stable(&bare).contains("ya29"));
+    }
+
+    #[test]
+    fn a_custom_profile_reads_its_own_settings_and_login() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        std::fs::write(
+            root.join("oauth_creds.json"),
+            br#"{"access_token":"ya29.custom"}"#,
+        )
+        .unwrap();
+        let source = Source::Directory(root.clone());
+        let read = tauri::async_runtime::block_on(load_credentials(&source));
+        assert!(matches!(&read, CredentialRead::Found(t) if t.access_token == "ya29.custom"));
+        // The profile's own settings can turn OAuth off.
+        std::fs::write(
+            root.join("settings.json"),
+            br#"{"security":{"auth":{"selectedType":"api-key"}}}"#,
+        )
+        .unwrap();
+        let read = tauri::async_runtime::block_on(load_credentials(&source));
+        assert!(matches!(read, CredentialRead::Absent));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -882,21 +1001,17 @@ mod tests {
     }
 
     #[test]
-    fn no_login_hides_and_unreadable_store_keeps_a_live_meter() {
+    fn no_login_hides_and_an_unreadable_store_keeps_the_last_reading_only() {
         assert!(matches!(
-            login_action(CredentialRead::Absent, true, true),
+            login_action(CredentialRead::Absent, true),
             LoginAction::Hide
         ));
         assert!(matches!(
-            login_action(CredentialRead::Unavailable("busy".into()), true, true),
-            LoginAction::UseCached
-        ));
-        assert!(matches!(
-            login_action(CredentialRead::Unavailable("busy".into()), false, true),
+            login_action(CredentialRead::Unavailable("busy".into()), true),
             LoginAction::KeepLast
         ));
         assert!(matches!(
-            login_action(CredentialRead::Unavailable("busy".into()), false, false),
+            login_action(CredentialRead::Unavailable("busy".into()), false),
             LoginAction::Hide
         ));
     }

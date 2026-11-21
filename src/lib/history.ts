@@ -1,4 +1,5 @@
 import type { QuotaSnapshot, RateLimitBucket, ResetEvent } from "../types/codex";
+import { windowDurationLabel } from "./rateLimits";
 
 const HISTORY_KEY = "codex-meter.quota-history.v1";
 const EVENT_KEY = "codex-meter.detected-events.v1";
@@ -55,6 +56,16 @@ function cachedHistory(): Map<string, QuotaSnapshot[]> {
   return historyCache.byLimit;
 }
 
+/**
+ * The series key for one quota. A scoped key is a JSON array, so it can never
+ * equal an older `provider:bucket` key, and one account's samples are never
+ * read as another's. Without a scope the old key is used: only simulation and
+ * previews do that, since native readings with no known account are not kept.
+ */
+export function historyLimitId(provider: string, bucketId: string, scopeId?: string): string {
+  return scopeId ? JSON.stringify([provider, scopeId, bucketId]) : `${provider}:${bucketId}`;
+}
+
 export function isPossibleSurpriseReset(
   previous: QuotaSnapshot,
   current: QuotaSnapshot,
@@ -70,7 +81,11 @@ export function isPossibleSurpriseReset(
   );
 }
 
-export function observeBuckets(provider: string, buckets: RateLimitBucket[]): ResetEvent[] {
+export function observeBuckets(
+  provider: string,
+  buckets: RateLimitBucket[],
+  scopeId?: string,
+): ResetEvent[] {
   const history = readArray<QuotaSnapshot>(HISTORY_KEY);
   const detected = readArray<ResetEvent>(EVENT_KEY);
   const newEvents: ResetEvent[] = [];
@@ -81,7 +96,7 @@ export function observeBuckets(provider: string, buckets: RateLimitBucket[]): Re
       timestamp,
       // Bucket ids are only unique within one provider ("weekly" exists on
       // both OpenCode and Devin), so history keys carry the provider too.
-      limitId: `${provider}:${bucket.id}`,
+      limitId: historyLimitId(provider, bucket.id, scopeId),
       usedPercent: bucket.usedPercent,
       remainingPercent: bucket.remainingPercent,
       windowDurationMins: bucket.windowDurationMins,
@@ -97,11 +112,14 @@ export function observeBuckets(provider: string, buckets: RateLimitBucket[]): Re
     if (!meaningful) continue;
     if (previous && isPossibleSurpriseReset(previous, snapshot)) {
       const event: ResetEvent = {
-        id: `detected-${Date.now()}-${bucket.id}`,
+        id: `detected-${Date.now()}-${provider}-${scopeId?.slice(0, 16) ?? "legacy"}-${bucket.id}`,
         announcedAt: timestamp,
         occurredAt: timestamp,
         source: "detected",
         text: "Possible surprise reset detected locally",
+        provider,
+        windowLabel: bucket.windowLabel ?? windowDurationLabel(bucket.windowDurationMins),
+        ...(scopeId ? { scopeId } : {}),
       };
       detected.push(event);
       newEvents.push(event);
@@ -133,8 +151,12 @@ export function readDetectedEvents(): ResetEvent[] {
  * Recorded samples for one quota, oldest first. The array is shared with the
  * read cache, so callers must treat it as read-only.
  */
-export function historySeries(provider: string, bucketId: string): readonly QuotaSnapshot[] {
-  return cachedHistory().get(`${provider}:${bucketId}`) ?? [];
+export function historySeries(
+  provider: string,
+  bucketId: string,
+  scopeId?: string,
+): readonly QuotaSnapshot[] {
+  return cachedHistory().get(historyLimitId(provider, bucketId, scopeId)) ?? [];
 }
 
 // Reset timestamps can wobble by a few seconds between polls (some providers
