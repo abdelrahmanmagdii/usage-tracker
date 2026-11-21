@@ -51,6 +51,12 @@ pub struct AntigravityManager {
     refresh_lock: Arc<Mutex<()>>,
     token_cache: Arc<Mutex<Option<CachedAccessToken>>>,
     last_local_endpoint: Arc<Mutex<Option<LocalEndpoint>>>,
+    managed_hub: Arc<Mutex<Option<ManagedHub>>>,
+}
+
+struct ManagedHub {
+    child: tokio::process::Child,
+    hub_file: std::path::PathBuf,
 }
 
 #[derive(Clone)]
@@ -68,7 +74,17 @@ impl AntigravityManager {
             refresh_lock: Arc::new(Mutex::new(())),
             token_cache: Arc::new(Mutex::new(None)),
             last_local_endpoint: Arc::new(Mutex::new(None)),
+            managed_hub: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub async fn shutdown(&self) {
+        let Some(mut hub) = self.managed_hub.lock().await.take() else {
+            return;
+        };
+        let _ = hub.child.kill().await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), hub.child.wait()).await;
+        let _ = std::fs::remove_file(&hub.hub_file);
     }
 
     pub async fn snapshot(&self) -> ProviderState {
@@ -124,6 +140,19 @@ impl AntigravityManager {
         if let Some(local) = fetch_local_usage(&logged).await {
             self.publish(&local.plan, local.payload).await?;
             return Ok(self.snapshot().await);
+        }
+
+        // No editor/IDE hub is running: start a hidden `agy --hub` process so
+        // Antigravity quota stays live without opening VS Code or the IDE.
+        if let Some(endpoint) = self.ensure_managed_hub().await {
+            let client = local_http_client();
+            if let Some(local) = probe_endpoints(&client, &[endpoint]).await {
+                *self.last_local_endpoint.lock().await = logged_endpoints().await.into_iter().next();
+                self.publish(&local.plan, local.payload).await?;
+                return Ok(self.snapshot().await);
+            }
+            // Signed out or unusable — don't keep an idle hub running.
+            self.shutdown().await;
         }
 
         // The app and the CLI are closed. No login hides the meter. An
@@ -290,6 +319,91 @@ impl AntigravityManager {
         let _ = self.app.emit("antigravity://state", state);
         tray::refresh_unified_tray(&self.app).await;
     }
+
+    async fn ensure_managed_hub(&self) -> Option<LocalEndpoint> {
+        {
+            let mut slot = self.managed_hub.lock().await;
+            if let Some(hub) = slot.as_mut() {
+                if hub.child.try_wait().ok().flatten().is_none() {
+                    if let Ok(text) = std::fs::read_to_string(&hub.hub_file) {
+                        if let Some(endpoint) = parse_daemon_hub(&text) {
+                            return Some(endpoint);
+                        }
+                    }
+                    return None;
+                }
+                let _ = std::fs::remove_file(&hub.hub_file);
+                *slot = None;
+            }
+        }
+
+        let agy = find_agy_cli()?;
+        let home = crate::platform::home_dir()?;
+        let port = pick_free_loopback_port()?;
+        let hub_file = std::path::PathBuf::from(home)
+            .join(".gemini/antigravity/daemon")
+            .join(format!("hub_{port}.json"));
+
+        let mut command = tokio::process::Command::new(agy);
+        command
+            .args([
+                "--hub",
+                &format!("--hub-port={port}"),
+                "--app_data_dir=antigravity",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x08000000);
+
+        let mut child = command.spawn().ok()?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut ready = None;
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(&hub_file) {
+                if let Some(endpoint) = parse_daemon_hub(&text) {
+                    ready = Some(endpoint);
+                    break;
+                }
+            }
+            if child.try_wait().ok().flatten().is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+
+        if ready.is_some() {
+            *self.managed_hub.lock().await = Some(ManagedHub { child, hub_file });
+            ready
+        } else {
+            let _ = child.kill().await;
+            let _ = std::fs::remove_file(&hub_file);
+            None
+        }
+    }
+}
+
+fn find_agy_cli() -> Option<std::path::PathBuf> {
+    if let Some(home) = crate::platform::home_dir() {
+        let name = if cfg!(target_os = "windows") {
+            "agy.exe"
+        } else {
+            "agy"
+        };
+        let bundled = std::path::PathBuf::from(home).join(".gemini/bin").join(name);
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
+    which::which("agy").ok()
+}
+
+fn pick_free_loopback_port() -> Option<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
+    let port = listener.local_addr().ok()?.port();
+    (port != 0).then_some(port)
 }
 
 struct LocalUsage {
@@ -1692,6 +1806,12 @@ server.go:569] Language server listening on random port at 53573 for HTTP
                 csrf: Some("9e14ea38-658b-4c1d-bd00-a0be303eadea".to_owned()),
             })
         );
+    }
+
+    #[test]
+    fn picks_a_non_zero_loopback_port() {
+        let port = pick_free_loopback_port().expect("free port");
+        assert!(port > 0);
     }
 
     #[test]

@@ -329,6 +329,8 @@ pub fn set_reset_incoming(
 pub async fn quit_app(app: AppHandle) {
     let manager = app.state::<CodexManager>().inner().clone();
     manager.shutdown().await;
+    let antigravity = app.state::<AntigravityManager>().inner().clone();
+    antigravity.shutdown().await;
     app.exit(0);
 }
 
