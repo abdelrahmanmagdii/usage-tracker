@@ -3,14 +3,18 @@ name: Windows build
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  workflow_call:
     inputs:
-      tag:
-        description: "Release tag to build and attach the installer to (e.g. v0.2.4). Empty builds without publishing."
+      signed:
+        type: boolean
+        default: false
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
         required: false
-        default: ""
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -18,7 +22,7 @@ permissions:
 # A newer push to a pull request supersedes the old build. Branch and tag
 # builds always finish, since a tag build publishes the installer.
 concurrency:
-  group: windows-${{ github.ref }}-${{ inputs.tag }}
+  group: windows-${{ github.ref }}-${{ inputs.signed || false }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -27,8 +31,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -44,43 +46,73 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: npm run windows:build
+      - name: Build test installer (no signing credentials)
+        if: ${{ !inputs.signed }}
+        run: npm run windows:build
+      - name: Build release installer and updater signature
+        if: ${{ inputs.signed && startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw 'Missing updater signing key' }
+          npm run windows:build -- --config src-tauri/tauri.windows-release.conf.json
+      # Proves the real Tauri signature file is accepted by the feed generator.
+      # A throwaway key signs a copy of the installer in a private directory;
+      # the CI installer, the release key and the public key are never involved,
+      # and nothing from this step is uploaded.
+      - name: Check the updater signature format with a throwaway key
+        if: ${{ !inputs.signed }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $exe = "UsageBar_${version}_x64-setup.exe"
+          $tauri = "node_modules/@tauri-apps/cli/tauri.js"
+          $dir = Join-Path $env:RUNNER_TEMP "usagebar-signature-check"
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          $key = Join-Path $dir "test.key"
+          $payload = Join-Path $dir $exe
+          Copy-Item "src-tauri/target/release/bundle/nsis/$exe" $payload
+          node $tauri signer generate --ci --password ci-only --write-keys $key | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node $tauri signer sign --private-key-path $key --password ci-only $payload | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/packages.mjs windows-feed $version $payload "$payload.sig" (Join-Path $dir "latest-windows.json")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Generate WinGet manifests for the actual installer
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $exe = "src-tauri/target/release/bundle/nsis/UsageBar_${version}_x64-setup.exe"
+          node tools/packages.mjs winget $version $exe packaging-out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $manifest = "packaging-out/manifests/a/AbdelrahmanAmer/UsageBar/$version"
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            winget validate --manifest $manifest
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Compress-Archive packaging-out/manifests "packaging-out/UsageBar_${version}_winget.zip"
+          Copy-Item $exe packaging-out/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate WinGet manifests against Microsoft's schemas
+        run: |
+          python -m pip install pyyaml==6.0.3 jsonschema==4.25.1
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          python tools/check-winget.py "packaging-out/manifests/a/AbdelrahmanAmer/UsageBar/$version"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare signed Windows update feed
+        if: ${{ inputs.signed && startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $exe = "UsageBar_${version}_x64-setup.exe"
+          Copy-Item "src-tauri/target/release/bundle/nsis/$exe.sig" packaging-out/
+          node tools/packages.mjs windows-feed $version "packaging-out/$exe" "packaging-out/$exe.sig" packaging-out/latest-windows.json
       - uses: actions/upload-artifact@v4
         with:
           name: UsageBar-Windows
-          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          path: |
+            packaging-out/*-setup.exe
+            packaging-out/*-setup.exe.sig
+            packaging-out/latest-windows.json
+            packaging-out/*_winget.zip
           if-no-files-found: error
-
-  # A pushed v* tag or a dispatched tag publishes; branches and PRs only build.
-  # Attaches the installer to the GitHub release the macOS job publishes. The
-  # fixed-name copy lets the website link to releases/latest/download/... .
-  publish:
-    needs: windows
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.tag != '' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.tag }}
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: UsageBar-Windows
-          path: dist
-      - name: Wait for the release to exist
-        # The macOS release job creates the release; on a tag push it may still
-        # be signing and notarizing when this build finishes.
-        run: |
-          for attempt in $(seq 1 60); do
-            gh release view "$RELEASE_TAG" >/dev/null 2>&1 && exit 0
-            sleep 30
-          done
-          echo "::error::Release $RELEASE_TAG did not appear within 30 minutes"
-          exit 1
-      - name: Upload the installer
-        run: |
-          installer=$(ls dist/*-setup.exe | head -n 1)
-          cp "$installer" dist/UsageBar_windows_x64-setup.exe
-          gh release upload "$RELEASE_TAG" "$installer" dist/UsageBar_windows_x64-setup.exe --clobber

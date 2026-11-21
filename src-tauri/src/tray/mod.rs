@@ -237,7 +237,14 @@ fn update_menu_item(app: &AppHandle) -> tauri::Result<MenuItem<tauri::Wry>> {
         return MenuItem::with_id(
             app,
             "restart-update",
-            format!("Restart to Update — v{version}"),
+            format!(
+                "{} — v{version}",
+                if cfg!(windows) {
+                    "Install Update and Restart"
+                } else {
+                    "Restart to Update"
+                }
+            ),
             true,
             None::<&str>,
         );
@@ -905,7 +912,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             });
         }
         "restart-update" => {
-            tauri::process::restart(&app.env());
+            crate::updates::restart_to_update(app);
         }
         "star-github" => {
             let _ = crate::commands::open_in_browser(

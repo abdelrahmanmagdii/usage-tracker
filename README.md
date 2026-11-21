@@ -23,13 +23,50 @@ Download the `.dmg` from
 open it, and drag UsageBar to Applications. Signed releases are notarized by
 Apple, so they open without a security warning. Or build from source below.
 
-A Homebrew tap is in the works — `homebrew-tap/` seeds the
-`abdelrahmanmagdii/homebrew-usagebar` repo and the Release workflow keeps its
-cask on the latest tag once it is published (see `homebrew-tap/SETUP.md`).
+**Homebrew (macOS).** This repository is its own tap. Add it once (one time
+only), then install:
+
+```sh
+brew tap abdelrahmanmagdii/usagebar https://github.com/abdelrahmanmagdii/usage-tracker.git
+brew install --cask usagebar
+```
+
+Later, run one of these when you need it:
+
+| To | Run |
+| --- | --- |
+| Upgrade | `brew upgrade --cask usagebar` |
+| Uninstall | `brew uninstall --cask usagebar` |
+
+The cask pins the SHA-256 of the published `.dmg`. The app also updates itself,
+so `brew upgrade` is optional.
+
+**WinGet (Windows).** Not yet in the community catalog, so these commands work
+only once it accepts UsageBar:
+
+```sh
+winget install --id AbdelrahmanAmer.UsageBar --exact
+winget upgrade --id AbdelrahmanAmer.UsageBar --exact
+winget uninstall --id AbdelrahmanAmer.UsageBar --exact
+```
+
+The published 0.2.5 release has no WinGet zip and cannot update itself. Its
+manifests are committed in
+[`packaging/winget/manifests/a/AbdelrahmanAmer/UsageBar/0.2.5`](packaging/winget/manifests/a/AbdelrahmanAmer/UsageBar/0.2.5)
+(a bootstrap, not a catalog submission). Releases after 0.2.5 attach
+`UsageBar_<version>_winget.zip` with the manifests. To try a manifest folder
+before the catalog accepts it, read what the setting allows, enable it in an
+administrator terminal, and install from the folder:
+
+```sh
+winget settings --enable LocalManifestFiles
+winget install --manifest <folder with the three .yaml files>
+```
 
 The [public site](https://abdelrahmanmagdii.github.io/usage-tracker/) is the
-privacy and support URL. Distribution is the notarized GitHub `.dmg` only —
-not the Mac App Store.
+privacy and support URL. On macOS, UsageBar is distributed as the notarized
+GitHub `.dmg`, directly or through the Homebrew cask above — not the Mac App
+Store.
 
 Or build it yourself:
 
@@ -58,9 +95,14 @@ Keychain step.
 
 <img src="docs/usagebar-demo-windows.gif" width="320" alt="UsageBar on Windows: the dashboard with sample quotas">
 
-The Windows build is not code-signed, so
-SmartScreen warns on first launch, and it does not auto-update — install a newer
-build over the old one. To build the per-user installer yourself, follow
+The Windows installer is not Authenticode-signed, so SmartScreen warns on first
+launch. Release builds carry a separate Tauri updater signature, which proves an
+update came from this project but does not remove the SmartScreen prompt.
+UsageBar 0.2.5 on Windows cannot update itself: install the next version once
+by hand or with WinGet. After that, the app checks for updates, downloads and
+verifies them in the background, and installs only when you choose **Install
+Update and Restart** in the tray menu. Quitting normally drops a downloaded
+update and the next launch checks again. To build the per-user installer yourself, follow
 [docs/WINDOWS.md](docs/WINDOWS.md), then run `npm ci` and `npm run windows:build`;
 the `-setup.exe` lands in `src-tauri/target/release/bundle/nsis/`.
 
@@ -266,7 +308,7 @@ Developers can exercise the whole path in a debug build with `USAGEBAR_DEBUG_PAN
 
 - The reset feed relies on unofficial X→Bluesky relays of @thsottiaux, which can lag or drop posts; the scheduled workflow retries and simply catches up on the next run. Local on-device reset detection remains as a fallback, and hand-written `manual` entries always win.
 - GitHub's scheduled workflows can be delayed by a few minutes under load.
-- Auto-updates come from the GitHub release the app is running: a signed `latest.json` is checked periodically and on demand (tray menu → Check for Updates…), and an update applies on the next restart. The very first install still needs a manual `.dmg` download.
+- Auto-updates come from the GitHub release the app is running: a signed `latest.json` is checked periodically and on demand (tray menu → Check for Updates…), and on macOS an update applies on the next restart. On Windows the update downloads but installs only when you choose it in the tray menu. The very first install still needs a manual download (or Homebrew / WinGet).
 - A GUI-launched app must still be able to locate an executable `codex` command; common Homebrew paths and the login shell are checked.
 
 ## Future ideas

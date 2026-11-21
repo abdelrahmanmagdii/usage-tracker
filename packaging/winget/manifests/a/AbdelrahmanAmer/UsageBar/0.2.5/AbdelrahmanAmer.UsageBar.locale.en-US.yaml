@@ -1,0 +1,18 @@
+PackageIdentifier: AbdelrahmanAmer.UsageBar
+PackageVersion: 0.2.5
+PackageLocale: en-US
+Publisher: Abdelrahman Amer
+PublisherUrl: https://github.com/abdelrahmanmagdii
+PackageName: UsageBar
+PackageUrl: https://github.com/abdelrahmanmagdii/usage-tracker
+License: MIT
+LicenseUrl: https://github.com/abdelrahmanmagdii/usage-tracker/blob/v0.2.5/LICENSE
+ShortDescription: "AI coding quota windows and reset times in the Windows system tray."
+Tags:
+- codex
+- claude
+- quota
+- usage
+- tray
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

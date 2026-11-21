@@ -88,3 +88,23 @@ test("a disagreeing file, a missing field, or a wrong tag is reported", () => {
 test("set refuses something that is not a version", () => {
   assert.throws(() => setVersion("v1.2", repo), /Not a semantic version/);
 });
+
+test("set never touches the casks, which pin a published installer", () => {
+  const root = scratchCopy();
+  try {
+    for (const cask of ["Casks/usagebar.rb", "homebrew-tap/Casks/usagebar.rb"]) {
+      mkdirSync(path.dirname(path.join(root, cask)), { recursive: true });
+      cpSync(path.join(repo, cask), path.join(root, cask));
+    }
+    setVersion("9.8.7", root);
+    for (const cask of ["Casks/usagebar.rb", "homebrew-tap/Casks/usagebar.rb"]) {
+      assert.equal(
+        readFileSync(path.join(root, cask), "utf8"),
+        readFileSync(path.join(repo, cask), "utf8"),
+      );
+    }
+    assert.ok(!VERSION_FILES.some((entry) => entry.file.endsWith("usagebar.rb")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

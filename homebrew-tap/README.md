@@ -1,28 +1,13 @@
-# homebrew-usagebar
+# UsageBar Homebrew cask
 
-Homebrew tap for [UsageBar](https://github.com/abdelrahmanmagdii/usage-tracker):
-AI coding quotas (Codex, Claude, Cursor, OpenCode, Devin, Antigravity, Gemini CLI)
-in the macOS menu bar.
-
-## Install
-
-```sh
-brew install --cask abdelrahmanmagdii/usagebar/usagebar
-```
-
-or
+The cask in this directory mirrors `Casks/usagebar.rb` at the root of
+[the repository](https://github.com/abdelrahmanmagdii/usage-tracker), which is
+itself the tap. Edit neither by hand for a release: `tools/packages.mjs cask`
+pins both to the published `.dmg` digest after each release.
 
 ```sh
-brew tap abdelrahmanmagdii/usagebar
+brew tap abdelrahmanmagdii/usagebar https://github.com/abdelrahmanmagdii/usage-tracker.git
 brew install --cask usagebar
-```
-
-UsageBar is signed and notarized. It updates itself from the GitHub release, so
-the cask is only needed for the first install.
-
-## Upgrade / uninstall
-
-```sh
-brew upgrade --cask usagebar   # optional — in-app updates are usually faster
+brew upgrade --cask usagebar
 brew uninstall --cask usagebar
 ```
