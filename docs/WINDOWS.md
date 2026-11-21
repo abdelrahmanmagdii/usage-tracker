@@ -142,8 +142,11 @@ You can close the build terminal after installation. The installer is per-user.
 This local build is unsigned, so Windows may show a publisher/SmartScreen prompt.
 Uninstall through **Settings > Apps > Installed apps > UsageBar**.
 
-Windows auto-updates are disabled because the existing signed update feed is
-for the upstream macOS app. Build and run a newer Windows installer to update.
+Local and pull-request builds do not produce updater artifacts. Release builds
+are signed with the Tauri updater key and published with `latest-windows.json`;
+an installed release checks that feed and installs a verified update only when
+you choose **Install Update and Restart** in the tray menu. Version 0.2.5 has no
+updater, so it needs one manual or WinGet upgrade first.
 The original `app:install` script is macOS-only; use `windows:build` on Windows.
 
 Alternatively, after committing and pushing this port to your GitHub repository,

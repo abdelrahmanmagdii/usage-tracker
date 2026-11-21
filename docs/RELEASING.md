@@ -86,9 +86,11 @@ auto-updating (those users land back on manual downloads).
 
 ## Cutting a release
 
-The version lives in eight fields across seven files (`package.json`,
-`package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
-`src-tauri/tauri.conf.json`, and both casks). Set them all at once:
+The version lives in six fields across five files (`package.json`,
+`package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and
+`src-tauri/tauri.conf.json`). The casks are deliberately not among them: they
+pin a published installer and are updated only after a release is public.
+Set the fields at once:
 
 ```bash
 npm run versions:set -- 0.1.0
@@ -102,33 +104,51 @@ Commit, and tag:
 git tag v0.1.0 && git push origin main --tags
 ```
 
-The workflow runs the test suite, builds a universal binary for Intel and
-Apple Silicon, signs it, sends it to Apple for notarization, staples the
-ticket, and publishes the release with the `.dmg`, the updater bundle
-(`*.app.tar.gz` + `*.sig`), and `latest.json` attached. `releases/latest`
-then points at it right away and running copies of
-UsageBar pick up the update (they check on a six-hour cycle, and the tray
-menu gains a **Restart to Update** item once one has downloaded).
+Only stable `vM.m.p` tags release. The workflow runs, in order:
 
-## Homebrew tap (optional)
+1. `preflight`: the tag must be strictly newer than the latest public release
+   (so a rerun cannot overwrite or downgrade it) and match the version fields.
+   A draft left by a failed run can be retried.
+2. `windows`: the signed Windows build (reusable `windows.yml`), producing the
+   installer, its `.sig`, `latest-windows.json` and the WinGet manifests zip.
+   It needs the `TAURI_SIGNING_PRIVATE_KEY` secrets.
+3. `release`: tests, then the universal macOS build, signed, notarised and
+   stapled, uploaded to a **draft** release. The Windows files (versioned
+   installer, `.sig`, `latest-windows.json`, WinGet zip and the fixed
+   `UsageBar_windows_x64-setup.exe` the website links to) are attached to the
+   same draft, every required asset and both feeds are checked, and only then
+   is the release made public with `gh release edit --draft=false --latest`.
+4. `cask`: pins both `Casks/usagebar.rb` files to the published `.dmg` digest
+   and pushes a normal commit to the default branch. If branch protection
+   refuses it, download the dmg and run
+   `node tools/packages.mjs cask <version> <dmg>` locally, then commit.
 
-`Casks/usagebar.rb` is ready to drop into a personal tap. Create a repo named
-`homebrew-usagebar` under your account, copy the cask in under `Casks/`, and
-users can then install with:
+Running copies check each feed (`latest.json`, `latest-windows.json`) on a six-hour cycle; the update packages are signed with the updater key, the JSON files themselves are not. macOS gains **Restart to Update**;
+Windows gains **Install Update and Restart**, and never installs without that
+click. The Authenticode certificate (SmartScreen) is separate from the Tauri
+updater signature and is not part of this flow.
+
+## Homebrew and WinGet
+
+This repository is the Homebrew tap:
 
 ```bash
-brew install --cask abdelrahmanmagdii/usagebar/usagebar
+brew tap abdelrahmanmagdii/usagebar https://github.com/abdelrahmanmagdii/usage-tracker.git
+brew install --cask usagebar
 ```
 
-Once `HOMEBREW_TAP_REPO` and `HOMEBREW_TAP_TOKEN` are configured (see
-`homebrew-tap/SETUP.md`), the Release workflow keeps the tap current on every
-tag: it downloads the published dmg, and writes the tag's version and the
-dmg's real SHA-256 into the tap's cask. The `sha256 :no_check` in this repo's
-copy is only the template. To check a digest by hand:
+To check a digest by hand:
 
 ```bash
 curl -sL "https://github.com/abdelrahmanmagdii/usage-tracker/releases/download/v$VERSION/UsageBar_${VERSION}_universal.dmg" | shasum -a 256
 ```
+
+WinGet manifests are generated from the real installer
+(`node tools/packages.mjs winget <version> <installer> <out-dir>`) and checked
+against Microsoft's schemas by `tools/check-winget.py` in CI. Nothing is
+submitted to the community repository automatically; the release zip is there
+for a manual pull request to `microsoft/winget-pkgs`. To try it locally:
+`winget install --manifest <dir>` (needs the `LocalManifestFiles` setting).
 
 ## Verifying a build locally
 

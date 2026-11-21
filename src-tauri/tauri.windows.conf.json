@@ -34,6 +34,12 @@
       "shadow": false
     }]
   },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/abdelrahmanmagdii/usage-tracker/releases/latest/download/latest-windows.json"],
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "targets": ["nsis"],
     "createUpdaterArtifacts": false,

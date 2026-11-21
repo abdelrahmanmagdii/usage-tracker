@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// One release version lives in eight fields across seven files. This keeps
-// them in step.
+// One release version lives in six fields across five files. This keeps
+// them in step. The Homebrew casks are deliberately not listed: they pin a
+// published installer and are updated by `tools/packages.mjs cask` only after
+// a release is public.
 //
 //   node tools/versions.mjs check        fail if any file disagrees (CI)
 //   node tools/versions.mjs set 0.2.5    rewrite every file to 0.2.5
@@ -31,8 +33,6 @@ export const VERSION_FILES = [
   { label: "src-tauri/Cargo.toml", file: "src-tauri/Cargo.toml", pattern: /^(\[package\][^[]*?\r?\nversion\s*=\s*")[^"]+/m },
   { label: "src-tauri/Cargo.lock", file: "src-tauri/Cargo.lock", pattern: /^(name = "usagebar"\r?\nversion = ")[^"]+/m },
   { label: "src-tauri/tauri.conf.json", file: "src-tauri/tauri.conf.json", pattern: /^(\s*"version":\s*")[^"]+/m },
-  { label: "Casks/usagebar.rb", file: "Casks/usagebar.rb", pattern: /^(\s*version\s+")[^"]+/m },
-  { label: "homebrew-tap/Casks/usagebar.rb", file: "homebrew-tap/Casks/usagebar.rb", pattern: /^(\s*version\s+")[^"]+/m },
 ];
 
 const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

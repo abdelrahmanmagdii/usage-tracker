@@ -532,7 +532,7 @@ impl CodexManager {
         crate::tray::refresh_unified_tray(&self.app).await;
     }
 
-    async fn stop_child(&self) {
+    pub(crate) async fn stop_child(&self) {
         // Retire the current generation first, so its reader ignores the
         // pipe closing below instead of racing the next `start`. The child is
         // taken under the same stdin lock as the generation bump, so a

@@ -1,6 +1,6 @@
 cask "usagebar" do
   version "0.2.5"
-  sha256 :no_check
+  sha256 "ffa8f8796f118922480a5753908376e2da67f34a996e065e03a14dfcbaf7ace1"
 
   url "https://github.com/abdelrahmanmagdii/usage-tracker/releases/download/v#{version}/UsageBar_#{version}_universal.dmg"
   name "UsageBar"
