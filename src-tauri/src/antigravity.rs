@@ -51,6 +51,12 @@ pub struct AntigravityManager {
     refresh_lock: Arc<Mutex<()>>,
     token_cache: Arc<Mutex<Option<CachedAccessToken>>>,
     last_local_endpoint: Arc<Mutex<Option<LocalEndpoint>>>,
+    managed_hub: Arc<Mutex<Option<ManagedHub>>>,
+}
+
+struct ManagedHub {
+    child: tokio::process::Child,
+    hub_file: std::path::PathBuf,
 }
 
 #[derive(Clone)]
@@ -68,7 +74,17 @@ impl AntigravityManager {
             refresh_lock: Arc::new(Mutex::new(())),
             token_cache: Arc::new(Mutex::new(None)),
             last_local_endpoint: Arc::new(Mutex::new(None)),
+            managed_hub: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub async fn shutdown(&self) {
+        let Some(mut hub) = self.managed_hub.lock().await.take() else {
+            return;
+        };
+        let _ = hub.child.kill().await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), hub.child.wait()).await;
+        let _ = std::fs::remove_file(&hub.hub_file);
     }
 
     pub async fn snapshot(&self) -> ProviderState {
@@ -124,6 +140,19 @@ impl AntigravityManager {
         if let Some(local) = fetch_local_usage(&logged).await {
             self.publish(&local.plan, local.payload).await?;
             return Ok(self.snapshot().await);
+        }
+
+        // No editor/IDE hub is running: start a hidden `agy --hub` process so
+        // Antigravity quota stays live without opening VS Code or the IDE.
+        if let Some(endpoint) = self.ensure_managed_hub().await {
+            let client = local_http_client();
+            if let Some(local) = probe_endpoints(&client, &[endpoint]).await {
+                *self.last_local_endpoint.lock().await = logged_endpoints().await.into_iter().next();
+                self.publish(&local.plan, local.payload).await?;
+                return Ok(self.snapshot().await);
+            }
+            // Signed out or unusable — don't keep an idle hub running.
+            self.shutdown().await;
         }
 
         // The app and the CLI are closed. No login hides the meter. An
@@ -290,6 +319,91 @@ impl AntigravityManager {
         let _ = self.app.emit("antigravity://state", state);
         tray::refresh_unified_tray(&self.app).await;
     }
+
+    async fn ensure_managed_hub(&self) -> Option<LocalEndpoint> {
+        {
+            let mut slot = self.managed_hub.lock().await;
+            if let Some(hub) = slot.as_mut() {
+                if hub.child.try_wait().ok().flatten().is_none() {
+                    if let Ok(text) = std::fs::read_to_string(&hub.hub_file) {
+                        if let Some(endpoint) = parse_daemon_hub(&text) {
+                            return Some(endpoint);
+                        }
+                    }
+                    return None;
+                }
+                let _ = std::fs::remove_file(&hub.hub_file);
+                *slot = None;
+            }
+        }
+
+        let agy = find_agy_cli()?;
+        let home = crate::platform::home_dir()?;
+        let port = pick_free_loopback_port()?;
+        let hub_file = std::path::PathBuf::from(home)
+            .join(".gemini/antigravity/daemon")
+            .join(format!("hub_{port}.json"));
+
+        let mut command = tokio::process::Command::new(agy);
+        command
+            .args([
+                "--hub",
+                &format!("--hub-port={port}"),
+                "--app_data_dir=antigravity",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x08000000);
+
+        let mut child = command.spawn().ok()?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut ready = None;
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(&hub_file) {
+                if let Some(endpoint) = parse_daemon_hub(&text) {
+                    ready = Some(endpoint);
+                    break;
+                }
+            }
+            if child.try_wait().ok().flatten().is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+
+        if ready.is_some() {
+            *self.managed_hub.lock().await = Some(ManagedHub { child, hub_file });
+            ready
+        } else {
+            let _ = child.kill().await;
+            let _ = std::fs::remove_file(&hub_file);
+            None
+        }
+    }
+}
+
+fn find_agy_cli() -> Option<std::path::PathBuf> {
+    if let Some(home) = crate::platform::home_dir() {
+        let name = if cfg!(target_os = "windows") {
+            "agy.exe"
+        } else {
+            "agy"
+        };
+        let bundled = std::path::PathBuf::from(home).join(".gemini/bin").join(name);
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
+    which::which("agy").ok()
+}
+
+fn pick_free_loopback_port() -> Option<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
+    let port = listener.local_addr().ok()?.port();
+    (port != 0).then_some(port)
 }
 
 struct LocalUsage {
@@ -440,19 +554,97 @@ fn plan_from_status(value: &Value) -> String {
         .to_owned()
 }
 
-/// Newest first. Only Windows builds keep launch logs worth reading.
-#[cfg(not(target_os = "windows"))]
+/// Newest first. Reading daemon hub metadata and launch logs is blocking file
+/// I/O, so it runs off the async worker threads.
 async fn logged_endpoints() -> Vec<LocalEndpoint> {
-    Vec::new()
-}
-
-/// Newest first. Walking the log folders and reading the logs is blocking
-/// file I/O, so it runs off the async worker threads.
-#[cfg(target_os = "windows")]
-async fn logged_endpoints() -> Vec<LocalEndpoint> {
-    tokio::task::spawn_blocking(windows_logged_endpoints)
+    tokio::task::spawn_blocking(collect_logged_endpoints)
         .await
         .unwrap_or_default()
+}
+
+fn collect_logged_endpoints() -> Vec<LocalEndpoint> {
+    let mut endpoints = daemon_hub_endpoints();
+    #[cfg(target_os = "windows")]
+    for endpoint in windows_logged_endpoints() {
+        if !endpoints.contains(&endpoint) {
+            endpoints.push(endpoint);
+        }
+    }
+    endpoints
+}
+
+/// Newer `agy` / Antigravity extension builds (v1.5+) write each running hub's
+/// loopback ports and CSRF token to `~/.gemini/antigravity/daemon/hub_*.json`
+/// instead of logging `--csrf_token` or exposing it on the loopback HTML page.
+fn daemon_hub_endpoints() -> Vec<LocalEndpoint> {
+    let Some(home) = crate::platform::home_dir() else {
+        return Vec::new();
+    };
+    daemon_hub_endpoints_in(&std::path::PathBuf::from(home).join(".gemini/antigravity/daemon"))
+}
+
+fn daemon_hub_endpoints_in(daemon_dir: &std::path::Path) -> Vec<LocalEndpoint> {
+    let Ok(entries) = std::fs::read_dir(daemon_dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<_> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("hub_") && name.ends_with(".json"))
+                && path.is_file()
+        })
+        .collect();
+    files.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    });
+    files.reverse();
+
+    let mut endpoints = Vec::new();
+    for path in files.into_iter().take(12) {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Some(endpoint) = parse_daemon_hub(&text) else {
+            continue;
+        };
+        if !endpoints.contains(&endpoint) {
+            endpoints.push(endpoint);
+        }
+    }
+    endpoints
+}
+
+fn parse_daemon_hub(text: &str) -> Option<LocalEndpoint> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    let csrf = value
+        .get("csrfToken")
+        .or_else(|| value.get("csrf_token"))
+        .and_then(Value::as_str)
+        .and_then(non_empty)?;
+    let http_port = value
+        .get("httpPort")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port != 0);
+    let https_port = value
+        .get("httpsPort")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port != 0);
+    let base = match (http_port, https_port) {
+        (Some(port), _) => format!("http://127.0.0.1:{port}"),
+        (None, Some(port)) => format!("https://127.0.0.1:{port}"),
+        (None, None) => return None,
+    };
+    Some(LocalEndpoint {
+        base,
+        csrf: Some(csrf),
+    })
 }
 
 /// Runs a listener-discovery command without blocking an async worker, and
@@ -1614,6 +1806,48 @@ server.go:569] Language server listening on random port at 53573 for HTTP
                 csrf: Some("9e14ea38-658b-4c1d-bd00-a0be303eadea".to_owned()),
             })
         );
+    }
+
+    #[test]
+    fn picks_a_non_zero_loopback_port() {
+        let port = pick_free_loopback_port().expect("free port");
+        assert!(port > 0);
+    }
+
+    #[test]
+    fn reads_daemon_hub_metadata_files() {
+        let payload = r#"{"pid":66920,"httpsPort":57704,"httpPort":57698,"lsVersion":"2.34.0","csrfToken":"token-abc"}"#;
+        assert_eq!(
+            parse_daemon_hub(payload),
+            Some(LocalEndpoint {
+                base: "http://127.0.0.1:57698".to_owned(),
+                csrf: Some("token-abc".to_owned()),
+            })
+        );
+        let https_only = r#"{"httpsPort":57704,"httpPort":0,"csrfToken":"token-https"}"#;
+        assert_eq!(
+            parse_daemon_hub(https_only),
+            Some(LocalEndpoint {
+                base: "https://127.0.0.1:57704".to_owned(),
+                csrf: Some("token-https".to_owned()),
+            })
+        );
+        assert_eq!(parse_daemon_hub(r#"{"httpPort":57698,"csrfToken":""}"#), None);
+
+        let temp = std::env::temp_dir().join(format!("usagebar-hub-daemon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("daemon dir");
+        std::fs::write(temp.join("hub_57698.json"), payload).expect("write hub");
+        std::fs::write(temp.join("other.json"), payload).expect("write ignored");
+        let found = daemon_hub_endpoints_in(&temp);
+        assert_eq!(
+            found,
+            vec![LocalEndpoint {
+                base: "http://127.0.0.1:57698".to_owned(),
+                csrf: Some("token-abc".to_owned()),
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]

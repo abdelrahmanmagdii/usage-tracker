@@ -109,8 +109,10 @@ fn toggle_main_window(app: &AppHandle) {
 fn quit_from_menu(app: &AppHandle) {
     let handle = app.clone();
     let manager = app.state::<CodexManager>().inner().clone();
+    let antigravity = app.state::<crate::antigravity::AntigravityManager>().inner().clone();
     tauri::async_runtime::spawn(async move {
         manager.shutdown().await;
+        antigravity.shutdown().await;
         handle.exit(0);
     });
 }
