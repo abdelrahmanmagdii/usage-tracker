@@ -91,7 +91,13 @@ pub struct ClaudeManager {
     /// 429 so a faster cadence never turns into hammering a rate limit.
     rate_limited_until: Arc<AtomicU64>,
     activity: Arc<std::sync::Mutex<ActivityScan>>,
+    /// Cooldown timestamp (unix secs) for headless `claude auth status` refresh.
+    last_cli_refresh: Arc<Mutex<Option<u64>>>,
 }
+
+/// Minimum interval between headless `claude auth status` attempts so a
+/// genuinely signed-out user never triggers repeated background spawns.
+const CLI_REFRESH_COOLDOWN_SECS: u64 = 300;
 
 impl ClaudeManager {
     pub fn new(app: AppHandle) -> Self {
@@ -105,6 +111,7 @@ impl ClaudeManager {
             last_request: Arc::new(AtomicU64::new(0)),
             rate_limited_until: Arc::new(AtomicU64::new(0)),
             activity: Arc::new(std::sync::Mutex::new(ActivityScan::default())),
+            last_cli_refresh: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -272,6 +279,17 @@ impl ClaudeManager {
             }
         };
 
+        let mut credentials = credentials;
+        if credentials.is_expired(now_unix_millis()) {
+            if let Some(refreshed) = self
+                .try_cli_refresh(&source.source, allow_keychain_prompt)
+                .await
+            {
+                if !refreshed.is_expired(now_unix_millis()) {
+                    credentials = refreshed;
+                }
+            }
+        }
         if credentials.is_expired(now_unix_millis()) {
             self.set_connection(
                 ConnectionState::NotAuthenticated,
@@ -283,15 +301,7 @@ impl ClaudeManager {
 
         self.last_request
             .store(now_unix_seconds(), Ordering::Relaxed);
-        let response = self
-            .client
-            .get(USAGE_URL)
-            .bearer_auth(&credentials.access_token)
-            .header("anthropic-beta", OAUTH_BETA_HEADER)
-            .send()
-            .await
-            .map_err(|error| format!("Claude usage request failed: {error}"));
-        let response = match response {
+        let mut response = match self.fetch_usage(&credentials.access_token).await {
             Ok(response) => response,
             Err(message) => {
                 self.set_connection(ConnectionState::Error, Some(message.clone()))
@@ -300,7 +310,23 @@ impl ClaudeManager {
             }
         };
 
-        let status = response.status();
+        let mut status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            if let Some(refreshed) = self
+                .try_cli_refresh(&source.source, allow_keychain_prompt)
+                .await
+            {
+                if refreshed.access_token != credentials.access_token
+                    && !refreshed.is_expired(now_unix_millis())
+                {
+                    if let Ok(retried) = self.fetch_usage(&refreshed.access_token).await {
+                        credentials = refreshed;
+                        status = retried.status();
+                        response = retried;
+                    }
+                }
+            }
+        }
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             self.set_connection(
                 ConnectionState::NotAuthenticated,
@@ -404,6 +430,61 @@ impl ClaudeManager {
     pub async fn update_tray(&self) {
         // Both providers share one menu-bar item; the coordinator reads both.
         tray::refresh_unified_tray(&self.app).await;
+    }
+
+    async fn fetch_usage(&self, access_token: &str) -> Result<reqwest::Response, String> {
+        self.client
+            .get(USAGE_URL)
+            .bearer_auth(access_token)
+            .header("anthropic-beta", OAUTH_BETA_HEADER)
+            .send()
+            .await
+            .map_err(|error| format!("Claude usage request failed: {error}"))
+    }
+
+    /// Runs `claude auth status` silently so Claude Code can refresh an expired
+    /// OAuth session without the user opening a terminal. Rate-limited by a
+    /// cooldown to avoid repeated spawns when signed out.
+    async fn try_cli_refresh(
+        &self,
+        source: &Source,
+        allow_keychain_prompt: bool,
+    ) -> Option<Credentials> {
+        // A pinned selection never refreshes a different external login.
+        if !source.uses_default_cli() {
+            return None;
+        }
+        let now = now_unix_millis() / 1_000;
+        {
+            let mut last = self.last_cli_refresh.lock().await;
+            if let Some(prev) = *last {
+                if now.saturating_sub(prev) < CLI_REFRESH_COOLDOWN_SECS {
+                    return None;
+                }
+            }
+            *last = Some(now);
+        }
+        let claude = which::which("claude").ok()?;
+        let mut command = tokio::process::Command::new(claude);
+        command
+            .args(["auth", "status"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x08000000);
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), command.status())
+            .await
+            .ok()?
+            .ok()?;
+        if !status.success() {
+            return None;
+        }
+        match load_credentials(source, allow_keychain_prompt).await {
+            CredentialRead::Found(creds) => Some(creds),
+            _ => None,
+        }
     }
 }
 

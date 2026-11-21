@@ -47,6 +47,13 @@ pub enum Source {
     Unavailable,
 }
 
+impl Source {
+    /// Only the Automatic choice may start a vendor CLI in the background.
+    pub fn uses_default_cli(&self) -> bool {
+        matches!(self, Self::Default)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ActiveSource {
     pub id: String,
@@ -956,6 +963,10 @@ async fn restart_usagebar(app: &AppHandle) {
         let codex = codex.inner().clone();
         codex.shutdown().await;
     }
+    if let Some(antigravity) = app.try_state::<crate::antigravity::AntigravityManager>() {
+        let antigravity = antigravity.inner().clone();
+        antigravity.shutdown().await;
+    }
     app.request_restart();
 }
 
@@ -1495,5 +1506,21 @@ mod tests {
             .unavailable
             .is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn only_the_automatic_choice_may_start_a_vendor_cli() {
+        assert!(Source::Default.uses_default_cli());
+        for source in [
+            Source::Unavailable,
+            Source::AntigravityApp,
+            Source::ClaudeKeychain,
+            Source::ClaudeFile(PathBuf::from("test")),
+            Source::AntigravityKeychain,
+            Source::Directory(PathBuf::from("test")),
+            Source::DevinDesktop(PathBuf::from("test")),
+        ] {
+            assert!(!source.uses_default_cli());
+        }
     }
 }
