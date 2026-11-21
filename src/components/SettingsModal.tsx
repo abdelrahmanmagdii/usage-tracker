@@ -16,8 +16,14 @@ import {
   type AppPrefs,
   type ProviderId,
 } from "../lib/providers";
-import { deviceName, notificationSettings, trayName } from "../lib/platform";
+import {
+  getNotificationStatus,
+  requestNotificationPermission,
+  type NotificationStatus,
+} from "../lib/notificationDelivery";
+import { deviceName, isWindows, notificationSettings, trayName } from "../lib/platform";
 import { useDialogFocus } from "./useDialogFocus";
+import { AccountSettings } from "./AccountSettings";
 
 type TrayWindow = {
   id: string;
@@ -215,8 +221,23 @@ export function SettingsModal({
   );
   const [autostart, setAutostart] = useState(false);
   const [testResult, setTestResult] = useState<TestNotificationResult | "sending" | null>(null);
+  const [notification, setNotification] = useState<NotificationStatus | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   useDialogFocus(dialogRef);
+
+  const refreshNotification = useCallback(() => {
+    if (!inTauri()) return;
+    void getNotificationStatus().then(setNotification);
+  }, []);
+
+  // The permission lives in System Settings, so re-read it whenever the user
+  // comes back to this window.
+  useEffect(() => {
+    refreshNotification();
+    window.addEventListener("focus", refreshNotification);
+    return () => window.removeEventListener("focus", refreshNotification);
+  }, [refreshNotification]);
 
   useEffect(() => {
     if (!inTauri()) {
@@ -243,8 +264,14 @@ export function SettingsModal({
       // follows a change made from the menu bar.
       void invoke<boolean>("get_autostart").then(setAutostart).catch(() => undefined);
     });
+    // The tray menu can fail to save too; the backend re-broadcasts the
+    // stored prefs (which flips the switch back) and sends this note.
+    const unlistenError = listen<unknown>("usagebar://prefs-error", (event) => {
+      if (typeof event.payload === "string") setSaveError(event.payload);
+    });
     return () => {
       void unlisten.then((off) => off());
+      void unlistenError.then((off) => off());
     };
   }, []);
 
@@ -253,11 +280,15 @@ export function SettingsModal({
   // never keeps showing a choice that was not saved.
   const save = useCallback((command: string, args: Record<string, unknown>) => {
     if (!inTauri()) return;
-    void invoke(command, args).catch(() =>
-      invoke<AppPrefs>("get_app_prefs")
+    setSaveError(null);
+    void invoke(command, args).catch((reason) => {
+      setSaveError(
+        typeof reason === "string" && reason ? reason : "Could not save the change. Your previous setting is still in effect.",
+      );
+      return invoke<AppPrefs>("get_app_prefs")
         .then((stored) => setPrefs(normalizePrefs(stored)))
-        .catch(() => undefined),
-    );
+        .catch(() => undefined);
+    });
   }, []);
 
   const chooseWindow = useCallback((provider: ProviderId, window: string) => {
@@ -290,9 +321,20 @@ export function SettingsModal({
 
   const testMessage: Record<TestNotificationResult | "sending", string> = {
     sending: "Sending…",
-    sent: `Sent. If nothing appeared, check Focus and ${notificationSettings} › UsageBar.`,
+    sent: isWindows
+      ? "Accepted by Windows. Focus Assist can still hide the banner."
+      : "Accepted by macOS. Focus can still hide the banner.",
     denied: `Notifications are off for UsageBar. Turn them on in ${notificationSettings}.`,
+    failed: "The system did not accept the test notification.",
     unavailable: "Couldn't send a notification from this build.",
+  };
+
+  const permissionMessage: Record<NotificationStatus["permission"], string | null> = {
+    granted: "Notifications are allowed for UsageBar.",
+    notDetermined: "Notifications are not enabled yet.",
+    denied: `Notifications are blocked. Turn them on in ${notificationSettings} › UsageBar.`,
+    unavailable: "Notifications are unavailable in this build.",
+    unknown: "This system does not report notification permission.",
   };
 
   const visibleCount = PROVIDER_CATALOG.filter((tool) => isVisible(prefs, tool.id)).length;
@@ -331,6 +373,11 @@ export function SettingsModal({
         </header>
 
         <div className="settings-body">
+          {saveError ? (
+            <p className="setting-hint is-warning" role="alert">
+              {saveError}
+            </p>
+          ) : null}
           <p className="settings-intro">
             Choose which tools to track. Hidden tools stay off the {trayName} and
             are not polled. Each visible meter can follow a specific quota
@@ -358,6 +405,8 @@ export function SettingsModal({
               );
             })}
           </div>
+
+          <AccountSettings />
 
           {PROVIDER_CATALOG.map((tool) =>
             isVisible(prefs, tool.id) ? (
@@ -444,18 +493,44 @@ export function SettingsModal({
               onChange={(next) => setPref("resetAlerts", "set_reset_alerts", next)}
             />
             <div className="test-notification">
+              {notification ? (
+                <p
+                  className={`setting-hint${notification.permission === "denied" ? " is-warning" : ""}`}
+                  role="status"
+                >
+                  {permissionMessage[notification.permission]}
+                </p>
+              ) : null}
+              {notification?.permission === "notDetermined" ? (
+                <button
+                  className="secondary-button"
+                  onClick={() => void requestNotificationPermission().then(setNotification)}
+                >
+                  <BellRing size={13} aria-hidden="true" /> Enable notifications
+                </button>
+              ) : null}
               <button
                 className="secondary-button"
                 disabled={testResult === "sending"}
                 onClick={() => {
                   setTestResult("sending");
-                  void sendTestNotification().then(setTestResult);
+                  void sendTestNotification()
+                    .then(setTestResult)
+                    .finally(refreshNotification);
                 }}
               >
                 <BellRing size={13} aria-hidden="true" /> Send test notification
               </button>
+              {notification?.lastError ? (
+                <p className="setting-hint is-warning" role="status">
+                  Last alert failed: {notification.lastError.message}
+                </p>
+              ) : null}
               {testResult ? (
-                <p className={`setting-hint${testResult === "denied" ? " is-warning" : ""}`} role="status">
+                <p
+                  className={`setting-hint${testResult === "denied" || testResult === "failed" ? " is-warning" : ""}`}
+                  role="status"
+                >
                   {testMessage[testResult]}
                 </p>
               ) : null}

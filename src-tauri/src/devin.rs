@@ -12,9 +12,10 @@ use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::accounts::{self, ActiveSource, Source};
 use crate::codex::process::ConnectionState;
 use crate::provider::{
-    finite_f64, http_client, now_unix_seconds, parse_reset_timestamp, rate_limits_map,
+    finite_f64, http_client_no_redirect, now_unix_seconds, parse_reset_timestamp, rate_limits_map,
     window_snapshot, ProviderState,
 };
 use crate::tray;
@@ -38,7 +39,7 @@ impl DevinManager {
         Self {
             app,
             state: Arc::new(RwLock::new(crate::demo::initial_devin())),
-            client: http_client(),
+            client: http_client_no_redirect(),
             refresh_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -61,14 +62,27 @@ impl DevinManager {
         }
 
         let _guard = self.refresh_lock.lock().await;
-        let auth = match load_cli_auth().await {
+        let source = accounts::active(&self.app, "devin");
+        let desktop = matches!(source.source, Source::DevinDesktop(_));
+        if source.source == Source::Unavailable {
+            self.set_connection(
+                ConnectionState::CliNotFound,
+                Some(
+                    source
+                        .problem
+                        .clone()
+                        .unwrap_or_else(|| "The selected Devin profile is unavailable".into()),
+                ),
+            )
+            .await;
+            return Ok(self.snapshot().await);
+        }
+        let missing_login = missing_login_message(&source, desktop);
+        let auth = match load_auth(&source.source).await {
             CredentialRead::Found(auth) => auth,
             CredentialRead::Absent => {
-                self.set_connection(
-                    ConnectionState::CliNotFound,
-                    Some("No Devin CLI login was found on this computer".into()),
-                )
-                .await;
+                self.set_connection(ConnectionState::CliNotFound, Some(missing_login))
+                    .await;
                 return Ok(self.snapshot().await);
             }
             CredentialRead::Unavailable(message) => {
@@ -77,11 +91,13 @@ impl DevinManager {
                     snapshot.connection,
                     snapshot.updated_at.is_some(),
                 ) {
-                    self.set_connection(
-                        ConnectionState::CliNotFound,
-                        Some("No Devin CLI login was found on this computer".into()),
-                    )
-                    .await;
+                    if source.source != Source::Default {
+                        self.set_connection(ConnectionState::Error, Some(message.clone()))
+                            .await;
+                        return Err(message);
+                    }
+                    self.set_connection(ConnectionState::CliNotFound, Some(missing_login))
+                        .await;
                     return Ok(self.snapshot().await);
                 }
                 self.set_connection(ConnectionState::Error, Some(message.clone()))
@@ -123,10 +139,7 @@ impl DevinManager {
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             self.set_connection(
                 ConnectionState::NotAuthenticated,
-                Some(
-                    "Devin rejected the stored CLI login. Sign in again with `devin auth login`."
-                        .into(),
-                ),
+                Some(rejected_login_message(desktop)),
             )
             .await;
             return Ok(self.snapshot().await);
@@ -155,20 +168,28 @@ impl DevinManager {
             return Err(message);
         };
 
+        let (stable, masked) = devin_identity(&payload, &auth.api_key);
+        let context = accounts::context_from("devin", &source, Some(&stable), masked);
         {
             let mut state = self.state.write().await;
             state.connection = ConnectionState::Connected;
             state.diagnostic = None;
-            state.account = Some(json!({
+            state.account = Some(context.apply(json!({
                 "type": "api",
                 "planType": plan_name(&payload),
-            }));
+            })));
             state.rate_limits = Some(normalized.rate_limits.clone());
             state.updated_at = Some(now_unix_seconds());
         }
         if let Some(alerts) = self.app.try_state::<crate::alerts::UsageAlerts>() {
             alerts
-                .observe(&self.app, "Devin", &normalized.rate_limits)
+                .observe_for(
+                    &self.app,
+                    "Devin",
+                    &source,
+                    &context,
+                    &normalized.rate_limits,
+                )
                 .await;
         }
         self.emit_state().await;
@@ -206,8 +227,26 @@ enum CredentialRead {
     Unavailable(String),
 }
 
-async fn load_cli_auth() -> CredentialRead {
-    let Some(path) = credentials_path() else {
+async fn load_auth(source: &Source) -> CredentialRead {
+    match source {
+        Source::DevinDesktop(root) => {
+            let path = accounts::marker_path(root, DESKTOP_DB);
+            match tokio::task::spawn_blocking(move || read_desktop_auth(&path)).await {
+                Ok(read) => read,
+                Err(error) => CredentialRead::Unavailable(format!(
+                    "Devin Desktop login lookup was cancelled: {error}"
+                )),
+            }
+        }
+        Source::Directory(root) => {
+            load_cli_auth(Some(accounts::marker_path(root, "credentials.toml"))).await
+        }
+        _ => load_cli_auth(credentials_path()).await,
+    }
+}
+
+async fn load_cli_auth(path: Option<std::path::PathBuf>) -> CredentialRead {
+    let Some(path) = path else {
         return CredentialRead::Unavailable(
             "The home directory is unavailable, so Devin CLI credentials could not be located"
                 .to_owned(),
@@ -226,6 +265,110 @@ async fn load_cli_auth() -> CredentialRead {
             CredentialRead::Unavailable(format!("Could not read {}: {error}", path.display()))
         }
     }
+}
+
+fn missing_login_message(source: &ActiveSource, desktop: bool) -> String {
+    match (&source.source, desktop) {
+        (Source::Default, _) => "No Devin CLI login was found on this computer".to_owned(),
+        (_, true) => format!(
+            "Devin Desktop is not signed in for “{}”. Sign in from the Devin app, then Retry.",
+            source.label
+        ),
+        _ => format!("No Devin CLI login was found for “{}”.", source.label),
+    }
+}
+
+fn rejected_login_message(desktop: bool) -> String {
+    if desktop {
+        "Devin rejected the Desktop login. Sign in again from the Devin app, then Retry.".into()
+    } else {
+        "Devin rejected the stored CLI login. Sign in again with `devin auth login`.".into()
+    }
+}
+
+/// Devin Desktop keeps its sign-in as JSON under `windsurfAuthStatus` in the
+/// editor's `state.vscdb`. Only the key and server are pulled out, in SQLite,
+/// so the JSON never reaches this process whole.
+const DESKTOP_DB: &str = "User/globalStorage/state.vscdb";
+const DESKTOP_STATUS_BYTES: i64 = 8 * 1024 * 1024;
+const DESKTOP_QUERY: &str = "SELECT json_extract(CAST(value AS TEXT),'$.apiKey'), json_extract(CAST(value AS TEXT),'$.apiServerUrl') FROM ItemTable WHERE key='windsurfAuthStatus' AND length(value)<=?1";
+
+fn read_desktop_auth(path: &std::path::Path) -> CredentialRead {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return CredentialRead::Absent,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return CredentialRead::Absent
+        }
+        Err(error) => {
+            return CredentialRead::Unavailable(format!(
+                "Could not read the Devin Desktop login database: {error}"
+            ))
+        }
+    }
+    // Plain read-only locking only, so the WAL (where a switch or sign-out
+    // lands) is always seen. A database that cannot be read is reported, never
+    // answered from an older checkpoint.
+    match query_desktop_auth(path) {
+        Ok(read) => read,
+        Err(reason) => CredentialRead::Unavailable(reason),
+    }
+}
+
+fn query_desktop_auth(path: &std::path::Path) -> Result<CredentialRead, String> {
+    let conn = crate::cursor::open_login_db(path)
+        .map_err(|error| format!("Devin Desktop's login database could not be opened ({error})"))?;
+    let row: Result<(Option<String>, Option<String>), rusqlite::Error> =
+        conn.query_row(DESKTOP_QUERY, [DESKTOP_STATUS_BYTES], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        });
+    match row {
+        Ok((key, server)) => Ok(desktop_auth(key, server)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(CredentialRead::Absent),
+        Err(_) => Err("Devin Desktop's login record could not be read".to_owned()),
+    }
+}
+
+/// A key without a plain HTTPS server is refused rather than sent anywhere:
+/// the CLI's host is never borrowed for a Desktop key.
+fn desktop_auth(key: Option<String>, server: Option<String>) -> CredentialRead {
+    let Some(api_key) = key.and_then(non_empty) else {
+        return CredentialRead::Absent;
+    };
+    match server.and_then(clean_api_server_url) {
+        Some(api_server_url) => CredentialRead::Found(CliAuth {
+            api_key,
+            api_server_url,
+        }),
+        None => CredentialRead::Unavailable(
+            "Devin Desktop's server address is missing or not a plain HTTPS address".to_owned(),
+        ),
+    }
+}
+
+/// A stable id from the status the key just authorized: user id (with team),
+/// else email, else a digest of the credential that made the request.
+fn devin_identity(payload: &Value, api_key: &str) -> (String, Option<String>) {
+    let status = field(payload, &["userStatus", "user_status"]).unwrap_or(payload);
+    let text = |names: &[&str]| {
+        field(status, names)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && value.len() <= 320)
+    };
+    let user = text(&["userId", "user_id"]);
+    let team = text(&["teamId", "team_id"]);
+    let email = text(&["email"]);
+    let stable = match (user, email) {
+        (Some(user), _) => format!("user:{user}|team:{}", team.unwrap_or_default()),
+        (None, Some(email)) => format!(
+            "email:{}|team:{}",
+            email.to_ascii_lowercase(),
+            team.unwrap_or_default()
+        ),
+        (None, None) => accounts::credential_stable(api_key),
+    };
+    (stable, email.and_then(accounts::mask_email))
 }
 
 fn credentials_path() -> Option<std::path::PathBuf> {
@@ -759,5 +902,232 @@ mod tests {
     fn empty_payload_is_rejected() {
         assert!(normalize_usage(&json!({})).is_none());
         assert!(normalize_usage(&json!({ "userStatus": { "planStatus": {} } })).is_none());
+    }
+
+    fn desktop_db() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let storage = dir.path().join("User/globalStorage");
+        std::fs::create_dir_all(&storage).expect("storage dir");
+        let path = storage.join("state.vscdb");
+        (dir, path)
+    }
+
+    fn seeded(
+        _name: &str,
+        value: &str,
+        as_blob: bool,
+    ) -> (tempfile::TempDir, std::path::PathBuf, rusqlite::Connection) {
+        let (dir, path) = desktop_db();
+        let conn = rusqlite::Connection::open(&path).expect("open");
+        conn.execute_batch(
+            "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);",
+        )
+        .expect("schema");
+        if as_blob {
+            conn.execute(
+                "INSERT INTO ItemTable VALUES ('windsurfAuthStatus', ?1)",
+                [value.as_bytes()],
+            )
+            .expect("blob");
+        } else {
+            conn.execute(
+                "INSERT INTO ItemTable VALUES ('windsurfAuthStatus', ?1)",
+                [value],
+            )
+            .expect("text");
+        }
+        (dir, path, conn)
+    }
+
+    const STATUS: &str =
+        r#"{"apiKey":"cog_desktop","apiServerUrl":"https://server.codeium.com","name":"x"}"#;
+
+    #[test]
+    fn desktop_login_is_read_from_text_and_blob_records() {
+        for as_blob in [false, true] {
+            let (_dir, path, conn) = seeded(if as_blob { "blob" } else { "text" }, STATUS, as_blob);
+            drop(conn);
+            match read_desktop_auth(&path) {
+                CredentialRead::Found(auth) => {
+                    assert_eq!(auth.api_key, "cog_desktop");
+                    assert_eq!(auth.api_server_url, "https://server.codeium.com");
+                }
+                _ => panic!("login not found (blob: {as_blob})"),
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_login_sees_a_sign_in_still_in_the_wal() {
+        let (_dir, path, conn) = seeded(
+            "wal",
+            r#"{"apiKey":"old","apiServerUrl":"https://a.example"}"#,
+            false,
+        );
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+            .expect("wal");
+        conn.execute(
+            "INSERT INTO ItemTable VALUES ('windsurfAuthStatus', ?1)",
+            [r#"{"apiKey":"new","apiServerUrl":"https://b.example"}"#],
+        )
+        .expect("update");
+        match read_desktop_auth(&path) {
+            CredentialRead::Found(auth) => assert_eq!(auth.api_key, "new"),
+            _ => panic!("login not found"),
+        }
+        drop(conn);
+    }
+
+    #[test]
+    fn desktop_without_a_row_or_a_key_is_signed_out_and_a_missing_file_is_absent() {
+        let (_dir, path, conn) = seeded("norow", "{}", false);
+        conn.execute("DELETE FROM ItemTable", []).expect("delete");
+        drop(conn);
+        assert!(matches!(read_desktop_auth(&path), CredentialRead::Absent));
+        let (_dir, path, conn) = seeded("nokey", r#"{"apiServerUrl":"https://a.example"}"#, false);
+        drop(conn);
+        assert!(matches!(read_desktop_auth(&path), CredentialRead::Absent));
+        let (_dir, path, conn) = seeded(
+            "emptykey",
+            r#"{"apiKey":"  ","apiServerUrl":"https://a.example"}"#,
+            false,
+        );
+        drop(conn);
+        assert!(matches!(read_desktop_auth(&path), CredentialRead::Absent));
+        assert!(matches!(
+            read_desktop_auth(&path.with_file_name("missing.vscdb")),
+            CredentialRead::Absent
+        ));
+    }
+
+    #[test]
+    fn desktop_login_needs_a_plain_https_server_and_never_borrows_another() {
+        for server in [
+            r#"{"apiKey":"k"}"#,
+            r#"{"apiKey":"k","apiServerUrl":"http://server.codeium.com"}"#,
+            r#"{"apiKey":"k","apiServerUrl":"https://u:p@server.codeium.com"}"#,
+            r#"{"apiKey":"k","apiServerUrl":""}"#,
+        ] {
+            let (_dir, path, conn) = seeded("origin", server, false);
+            drop(conn);
+            assert!(
+                matches!(read_desktop_auth(&path), CredentialRead::Unavailable(_)),
+                "{server}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_or_oversized_desktop_record_is_not_a_login() {
+        let (_dir, path, conn) = seeded("bad", "{ not json", false);
+        drop(conn);
+        assert!(matches!(
+            read_desktop_auth(&path),
+            CredentialRead::Unavailable(_)
+        ));
+        let huge = format!(
+            r#"{{"apiKey":"k","apiServerUrl":"https://a.example","pad":"{}"}}"#,
+            "x".repeat(9 * 1024 * 1024)
+        );
+        let (_dir, path, conn) = seeded("huge", &huge, false);
+        drop(conn);
+        assert!(matches!(read_desktop_auth(&path), CredentialRead::Absent));
+    }
+
+    #[test]
+    fn cli_and_desktop_credentials_are_separate() {
+        let cli_dir = tempfile::tempdir().unwrap();
+        let dir = cli_dir.path().to_path_buf();
+        std::fs::write(
+            dir.join("credentials.toml"),
+            "windsurf_api_key = \"cli_key\"\napi_server_url = \"https://cli.example\"\n",
+        )
+        .unwrap();
+        let (_desktop_dir, desktop_path, conn) = seeded("split", STATUS, false);
+        drop(conn);
+        let cli = tauri::async_runtime::block_on(load_auth(&Source::Directory(dir.clone())));
+        let desktop = tauri::async_runtime::block_on(load_auth(&Source::DevinDesktop(
+            desktop_path.ancestors().nth(3).unwrap().to_path_buf(),
+        )));
+        assert!(matches!(&cli, CredentialRead::Found(auth) if auth.api_key == "cli_key"));
+        assert!(matches!(&desktop, CredentialRead::Found(auth) if auth.api_key == "cog_desktop"));
+        // A Desktop root with no database is signed out; it never falls back
+        // to a CLI file.
+        let empty = tauri::async_runtime::block_on(load_auth(&Source::DevinDesktop(dir.clone())));
+        assert!(matches!(empty, CredentialRead::Absent));
+    }
+
+    #[test]
+    fn identity_prefers_user_id_then_email_then_the_credential() {
+        let with_user = json!({ "userStatus": { "userId": "u-1", "teamId": "t-1", "email": "Alice@Example.com" } });
+        let (stable, masked) = devin_identity(&with_user, "key-a");
+        assert_eq!(stable, "user:u-1|team:t-1");
+        assert_eq!(masked.as_deref(), Some("A***@Example.com"));
+        let snake = json!({ "userStatus": { "user_id": "u-1", "team_id": "t-1" } });
+        assert_eq!(devin_identity(&snake, "key-b").0, stable);
+        let email_only = json!({ "userStatus": { "email": "Bob@Example.com" } });
+        assert_eq!(
+            devin_identity(&email_only, "k").0,
+            "email:bob@example.com|team:"
+        );
+        let email_team = json!({ "userStatus": { "email": "Bob@Example.com", "teamId": "t-2" } });
+        assert_eq!(
+            devin_identity(&email_team, "k").0,
+            "email:bob@example.com|team:t-2"
+        );
+        // The outer wrapper may be snake_case, as normalize_usage allows.
+        let outer = json!({ "user_status": { "user_id": "u-1", "team_id": "t-1" } });
+        assert_eq!(devin_identity(&outer, "key-c").0, stable);
+        let bare = json!({ "userId": "u-1", "teamId": "t-1" });
+        assert_eq!(devin_identity(&bare, "key-d").0, stable);
+        let (anonymous, none) = devin_identity(&json!({}), "key-a");
+        assert!(anonymous.starts_with("cred:") && !anonymous.contains("key-a"));
+        assert!(none.is_none());
+        assert_ne!(anonymous, devin_identity(&json!({}), "key-b").0);
+    }
+
+    #[test]
+    fn signout_help_is_specific_to_the_source() {
+        assert!(rejected_login_message(true).contains("Devin app"));
+        assert!(!rejected_login_message(true).contains("devin auth login"));
+        assert!(rejected_login_message(false).contains("devin auth login"));
+        let desktop = ActiveSource {
+            id: "devin-desktop".into(),
+            label: "Devin Desktop".into(),
+            source: Source::DevinDesktop(std::path::PathBuf::from("/tmp/x")),
+            problem: None,
+        };
+        let message = missing_login_message(&desktop, true);
+        assert!(message.contains("Devin app") && !message.contains("devin auth login"));
+    }
+
+    #[test]
+    fn desktop_login_never_resurrects_a_login_the_wal_replaced() {
+        let (_dir, path, conn) = seeded("walreplace", STATUS, false);
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE);")
+            .expect("checkpoint A");
+        // Signed out, then switched to a malformed record, all in the WAL.
+        conn.execute("DELETE FROM ItemTable", []).expect("sign out");
+        assert!(matches!(read_desktop_auth(&path), CredentialRead::Absent));
+        conn.execute(
+            "INSERT INTO ItemTable VALUES ('windsurfAuthStatus', '{ bad')",
+            [],
+        )
+        .expect("malformed");
+        assert!(matches!(
+            read_desktop_auth(&path),
+            CredentialRead::Unavailable(_)
+        ));
+        drop(conn);
+    }
+
+    #[test]
+    fn an_unreadable_desktop_database_is_unavailable_not_signed_out() {
+        let (_dir, path) = desktop_db();
+        std::fs::write(&path, vec![9_u8; 4096]).expect("garbage");
+        assert!(matches!(
+            read_desktop_auth(&path),
+            CredentialRead::Unavailable(_)
+        ));
     }
 }

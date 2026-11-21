@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   currentWindowSamples,
+  historyLimitId,
   historySeries,
   inSameWindow,
   isPossibleSurpriseReset,
@@ -157,5 +158,63 @@ describe("currentWindowSamples", () => {
       "2026-08-12T22:00:00Z",
     ]);
     expect(inSameWindow(samples[0], undefined)).toBe(false);
+  });
+});
+
+describe("account-scoped history", () => {
+  const bucket = {
+    id: "session:primary",
+    limitId: "session",
+    windowKind: "primary" as const,
+    usedPercent: 90,
+    remainingPercent: 10,
+    windowDurationMins: 300,
+    resetsAt: 2_000_000_000,
+    reached: false,
+  };
+
+  function memoryStorage() {
+    const store = new Map<string, string>();
+    return {
+      store,
+      getItem: vi.fn((key: string) => store.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => void store.set(key, value)),
+    };
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keys a scoped series so it cannot collide with an older unscoped one", () => {
+    expect(historyLimitId("codex", "primary")).toBe("codex:primary");
+    const scoped = historyLimitId("codex", "primary", "abc");
+    expect(scoped).toBe(JSON.stringify(["codex", "abc", "primary"]));
+    expect(scoped).not.toBe("codex:abc:primary");
+    // A bucket id that mimics a scope cannot reach into another series.
+    expect(historyLimitId("codex", "x", "a:b")).not.toBe(historyLimitId("codex", "a:b:x", "x"));
+  });
+
+  it("keeps account A and account B apart, and never lends unscoped history to either", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    observeBuckets("claude", [bucket], "scope-a");
+    observeBuckets("claude", [{ ...bucket, usedPercent: 5, remainingPercent: 95 }], "scope-b");
+    expect(historySeries("claude", "session:primary", "scope-a").map((s) => s.usedPercent)).toEqual([90]);
+    expect(historySeries("claude", "session:primary", "scope-b").map((s) => s.usedPercent)).toEqual([5]);
+    expect(historySeries("claude", "session:primary")).toEqual([]);
+    // Going from A's 90% to B's 5% is two accounts, not a surprise reset.
+    expect(JSON.parse(localStorage.getItem("codex-meter.detected-events.v1") ?? "[]")).toEqual([]);
+  });
+
+  it("tags a local detection with its provider, window and account", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    observeBuckets("devin", [bucket], "scope-a");
+    const events = observeBuckets(
+      "devin",
+      [{ ...bucket, usedPercent: 5, remainingPercent: 95 }],
+      "scope-a",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ source: "detected", provider: "devin", scopeId: "scope-a", windowLabel: "5-hour" });
+    expect(events[0].id).toContain("devin");
+    expect(events[0].id).toContain("scope-a");
   });
 });

@@ -62,4 +62,8 @@ export type ResetEvent = {
   text?: string;
   plansAffected?: string[];
   sample?: boolean;
+  /** Locally detected resets: the provider, window and account they came from. */
+  provider?: string;
+  windowLabel?: string;
+  scopeId?: string;
 };

@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::accounts::{self, Source};
 use crate::codex::process::ConnectionState;
 use crate::provider::{
     finite_f64, http_client, now_unix_seconds, parse_reset_timestamp, rate_limits_map,
@@ -61,14 +62,29 @@ impl OpenCodeManager {
         }
 
         let _guard = self.refresh_lock.lock().await;
-        let key = match load_go_key().await {
+        let source = accounts::active(&self.app, "opencode");
+        if source.source == Source::Unavailable {
+            self.set_connection(
+                ConnectionState::CliNotFound,
+                Some(
+                    source
+                        .problem
+                        .clone()
+                        .unwrap_or_else(|| "The selected OpenCode profile is unavailable".into()),
+                ),
+            )
+            .await;
+            return Ok(self.snapshot().await);
+        }
+        let missing_login = match source.source {
+            Source::Default => "No OpenCode Go login was found on this computer".to_owned(),
+            _ => format!("No OpenCode Go login was found for “{}”.", source.label),
+        };
+        let key = match load_go_key(&source.source).await {
             CredentialRead::Found(key) => key,
             CredentialRead::Absent => {
-                self.set_connection(
-                    ConnectionState::CliNotFound,
-                    Some("No OpenCode Go login was found on this computer".into()),
-                )
-                .await;
+                self.set_connection(ConnectionState::CliNotFound, Some(missing_login))
+                    .await;
                 return Ok(self.snapshot().await);
             }
             CredentialRead::Unavailable(message) => {
@@ -77,11 +93,8 @@ impl OpenCodeManager {
                     snapshot.connection,
                     snapshot.updated_at.is_some(),
                 ) {
-                    self.set_connection(
-                        ConnectionState::CliNotFound,
-                        Some("No OpenCode Go login was found on this computer".into()),
-                    )
-                    .await;
+                    self.set_connection(ConnectionState::CliNotFound, Some(missing_login))
+                        .await;
                     return Ok(self.snapshot().await);
                 }
                 self.set_connection(ConnectionState::Error, Some(message.clone()))
@@ -147,16 +160,24 @@ impl OpenCodeManager {
             return Err(message);
         };
 
+        let context = accounts::context_from(
+            "opencode",
+            &source,
+            Some(&accounts::credential_stable(&key)),
+            None,
+        );
         {
             let mut state = self.state.write().await;
             state.connection = ConnectionState::Connected;
             state.diagnostic = None;
-            state.account = Some(json!({ "type": "api", "planType": "go" }));
+            state.account = Some(context.apply(json!({ "type": "api", "planType": "go" })));
             state.rate_limits = Some(rate_limits.clone());
             state.updated_at = Some(now_unix_seconds());
         }
         if let Some(alerts) = self.app.try_state::<crate::alerts::UsageAlerts>() {
-            alerts.observe(&self.app, "OpenCode Go", &rate_limits).await;
+            alerts
+                .observe_for(&self.app, "OpenCode Go", &source, &context, &rate_limits)
+                .await;
         }
         self.emit_state().await;
         Ok(self.snapshot().await)
@@ -188,8 +209,12 @@ enum CredentialRead {
     Unavailable(String),
 }
 
-async fn load_go_key() -> CredentialRead {
-    let Some(path) = auth_json_path() else {
+async fn load_go_key(source: &Source) -> CredentialRead {
+    let path = match source {
+        Source::Directory(root) => Some(accounts::marker_path(root, "auth.json")),
+        _ => auth_json_path(),
+    };
+    let Some(path) = path else {
         return CredentialRead::Unavailable(
             "The home directory is unavailable, so OpenCode's auth.json could not be located"
                 .to_owned(),
@@ -417,5 +442,26 @@ mod tests {
     fn empty_payload_is_rejected() {
         assert!(normalize_usage(&json!({})).is_none());
         assert!(normalize_usage(&json!({ "usage": {} })).is_none());
+    }
+
+    #[test]
+    fn a_custom_profile_reads_its_own_auth_json_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let source = Source::Directory(root.clone());
+        assert!(matches!(
+            tauri::async_runtime::block_on(load_go_key(&source)),
+            CredentialRead::Absent
+        ));
+        std::fs::write(
+            root.join("auth.json"),
+            r#"{"opencode-go":{"type":"api","key":"go-key"},"opencode":{"type":"api","key":"zen-key"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            tauri::async_runtime::block_on(load_go_key(&source)),
+            CredentialRead::Found(key) if key == "go-key"
+        ));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

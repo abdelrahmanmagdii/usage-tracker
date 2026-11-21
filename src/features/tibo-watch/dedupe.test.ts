@@ -2,12 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResetEvent } from "../../types/codex";
 
-const plugin = vi.hoisted(() => ({
-  isPermissionGranted: vi.fn(),
-  requestPermission: vi.fn(),
-  sendNotification: vi.fn(),
+const delivery = vi.hoisted(() => ({
+  getNotificationStatus: vi.fn(),
+  postUsageNotification: vi.fn(),
 }));
-vi.mock("@tauri-apps/plugin-notification", () => plugin);
+vi.mock("../../lib/notificationDelivery", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/notificationDelivery")>()),
+  ...delivery,
+}));
+const granted = { permission: "granted", lastError: null };
 
 import {
   announcedKey,
@@ -85,8 +88,8 @@ describe("notifyFreshResets", () => {
   beforeEach(() => {
     localStorage.clear();
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
-    plugin.sendNotification.mockResolvedValue(undefined);
-    plugin.requestPermission.mockResolvedValue("granted");
+    delivery.postUsageNotification.mockResolvedValue(undefined);
+    delivery.getNotificationStatus.mockResolvedValue(granted);
   });
 
   afterEach(() => {
@@ -95,36 +98,35 @@ describe("notifyFreshResets", () => {
   });
 
   it("does not send one announcement twice when called again mid-delivery", async () => {
-    // The first call waits on the permission check (in the app, often a
-    // system prompt) while a feed poll or pref change calls again.
-    let grant: (value: boolean) => void = () => undefined;
-    plugin.isPermissionGranted
-      .mockImplementationOnce(() => new Promise<boolean>((resolve) => (grant = resolve)))
-      .mockResolvedValue(true);
+    // The first call waits on the status read while a feed poll or pref
+    // change calls again.
+    let answer: (value: typeof granted) => void = () => undefined;
+    delivery.getNotificationStatus
+      .mockImplementationOnce(() => new Promise<typeof granted>((resolve) => (answer = resolve)))
+      .mockResolvedValue(granted);
     const events = [event({ id: "tibo-1" })];
 
     const first = notifyFreshResets(events, now);
     const second = notifyFreshResets([...events], now);
-    await vi.waitFor(() => expect(plugin.isPermissionGranted).toHaveBeenCalled());
-    grant(true);
+    await vi.waitFor(() => expect(delivery.getNotificationStatus).toHaveBeenCalled());
+    answer(granted);
     await Promise.all([first, second]);
 
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    expect(delivery.postUsageNotification).toHaveBeenCalledOnce();
   });
 
   it("still delivers a later batch after an earlier one failed", async () => {
-    plugin.isPermissionGranted.mockRejectedValueOnce(new Error("bridge down")).mockResolvedValue(true);
+    delivery.getNotificationStatus.mockRejectedValueOnce(new Error("bridge down"));
     await notifyFreshResets([event({ id: "tibo-1" })], now);
-    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    expect(delivery.postUsageNotification).not.toHaveBeenCalled();
     await notifyFreshResets([event({ id: "tibo-1" })], now);
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    expect(delivery.postUsageNotification).toHaveBeenCalledOnce();
   });
 
   it("remembers deliveries across restarts", async () => {
-    plugin.isPermissionGranted.mockResolvedValue(true);
     await notifyFreshResets([event({ id: "tibo-1" })], now);
     // A relaunch reads the delivered ids back from storage.
     await notifyFreshResets([event({ id: "tibo-1" })], now + 60_000);
-    expect(plugin.sendNotification).toHaveBeenCalledOnce();
+    expect(delivery.postUsageNotification).toHaveBeenCalledOnce();
   });
 });

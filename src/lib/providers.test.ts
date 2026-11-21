@@ -59,6 +59,17 @@ describe("missingProviders", () => {
   });
 });
 
+describe("missingProviders with a backend note", () => {
+  it("leads with the selected source's own diagnostic and keeps the setup step", () => {
+    const missing = missingProviders(DEFAULT_PREFS, {
+      devin: { connection: "cli_not_found", diagnostic: "Devin Desktop is not signed in for “Devin Desktop”" },
+    });
+    const devin = missing.find((item) => item.id === "devin");
+    expect(devin?.detail.startsWith("Devin Desktop is not signed in for “Devin Desktop”. ")).toBe(true);
+    expect(devin?.detail).toContain("Settings › Accounts");
+  });
+});
+
 describe("PROVIDER_CATALOG", () => {
   it("lists every provider once, in display order", () => {
     expect(PROVIDER_CATALOG.map((provider) => provider.id)).toEqual([...PROVIDER_IDS]);

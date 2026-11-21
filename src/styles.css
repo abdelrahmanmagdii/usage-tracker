@@ -528,6 +528,17 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); o
   letter-spacing: .06em;
   text-transform: capitalize;
 }
+.account-chip {
+  margin-left: 6px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font: 500 9.5px/14px var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+}
 .provider-quota-list { padding-top: 9px; }
 .provider-quota-list .quota-section { --tone: var(--provider-accent); }
 .provider-quota-list .quota-section.tone-warning { --tone: var(--warning); }
@@ -649,3 +660,23 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); o
 .test-notification { margin: 4px 0 6px; }
 .test-notification .secondary-button { display: inline-flex; align-items: center; gap: 6px; }
 .setting-hint.is-warning { color: color-mix(in srgb, var(--warning) var(--tone-ink), var(--text)); }
+
+/* ── Settings › Accounts ── */
+.accounts-panel { display: flex; flex-direction: column; gap: 8px; }
+.accounts-panel .setting-hint { margin: 0 2px; }
+.account-field { display: flex; flex-direction: column; gap: 4px; color: var(--text-tertiary); font-size: 10.5px; }
+.account-field select, .account-field input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 11px;
+  background: var(--control);
+  color: var(--text);
+  font: 500 12px/1.2 var(--font-ui);
+}
+.account-field select:hover, .account-field input:hover { background: var(--control-hover); }
+.account-field select:focus-visible, .account-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.account-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.account-actions .primary-button { flex: 1 1 100%; min-width: 0; }
+.account-actions .secondary-button, .accounts-panel > .secondary-button { min-width: 0; }

@@ -27,6 +27,7 @@ use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::accounts::{self, ActiveSource, Source};
 use crate::codex::process::ConnectionState;
 use crate::provider::{parse_reset_timestamp, window_snapshot};
 use crate::tray::{self};
@@ -123,7 +124,7 @@ impl ClaudeManager {
         {
             return false;
         }
-        let Some(projects) = claude_config_dir().map(|dir| dir.join("projects")) else {
+        let Some(projects) = projects_dir(&accounts::active(&self.app, "claude").source) else {
             return false;
         };
         let activity = self.activity.clone();
@@ -158,7 +159,8 @@ impl ClaudeManager {
         if crate::demo::enabled() {
             return false;
         }
-        let Ok(stamp) = tokio::task::spawn_blocking(login_stamp).await else {
+        let source = accounts::active(&self.app, "claude").source;
+        let Ok(stamp) = tokio::task::spawn_blocking(move || login_stamp(&source)).await else {
             return false;
         };
         let mut last = self.login_stamp.lock().await;
@@ -198,6 +200,21 @@ impl ClaudeManager {
             return Ok(self.snapshot().await);
         }
         let _guard = self.refresh_lock.lock().await;
+        let source = accounts::active(&self.app, "claude");
+        if source.source == Source::Unavailable {
+            self.set_connection(
+                ConnectionState::CliNotFound,
+                Some(
+                    source
+                        .problem
+                        .clone()
+                        .unwrap_or_else(|| "The selected Claude profile is unavailable".into()),
+                ),
+            )
+            .await;
+            return Ok(self.snapshot().await);
+        }
+        let missing_login = missing_login_message(&source);
         // Checked under the lock: a watchdog refresh that just finished makes
         // a queued popover-open refresh redundant.
         if let Some(max_age) = max_age_secs {
@@ -216,7 +233,7 @@ impl ClaudeManager {
         if now_unix_seconds() < self.rate_limited_until.load(Ordering::Relaxed) {
             return Ok(self.snapshot().await);
         }
-        let credentials = match load_credentials(allow_keychain_prompt).await {
+        let credentials = match load_credentials(&source.source, allow_keychain_prompt).await {
             CredentialRead::Found(credentials) => {
                 self.absent_reads.store(0, Ordering::Relaxed);
                 credentials
@@ -225,11 +242,8 @@ impl ClaudeManager {
                 let reads = self.absent_reads.fetch_add(1, Ordering::Relaxed) + 1;
                 let has_shown_usage = self.snapshot().await.updated_at.is_some();
                 if hides_tray(has_shown_usage, reads) {
-                    self.set_connection(
-                        ConnectionState::CliNotFound,
-                        Some("No Claude Code login was found on this computer".into()),
-                    )
-                    .await;
+                    self.set_connection(ConnectionState::CliNotFound, Some(missing_login.clone()))
+                        .await;
                     return Ok(self.snapshot().await);
                 }
                 // Claude Code rewrites its keychain item and credentials file
@@ -244,11 +258,8 @@ impl ClaudeManager {
                     snapshot.connection,
                     snapshot.updated_at.is_some(),
                 ) {
-                    self.set_connection(
-                        ConnectionState::CliNotFound,
-                        Some("No Claude Code login was found on this computer".into()),
-                    )
-                    .await;
+                    self.set_connection(ConnectionState::CliNotFound, Some(missing_login.clone()))
+                        .await;
                     return Ok(self.snapshot().await);
                 }
                 // A store that could not be read proves nothing about whether
@@ -330,14 +341,20 @@ impl ClaudeManager {
         };
 
         let rate_limits = normalize_usage(&payload);
+        let context = accounts::context_from(
+            "claude",
+            &source,
+            Some(&accounts::credential_stable(&credentials.access_token)),
+            None,
+        );
         {
             let mut state = self.state.write().await;
             state.connection = ConnectionState::Connected;
             state.diagnostic = None;
-            state.account = Some(json!({
+            state.account = Some(context.apply(json!({
                 "type": "oauth",
                 "planType": credentials.subscription_type.clone()
-            }));
+            })));
             state.rate_limits = Some(rate_limits.clone());
             state.updated_at = Some(now_unix_millis() / 1_000);
             #[cfg(debug_assertions)]
@@ -353,7 +370,9 @@ impl ClaudeManager {
             );
         }
         if let Some(alerts) = self.app.try_state::<crate::alerts::UsageAlerts>() {
-            alerts.observe(&self.app, "Claude Code", &rate_limits).await;
+            alerts
+                .observe_for(&self.app, "Claude Code", &source, &context, &rate_limits)
+                .await;
         }
         self.emit_state().await;
         Ok(self.snapshot().await)
@@ -417,10 +436,44 @@ enum CredentialRead {
 /// credentials file and Keychain are both consulted; a fresh token in either
 /// store wins. Background refreshes never show a Keychain sheet. A user Retry
 /// may prompt once if the file is stale and Always Allow has not been granted.
-async fn load_credentials(allow_keychain_prompt: bool) -> CredentialRead {
-    let file = load_from_file().await;
-    let keychain = load_from_keychain(allow_keychain_prompt).await;
-    combine_reads(keychain, file, now_unix_millis())
+async fn load_credentials(source: &Source, allow_keychain_prompt: bool) -> CredentialRead {
+    match source {
+        Source::ClaudeKeychain => load_from_keychain(allow_keychain_prompt).await,
+        Source::ClaudeFile(path) => load_from_file(path).await,
+        Source::Default => {
+            let file = match default_credentials_file() {
+                Some(path) => load_from_file(&path).await,
+                None => CredentialRead::Unavailable(
+                    "The home directory is unavailable, so the Claude Code credentials file could not be located".to_owned(),
+                ),
+            };
+            let keychain = load_from_keychain(allow_keychain_prompt).await;
+            combine_reads(keychain, file, now_unix_millis())
+        }
+        _ => CredentialRead::Absent,
+    }
+}
+
+fn missing_login_message(source: &ActiveSource) -> String {
+    match source.source {
+        Source::Default => "No Claude Code login was found on this computer".to_owned(),
+        _ => format!(
+            "No Claude Code login was found for “{}”. Switch profile or sign in there.",
+            source.label
+        ),
+    }
+}
+
+/// Where this selection's Claude Code transcripts live. A pinned profile
+/// folder is its own config root; the others follow the default root.
+fn projects_dir(source: &Source) -> Option<std::path::PathBuf> {
+    match source {
+        Source::ClaudeFile(path) if Some(path) != default_credentials_file().as_ref() => {
+            path.parent().map(|root| root.join("projects"))
+        }
+        Source::Unavailable => None,
+        _ => claude_config_dir().map(|dir| dir.join("projects")),
+    }
 }
 
 /// Merges the two stores. A usable login from either one wins; failing that, a
@@ -570,14 +623,23 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
 /// A stamp that changes whenever Claude Code rewrites its login: the Keychain
 /// item's modification date plus the credentials file's mtime. Neither read
 /// touches the secret, so it never shows a sheet.
-fn login_stamp() -> String {
-    let file = credentials_file_path()
+fn login_stamp(source: &Source) -> String {
+    let file_path = match source {
+        Source::ClaudeFile(path) => Some(path.clone()),
+        Source::ClaudeKeychain | Source::Unavailable => None,
+        _ => default_credentials_file(),
+    };
+    let file = file_path
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|age| age.as_millis().to_string())
         .unwrap_or_default();
-    format!("{}|{file}", keychain_item_stamp())
+    let keychain = match source {
+        Source::Default | Source::ClaudeKeychain => keychain_item_stamp(),
+        _ => String::new(),
+    };
+    format!("{keychain}|{file}")
 }
 
 #[cfg(target_os = "macos")]
@@ -659,7 +721,7 @@ fn claude_config_dir() -> Option<std::path::PathBuf> {
     Some(crate::platform::home_dir()?.join(".claude"))
 }
 
-fn credentials_file_path() -> Option<std::path::PathBuf> {
+pub(crate) fn default_credentials_file() -> Option<std::path::PathBuf> {
     Some(claude_config_dir()?.join(".credentials.json"))
 }
 
@@ -792,13 +854,8 @@ pub fn refresh_on_open(app: &AppHandle) {
     });
 }
 
-async fn load_from_file() -> CredentialRead {
-    let Some(path) = credentials_file_path() else {
-        return CredentialRead::Unavailable(
-            "The home directory is unavailable, so the Claude Code credentials file could not be located".to_owned(),
-        );
-    };
-    match tokio::fs::read_to_string(&path).await {
+async fn load_from_file(path: &std::path::Path) -> CredentialRead {
+    match tokio::fs::read_to_string(path).await {
         Ok(contents) => match parse_credentials(&contents) {
             Some(credentials) => CredentialRead::Found(credentials),
             None => CredentialRead::Absent,
@@ -1329,5 +1386,57 @@ mod tests {
         // No projects folder (Claude Code never ran) means no activity.
         assert_eq!(newest_transcript(&root.join("missing"), now), (None, None));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn temp_root(_name: &str) -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn a_pinned_file_reads_only_that_file() {
+        let tmp = temp_root("pinned");
+        let root = tmp.path().to_path_buf();
+        let file = root.join(".credentials.json");
+        let read =
+            |source: &Source| tauri::async_runtime::block_on(load_credentials(source, false));
+        assert!(matches!(
+            read(&Source::ClaudeFile(file.clone())),
+            CredentialRead::Absent
+        ));
+        std::fs::write(
+            &file,
+            r#"{"claudeAiOauth":{"accessToken":"tok","expiresAt":9999999999999,"subscriptionType":"max"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            read(&Source::ClaudeFile(file.clone())),
+            CredentialRead::Found(credentials) if credentials.access_token == "tok"
+        ));
+        // Unavailable and keychain-only selections never read the file.
+        assert!(matches!(read(&Source::Unavailable), CredentialRead::Absent));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_pinned_profile_watches_its_own_login_and_transcripts() {
+        let tmp = temp_root("stamp");
+        let root = tmp.path().to_path_buf();
+        let file = root.join(".credentials.json");
+        let source = Source::ClaudeFile(file.clone());
+        assert_eq!(login_stamp(&source), "|");
+        std::fs::write(&file, "{}").unwrap();
+        let stamp = login_stamp(&source);
+        assert!(stamp.starts_with('|') && stamp.len() > 1);
+        assert_eq!(projects_dir(&source), Some(root.join("projects")));
+        assert_eq!(projects_dir(&Source::Unavailable), None);
+        assert_eq!(login_stamp(&Source::Unavailable), "|");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_account_scope_follows_the_credential_not_the_plan() {
+        let a = accounts::credential_stable("token-a");
+        assert_ne!(a, accounts::credential_stable("token-b"));
+        assert!(!a.contains("token-a"));
     }
 }

@@ -210,27 +210,30 @@ impl PrefsStore {
             .clone()
     }
 
-    pub fn update(&self, mutate: impl FnOnce(&mut AppPrefs)) -> AppPrefs {
+    /// Applies `mutate` to a copy, writes it, and only then makes it the live
+    /// state, so a failed write leaves memory and disk in agreement.
+    pub fn update(&self, mutate: impl FnOnce(&mut AppPrefs)) -> Result<AppPrefs, String> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        mutate(&mut state);
-        let snapshot = state.clone();
+        let mut candidate = state.clone();
+        mutate(&mut candidate);
         // The file is written before the lock is released. Two settings
         // changed at once (the tray menu and the settings panel run on
         // different threads) otherwise raced: the older snapshot could land
         // on disk last and drop the newer change at the next launch, and both
         // writers shared one temporary file. The file is a few hundred bytes.
-        if let Ok(bytes) = serde_json::to_vec_pretty(&snapshot) {
-            let _ = write_atomically(&self.path, &bytes);
-        }
-        drop(state);
-        snapshot
+        let bytes = serde_json::to_vec_pretty(&candidate)
+            .map_err(|error| format!("Could not save preferences: {error}"))?;
+        write_atomically(&self.path, &bytes)
+            .map_err(|error| format!("Could not save preferences: {error}"))?;
+        *state = candidate.clone();
+        Ok(candidate)
     }
 }
 
 /// Writes `bytes` next to `path` and renames the copy into place, so a crash
 /// or power loss mid-write leaves the previous file intact instead of a
 /// truncated one that fails to parse and silently resets every preference.
-fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -383,7 +386,7 @@ mod tests {
     fn update_persists_and_reloads() {
         let path = std::env::temp_dir().join(format!("usagebar-prefs-{}.json", std::process::id()));
         let store = PrefsStore::load(path.clone());
-        store.update(|prefs| prefs.combined_tray = false);
+        store.update(|prefs| prefs.combined_tray = false).unwrap();
         let reloaded = PrefsStore::load(path.clone());
         assert!(!reloaded.get().combined_tray);
         assert!(reloaded.get().usage_alerts);
@@ -407,9 +410,14 @@ mod tests {
                 let store = store.clone();
                 std::thread::spawn(move || {
                     for round in 0..25 {
-                        store.update(|prefs| {
-                            prefs.set_tray_window(&format!("tool-{thread}"), format!("w{round}"));
-                        });
+                        store
+                            .update(|prefs| {
+                                prefs.set_tray_window(
+                                    &format!("tool-{thread}"),
+                                    format!("w{round}"),
+                                );
+                            })
+                            .unwrap();
                     }
                 })
             })
@@ -440,13 +448,35 @@ mod tests {
         // The config directory does not exist yet on a first launch.
         let path = dir.join("nested").join("preferences.json");
         let store = PrefsStore::load(path.clone());
-        store.update(|prefs| prefs.dense_layout = true);
-        store.update(|prefs| prefs.onboarding_complete = true);
+        store.update(|prefs| prefs.dense_layout = true).unwrap();
+        store
+            .update(|prefs| prefs.onboarding_complete = true)
+            .unwrap();
 
         let saved = parse_prefs(&fs::read_to_string(&path).unwrap()).expect("valid prefs");
         assert!(saved.dense_layout);
         assert!(saved.onboarding_complete);
         assert!(!dir.join("nested").join("preferences.json.tmp").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_previous_state() {
+        let dir = std::env::temp_dir().join(format!(
+            "usagebar-prefs-fail-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let blocker = dir.join("not-a-directory");
+        fs::write(&blocker, b"file").unwrap();
+        let store = PrefsStore::load(blocker.join("preferences.json"));
+        assert!(!store.get().dense_layout);
+        assert!(store.update(|prefs| prefs.dense_layout = true).is_err());
+        assert!(!store.get().dense_layout);
         let _ = fs::remove_dir_all(dir);
     }
 }

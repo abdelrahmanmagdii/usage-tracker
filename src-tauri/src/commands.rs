@@ -149,7 +149,7 @@ pub async fn get_tray_windows(
 pub fn set_tray_window(app: AppHandle, provider: String, window: String) -> Result<(), String> {
     let provider = Provider::parse(&provider)?;
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.set_tray_window(provider.key(), window));
+        .update(|prefs| prefs.set_tray_window(provider.key(), window))?;
     crate::tray::apply_preference_change(&app);
     Ok(())
 }
@@ -158,7 +158,7 @@ pub fn set_tray_window(app: AppHandle, provider: String, window: String) -> Resu
 pub fn set_provider_visible(app: AppHandle, provider: String, visible: bool) -> Result<(), String> {
     let provider = Provider::parse(&provider)?;
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.set_visible(provider.key(), visible));
+        .update(|prefs| prefs.set_visible(provider.key(), visible))?;
     crate::tray::apply_preference_change(&app);
     if visible {
         crate::tray::refresh_provider(&app, provider);
@@ -167,19 +167,21 @@ pub fn set_provider_visible(app: AppHandle, provider: String, visible: bool) -> 
 }
 
 #[tauri::command]
-pub fn set_usage_alerts(app: AppHandle, enabled: bool) {
+pub fn set_usage_alerts(app: AppHandle, enabled: bool) -> Result<(), String> {
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.usage_alerts = enabled);
+        .update(|prefs| prefs.usage_alerts = enabled)?;
     crate::tray::apply_preference_change(&app);
+    Ok(())
 }
 
 /// "Runs out before it resets at this pace" notifications. They also need
 /// `usage_alerts` on; this switch only narrows what that one allows.
 #[tauri::command]
-pub fn set_pace_alerts(app: AppHandle, enabled: bool) {
+pub fn set_pace_alerts(app: AppHandle, enabled: bool) -> Result<(), String> {
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.pace_alerts = enabled);
+        .update(|prefs| prefs.pace_alerts = enabled)?;
     crate::tray::apply_preference_change(&app);
+    Ok(())
 }
 
 /// Only post links from the reset feed may be handed to `open`, so the
@@ -249,17 +251,19 @@ pub fn open_in_browser(url: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_reset_alerts(app: AppHandle, enabled: bool) {
+pub fn set_reset_alerts(app: AppHandle, enabled: bool) -> Result<(), String> {
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.reset_alerts = enabled);
+        .update(|prefs| prefs.reset_alerts = enabled)?;
     crate::tray::apply_preference_change(&app);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn set_dense_layout(app: AppHandle, enabled: bool) {
+pub fn set_dense_layout(app: AppHandle, enabled: bool) -> Result<(), String> {
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.dense_layout = enabled);
+        .update(|prefs| prefs.dense_layout = enabled)?;
     crate::tray::apply_preference_change(&app);
+    Ok(())
 }
 
 /// The percent-used levels that fire a usage alert. Stored ascending; the
@@ -269,17 +273,18 @@ pub fn set_dense_layout(app: AppHandle, enabled: bool) {
 pub fn set_usage_alert_thresholds(app: AppHandle, thresholds: Vec<u32>) -> Result<(), String> {
     let normalized = crate::prefs::normalize_alert_thresholds(&thresholds)?;
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.usage_alert_thresholds = normalized);
+        .update(|prefs| prefs.usage_alert_thresholds = normalized)?;
     crate::tray::apply_preference_change(&app);
     Ok(())
 }
 
 /// `true` = one combined menu-bar icon; `false` = one icon per provider.
 #[tauri::command]
-pub fn set_combined_tray(app: AppHandle, enabled: bool) {
+pub fn set_combined_tray(app: AppHandle, enabled: bool) -> Result<(), String> {
     app.state::<crate::prefs::PrefsStore>()
-        .update(|prefs| prefs.combined_tray = enabled);
+        .update(|prefs| prefs.combined_tray = enabled)?;
     crate::tray::apply_preference_change(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -304,8 +309,10 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
 
 /// Records that the first-run walkthrough finished so it does not reappear.
 #[tauri::command]
-pub fn complete_onboarding(prefs: State<'_, crate::prefs::PrefsStore>) {
-    prefs.update(|prefs| prefs.onboarding_complete = true);
+pub fn complete_onboarding(prefs: State<'_, crate::prefs::PrefsStore>) -> Result<(), String> {
+    prefs
+        .update(|prefs| prefs.onboarding_complete = true)
+        .map(|_| ())
 }
 
 /// The renderer reports when an announced reset is pending (`until` = unix

@@ -1,9 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  isPermissionGranted,
-  requestPermission,
-} from "@tauri-apps/plugin-notification";
-import {
   BellRing,
   Check,
   ChevronLeft,
@@ -15,7 +11,12 @@ import {
   Sparkles,
 } from "lucide-react";
 import { MeterMark } from "./MeterMark";
-import { deviceName, isWindows, trayName } from "../lib/platform";
+import {
+  getNotificationStatus,
+  requestNotificationPermission,
+  type NotificationPermissionState,
+} from "../lib/notificationDelivery";
+import { deviceName, isWindows, notificationSettings, trayName } from "../lib/platform";
 import { useDialogFocus } from "./useDialogFocus";
 
 type ProviderStatus = {
@@ -104,20 +105,15 @@ function StepProviders({ providers }: { providers: ProviderStatus[] }) {
 }
 
 function StepAlerts() {
-  const [granted, setGranted] = useState<boolean | null>(null);
+  const [permission, setPermission] = useState<NotificationPermissionState | null>(null);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    void isPermissionGranted()
-      .then(setGranted)
-      .catch(() => setGranted(null));
+    void getNotificationStatus().then((status) => setPermission(status.permission));
   }, []);
 
   const enable = async () => {
-    try {
-      setGranted((await requestPermission()) === "granted");
-    } catch {
-      setGranted(false);
-    }
+    const status = await requestNotificationPermission();
+    setPermission(status.permission);
   };
 
   return (
@@ -148,16 +144,27 @@ function StepAlerts() {
           </span>
         </li>
       </ul>
-      {granted ? (
+      {permission === "granted" ? (
         <div className="onboard-note is-ready">
           <Check size={14} aria-hidden="true" />
           <p>Notifications are enabled.</p>
         </div>
-      ) : (
+      ) : permission === "notDetermined" ? (
         <button className="primary-button" onClick={() => void enable()}>
           Enable notifications
         </button>
-      )}
+      ) : permission ? (
+        <div className="onboard-note">
+          <BellRing size={14} aria-hidden="true" />
+          <p>
+            {permission === "denied"
+              ? `Notifications are blocked. Turn them on in ${notificationSettings} › UsageBar.`
+              : permission === "unknown"
+                ? `UsageBar cannot check notification permission here. Make sure ${notificationSettings} allows UsageBar.`
+                : "Notifications are unavailable in this build."}
+          </p>
+        </div>
+      ) : null}
     </>
   );
 }

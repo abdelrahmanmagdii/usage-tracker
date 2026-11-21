@@ -14,7 +14,7 @@ The menu bar shows a `42% · 1:25:49`-style **remaining-percentage** and reset c
 
 *The GIFs are the real app with sample quotas. The stills use preview data.*
 
-By default visible providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude) — the **Compact** layout, which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **Extended** (one icon per provider), choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — toggle **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), **Reset Alerts** (Tibo's announcements, with a **Send test notification** button to confirm macOS will show them), **Compact cards** (one row per quota window), and **Launch at Login**. Each tool shows when it last refreshed and flags readings older than 15 minutes, and a window you're burning through quickly shows when it will run out at the current pace.
+By default visible providers share **one** menu-bar icon (`63% · 8%`, Codex · Claude) — the **Compact** layout, which macOS is less likely to hide on a crowded or notched menu bar. Open **Settings** in the popover (or right-click the icon) to switch to **Extended** (one icon per provider), choose which quota window each meter follows — most used, 5-hour, weekly, or a per-model limit like Fable — toggle **Usage Alerts** (notifications at 80% / 95% used and on a fresh window), **Reset Alerts** (Tibo's announcements, with an **Enable notifications** button and a **Send test notification** button that report the real macOS permission and whether macOS accepted the alert — Focus can still hide the banner), **Compact cards** (one row per quota window), and **Launch at Login**. Each tool shows when it last refreshed and flags readings older than 15 minutes, and a window you're burning through quickly shows when it will run out at the current pace.
 
 ## Install
 
@@ -174,9 +174,27 @@ The app is split into:
 - `tools/tibo-watch` — the zero-cost scraper behind the public reset feed
 - `data/resets.json` — the canonical reset event store (edit this to backfill)
 
+## Account sources
+
+Each tool reads one saved login, chosen in **Settings › Accounts**. The built-in choices keep today's behavior: Claude Code and Antigravity are labelled *Automatic*, and Devin is the *Devin CLI* with *Devin Desktop* as a separate choice (selectable even when it is signed out; it never falls back to the CLI login). **Add local profile…** opens a folder picker for a folder that already holds a separately signed-in login of that tool (nothing is copied), with an optional short name. The folder must hold the tool's usual file:
+
+| Tool | Folder holds |
+| --- | --- |
+| Codex | `auth.json` (a Codex home, used as `CODEX_HOME` for UsageBar's own `codex app-server` child only) |
+| Claude Code | `.credentials.json` and `projects/` |
+| Cursor | `User/globalStorage/state.vscdb` (a user-data folder) |
+| OpenCode Go | `auth.json` with an OpenCode Go key |
+| Devin | `credentials.toml` (CLI) or `User/globalStorage/state.vscdb` (Desktop) |
+| Gemini CLI | `oauth_creds.json` (and optionally `settings.json`) |
+| Antigravity | `antigravity-oauth-token` |
+
+**Use profile and restart UsageBar** saves the choice and restarts UsageBar only. The tool's own app is never restarted, and its login is never changed, copied or written. The choice is fixed for the life of the process, so no earlier reading or cached token can outlive a switch. A saved folder that goes missing stays selected and reads as unavailable rather than falling back to another login. **Forget profile** removes only UsageBar's reference to a folder. The list lives in `accounts.json` next to the preferences and holds only folder paths, names and ids; if it cannot be read, Settings says so and offers a deliberate reset.
+
+Readings, history, alerts and local reset detection are kept per account. Cards show the active profile and a masked identifier (`a***@example.com`) when the tool names one; a reading with no identifiable account shows its meter but keeps no history and sends no usage alerts.
+
 ## Privacy
 
-Private usage stays on this Mac. UsageBar does not read Codex credential files, expose authentication tokens, or send quota data to a remote server. The backend strips the account email before state reaches the renderer.
+Private usage stays on this Mac. UsageBar does not read the contents of Codex credential files (a custom Codex profile is only checked for the file's existence), expose authentication tokens, or send quota data to a remote server. The backend strips the account email before state reaches the renderer; only a masked identifier and an opaque account id are kept.
 
 **About stored logins.** Optional meters reuse credentials the matching CLI or app already keeps. Each implementation is one auditable file:
 

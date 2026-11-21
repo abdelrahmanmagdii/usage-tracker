@@ -204,6 +204,22 @@ export class CombinedResetEventProvider implements ResetEventProvider {
   }
 }
 
+/**
+ * Public announcements plus the local detections made on an account that is
+ * on screen now. A detection with no known account is private to nobody and
+ * everybody, so it is dropped.
+ */
+export function eventsForScopes(events: ResetEvent[], scopes: ReadonlySet<string>): ResetEvent[] {
+  return events.filter(
+    (event) => event.source !== "detected" || (event.scopeId !== undefined && scopes.has(event.scopeId)),
+  );
+}
+
+/** The Codex banner and the Tibo card never report another tool's local reset. */
+export function codexEvents(events: ResetEvent[]): ResetEvent[] {
+  return events.filter((event) => event.source !== "detected" || event.provider === "codex");
+}
+
 /** The next announced reset that has not taken effect yet, if any. */
 export function upcomingReset(events: ResetEvent[], nowMs = Date.now()): ResetEvent | undefined {
   return events

@@ -15,6 +15,7 @@ import { ProviderSection } from "./components/ProviderSection";
 import { MissingProviders } from "./components/MissingProviders";
 import { Onboarding } from "./components/Onboarding";
 import { Freshness } from "./components/Freshness";
+import { AccountChip } from "./components/AccountChip";
 import { useProviderMeters } from "./hooks/useProviderMeters";
 import { NowProvider, WithNow, useNow } from "./hooks/useNow";
 import {
@@ -28,13 +29,13 @@ import {
   type AppPrefs,
 } from "./lib/providers";
 import { useResetEvents } from "./features/tibo-watch/useResetEvents";
-import { upcomingReset } from "./features/tibo-watch/provider";
+import { codexEvents, eventsForScopes, upcomingReset } from "./features/tibo-watch/provider";
 import { notifyFreshResets } from "./features/tibo-watch/notifications";
 import { formatCountdown, windowDurationLabel } from "./lib/rateLimits";
 import { demoMode } from "./lib/demo";
 import { isLiveReading } from "./lib/time";
 import { previewPrefs, previewResetEvent } from "./lib/preview";
-import type { RateLimitBucket } from "./types/codex";
+import type { ConnectionState, RateLimitBucket } from "./types/codex";
 import { deviceName, trayName } from "./lib/platform";
 
 const inTauri = () => "__TAURI_INTERNALS__" in window;
@@ -60,6 +61,48 @@ function HeaderRenewal({ bucket }: { bucket: RateLimitBucket }) {
   );
 }
 
+type HeadlineEntry = {
+  provider: string;
+  bucket: RateLimitBucket;
+  connection: ConnectionState;
+  updatedAt?: number | null;
+};
+
+/**
+ * The lowest remaining window across the tools, named by tool and window. A
+ * live, connected reading outranks a stale one however low the stale one is;
+ * with no live reading the header says the numbers are last known. The clock
+ * is read here, so the per-second tick re-renders this component only.
+ */
+export function HeaderSummary({ entries }: { entries: HeadlineEntry[] }) {
+  const now = useNow();
+  const live = entries.filter((entry) => isLiveReading(entry.connection, entry.updatedAt, now));
+  const pool = live.length ? live : entries;
+  const best = pool.reduce<HeadlineEntry | undefined>(
+    (lowest, entry) =>
+      !lowest || entry.bucket.remainingPercent < lowest.bucket.remainingPercent ? entry : lowest,
+    undefined,
+  );
+  if (!best) return null;
+  const window = best.bucket.windowLabel ?? windowDurationLabel(best.bucket.windowDurationMins);
+  const lead = live.length ? "Left" : "Last known";
+  return (
+    <div
+      className={`status-summary tone-${meterTone(best.bucket)}${live.length ? "" : " is-stale"}`}
+      title={`${best.provider} · ${window} quota window${live.length ? "" : " (last known reading)"}`}
+      data-tauri-drag-region
+    >
+      <div className="available-value" data-tauri-drag-region>
+        <strong data-tauri-drag-region>{Math.round(best.bucket.remainingPercent)}</strong><span data-tauri-drag-region>%</span>
+      </div>
+      <div className="status-copy" data-tauri-drag-region>
+        <span className="status-eyebrow" data-tauri-drag-region><i aria-hidden="true" />{lead} · {best.provider} · {window}</span>
+        <HeaderRenewal bucket={best.bucket} />
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   // The clock sits above the popover so a tick re-renders only the
   // countdowns, not the shell, the meters' derived lists or an open sheet.
@@ -79,6 +122,9 @@ function Popover() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
   const [demo, setDemo] = useState(false);
+  // True once the saved prefs (or a broadcast of them) have arrived. Until
+  // then the defaults must not decide whether reset alerts may go out.
+  const [prefsReady, setPrefsReady] = useState(false);
   const liveResetEvents = useResetEvents();
   const resetEvents = useMemo(() => {
     const preview = previewResetEvent(Date.now(), window.location.search);
@@ -140,6 +186,7 @@ function Popover() {
       .then((next) => {
         if (!active) return;
         if (!heardEvent) setPrefs(normalizePrefs(next));
+        setPrefsReady(true);
         setOnboarding(!next.onboardingComplete);
       })
       .catch(() => undefined);
@@ -149,6 +196,7 @@ function Popover() {
     const unlistenPrefs = listen<AppPrefs>("usagebar://prefs", (event) => {
       if (!active) return;
       heardEvent = true;
+      setPrefsReady(true);
       setPrefs(normalizePrefs(event.payload));
     });
     return () => {
@@ -160,19 +208,34 @@ function Popover() {
 
   const closeOnboarding = useCallback(() => {
     setOnboarding(false);
-    if (inTauri()) void invoke("complete_onboarding");
+    if (inTauri()) void invoke("complete_onboarding").catch(() => undefined);
   }, []);
+  // Announcements are public. A locally detected reset belongs to the
+  // account it was seen on, so only the accounts on screen now may show or
+  // announce one: a profile switch never surfaces the old account's events.
+  const activeScopes = PROVIDER_CATALOG.filter(
+    (provider) =>
+      isVisible(prefs, provider.id) && meters[provider.id].state.connection === "connected",
+  )
+    .map((provider) => meters[provider.id].scopeId ?? "")
+    .join("|");
+  const deliverableEvents = useMemo(
+    () => eventsForScopes(resetEvents, new Set(activeScopes.split("|").filter(Boolean))),
+    [resetEvents, activeScopes],
+  );
+  const codexScopedEvents = useMemo(() => codexEvents(deliverableEvents), [deliverableEvents]);
   useEffect(() => {
-    void notifyFreshResets(resetEvents, Date.now(), { enabled: prefs.resetAlerts });
-  }, [resetEvents, prefs.resetAlerts]);
+    if (inTauri() && !prefsReady) return;
+    void notifyFreshResets(deliverableEvents, Date.now(), { enabled: prefs.resetAlerts });
+  }, [deliverableEvents, prefs.resetAlerts, prefsReady]);
   useEffect(() => {
     if (!inTauri()) return;
-    const upcoming = upcomingReset(resetEvents);
+    const upcoming = upcomingReset(codexScopedEvents);
     const until = upcoming?.occursAt
       ? Math.floor(Date.parse(upcoming.occursAt) / 1000)
       : null;
     void invoke("set_reset_incoming", { until });
-  }, [resetEvents]);
+  }, [codexScopedEvents]);
 
   // Esc unwinds the topmost layer first — settings, onboarding — and only
   // then dismisses the popover itself, like any macOS popover.
@@ -199,12 +262,19 @@ function Popover() {
 
   const showCodex = isVisible(prefs, "codex");
   const connected = state.connection === "connected";
-  const visibleBuckets = PROVIDER_CATALOG.flatMap((provider) =>
-    isVisible(prefs, provider.id) ? meters[provider.id].buckets : [],
-  );
-  const mostCooked = visibleBuckets.reduce<(typeof visibleBuckets)[number] | undefined>(
-    (lowest, bucket) => !lowest || bucket.remainingPercent < lowest.remainingPercent ? bucket : lowest,
-    undefined,
+  const headline = useMemo<HeadlineEntry[]>(
+    () =>
+      PROVIDER_CATALOG.flatMap((provider) =>
+        isVisible(prefs, provider.id)
+          ? meters[provider.id].buckets.map((bucket) => ({
+              provider: provider.label,
+              bucket,
+              connection: meters[provider.id].state.connection,
+              updatedAt: meters[provider.id].state.updatedAt,
+            }))
+          : [],
+      ),
+    [meters, prefs],
   );
   const anyRefreshing = PROVIDER_CATALOG.some((provider) => meters[provider.id].refreshing);
   // Any shown tool still on its first read means the header is waiting, not
@@ -266,20 +336,8 @@ function Popover() {
             </div>
           </div>
           <span className="toolbar-divider" aria-hidden="true" />
-          {mostCooked ? (
-            <div
-              className={`status-summary tone-${meterTone(mostCooked)}`}
-              title={`${windowDurationLabel(mostCooked.windowDurationMins)} quota window`}
-              data-tauri-drag-region
-            >
-              <div className="available-value" data-tauri-drag-region>
-                <strong data-tauri-drag-region>{Math.round(mostCooked.remainingPercent)}</strong><span data-tauri-drag-region>%</span>
-              </div>
-              <div className="status-copy" data-tauri-drag-region>
-                <span className="status-eyebrow" data-tauri-drag-region><i aria-hidden="true" />Left · {windowDurationLabel(mostCooked.windowDurationMins)}</span>
-                <HeaderRenewal bucket={mostCooked} />
-              </div>
-            </div>
+          {headline.length ? (
+            <HeaderSummary entries={headline} />
           ) : (
             <div className="status-summary status-summary--connection" title="UsageBar status" data-tauri-drag-region>
               <span className="connection-orb" aria-hidden="true" />
@@ -293,7 +351,7 @@ function Popover() {
       </header>
 
       <div className="content-scroll">
-        {showCodex ? <WithNow>{(now) => <ResetAlert now={now} events={resetEvents} />}</WithNow> : null}
+        {showCodex ? <WithNow>{(now) => <ResetAlert now={now} events={codexScopedEvents} />}</WithNow> : null}
         {showCodex && !connected ? (
           <ConnectionStateView
             state={state}
@@ -307,6 +365,7 @@ function Popover() {
                 <>
                   <div className="section-label provider-label codex-label">
                     <span>Codex</span>
+                    <AccountChip sourceLabel={meters.codex.sourceLabel} maskedIdentity={meters.codex.maskedIdentity} />
                     <Freshness updatedAt={state.updatedAt} now={now} />
                   </div>
                   <div className="quota-list">
@@ -318,6 +377,8 @@ function Popover() {
                         now={now}
                         dense={prefs.denseLayout}
                         live={isLiveReading(state.connection, state.updatedAt, now)}
+                        scopeId={meters.codex.scopeId}
+                        historyAllowed={meters.codex.historyAllowed}
                       />
                     ))}
                   </div>
@@ -340,7 +401,7 @@ function Popover() {
           </div>
         ) : null}
         {showCodex && (connected || othersRender) ? (
-          <WithNow>{(now) => <TiboWatch now={now} events={resetEvents} />}</WithNow>
+          <WithNow>{(now) => <TiboWatch now={now} events={codexScopedEvents} />}</WithNow>
         ) : null}
         {SECTION_PROVIDERS.map(({ id, label, icon: Icon, signedOutHint }) =>
           isVisible(prefs, id) ? (

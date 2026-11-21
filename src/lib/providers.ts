@@ -138,11 +138,11 @@ export const PROVIDER_CATALOG: readonly ProviderInfo[] = [
     label: "Devin",
     accent: "devin",
     icon: Diamond,
-    setup: `Run devin auth login so the CLI stores a login on this ${deviceName}.`,
-    signedOutHint: "the stored Devin CLI login was rejected. Sign in again with `devin auth login`.",
+    setup: `Sign in to the Devin CLI (devin auth login) or the Devin Desktop app on this ${deviceName}, then pick that source in Settings › Accounts. The CLI is the default.`,
+    signedOutHint: "the Devin login you chose was rejected. Sign in again in that app (the Devin Desktop app, or `devin auth login` for the CLI).",
     onboarding: {
-      connected: "Reading the login kept by the Devin CLI",
-      signIn: "Sign in with `devin auth login`",
+      connected: "Reading the login of the Devin source chosen in Settings",
+      signIn: "Sign in to the Devin source chosen in Settings (CLI or Desktop)",
     },
   },
   {
@@ -266,9 +266,12 @@ export function missingProviders(
     if (!isVisible(prefs, provider.id)) {
       return [{ id: provider.id, label: provider.label, detail: "Turn this meter on in Settings." }];
     }
-    const connection = states[provider.id]?.connection;
-    if (connection === "cli_not_found") {
-      return [{ id: provider.id, label: provider.label, detail: provider.setup }];
+    const state = states[provider.id];
+    if (state?.connection === "cli_not_found") {
+      // The backend knows which source is selected and why it came up empty,
+      // so its note leads; the generic setup step follows.
+      const note = state.diagnostic?.trim().replace(/\.?$/, ".");
+      return [{ id: provider.id, label: provider.label, detail: note ? `${note} ${provider.setup}` : provider.setup }];
     }
     return [];
   });

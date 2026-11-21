@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ProviderMeter } from "../hooks/useProviderMeter";
 import { QuotaSection } from "./QuotaSection";
 import { Freshness } from "./Freshness";
+import { AccountChip } from "./AccountChip";
 import { useNow } from "../hooks/useNow";
 import { isRecord } from "../lib/rateLimits";
 import { describeAge, isLiveReading } from "../lib/time";
@@ -74,6 +75,7 @@ export function ProviderSection({
         {icon}
         <span id={`${id}-heading`}>{label}</span>
         {plan ? <span className="provider-plan">{plan}</span> : null}
+        <AccountChip sourceLabel={meter.sourceLabel} maskedIdentity={meter.maskedIdentity} />
         {state.connection === "connected" ? <Freshness updatedAt={state.updatedAt} now={now} /> : null}
       </div>
       {buckets.length ? (
@@ -86,6 +88,8 @@ export function ProviderSection({
               now={now}
               dense={dense}
               live={isLiveReading(state.connection, state.updatedAt, now)}
+              scopeId={meter.scopeId}
+              historyAllowed={meter.historyAllowed}
             />
           ))}
         </div>

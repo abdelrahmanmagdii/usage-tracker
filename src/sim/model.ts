@@ -18,6 +18,9 @@
  */
 import { hash01, hashString } from "./rng";
 
+/** The account scope a simulated profile reads under; seeds, caches and alert state share it. */
+export const simScope = (provider: string, profile = "default"): string => `sim-${provider}-${profile}`;
+
 export const SIM_PROVIDERS = ["codex", "claude", "cursor", "opencode", "devin", "antigravity", "gemini"] as const;
 export type SimProvider = (typeof SIM_PROVIDERS)[number];
 

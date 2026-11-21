@@ -174,6 +174,18 @@ pub struct TrayRenderCache {
     icons: std::sync::Mutex<std::collections::HashMap<&'static str, String>>,
 }
 
+/// Tells the renderer a preference write failed. The message is generic on
+/// purpose. The stored prefs are re-broadcast and the menu is rebuilt, so no
+/// switch or menu check keeps a change that was not saved.
+pub fn report_prefs_failure(app: &AppHandle) {
+    eprintln!("usagebar: could not save preferences");
+    apply_preference_change(app);
+    let _ = app.emit(
+        "usagebar://prefs-error",
+        "Could not save the change. Your previous setting is still in effect.",
+    );
+}
+
 /// Re-syncs the tray after a preference changes anywhere (tray menu or the
 /// in-app settings panel), so the title and menu checkmarks stay in agreement.
 pub fn apply_preference_change(app: &AppHandle) {
@@ -833,11 +845,15 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         let Some(provider) = Provider::from_key(key) else {
             return;
         };
-        app.state::<PrefsStore>()
-            .update(|prefs| prefs.set_tray_window(provider.key(), window_id.to_owned()));
-        // Also tells the renderer, whose settings picker would otherwise
-        // keep showing the previous window.
-        apply_preference_change(app);
+        match app
+            .state::<PrefsStore>()
+            .update(|prefs| prefs.set_tray_window(provider.key(), window_id.to_owned()))
+        {
+            // Also tells the renderer, whose settings picker would otherwise
+            // keep showing the previous window.
+            Ok(_) => apply_preference_change(app),
+            Err(_) => report_prefs_failure(app),
+        }
         return;
     }
 
@@ -847,15 +863,23 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         "layout-compact" | "layout-extended" => {
             let combined = id == "layout-compact";
-            app.state::<PrefsStore>()
-                .update(|prefs| prefs.combined_tray = combined);
-            apply_preference_change(app);
+            match app
+                .state::<PrefsStore>()
+                .update(|prefs| prefs.combined_tray = combined)
+            {
+                Ok(_) => apply_preference_change(app),
+                Err(_) => report_prefs_failure(app),
+            }
         }
         "toggle-alerts" => {
-            app.state::<PrefsStore>()
-                .update(|prefs| prefs.usage_alerts = !prefs.usage_alerts);
             // Keeps the settings panel's switch in step with the menu.
-            apply_preference_change(app);
+            match app
+                .state::<PrefsStore>()
+                .update(|prefs| prefs.usage_alerts = !prefs.usage_alerts)
+            {
+                Ok(_) => apply_preference_change(app),
+                Err(_) => report_prefs_failure(app),
+            }
         }
         "toggle-autostart" => {
             let autolaunch = app.autolaunch();
