@@ -1,6 +1,16 @@
 {
-  "updatedAt": "2026-11-12T23:54:22.840Z",
+  "updatedAt": "2026-11-24T21:08:44.024Z",
   "events": [
+    {
+      "id": "tibo-bsky-3n33ciukbim2i",
+      "announcedAt": "2026-11-24T18:43:21.000Z",
+      "plansAffected": [
+        "Business"
+      ],
+      "source": "tibo",
+      "text": "To all the ChatGPT Business teams out there. We have two small things for you, a banked reset and fast mode at no extra charge through Dec 31. Have fun!",
+      "sourceUrl": "https://bsky.app/profile/thsottiaux-bot.eurosky.social/post/3n33ciukbim2i"
+    },
     {
       "id": "tibo-bsky-3n25htoboge2d",
       "announcedAt": "2026-11-12T21:59:39.000Z",
