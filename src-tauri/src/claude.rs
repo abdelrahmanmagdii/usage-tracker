@@ -2,8 +2,11 @@
 //!
 //! Reads the OAuth session Claude Code already keeps (`~/.claude/.credentials.json`
 //! and Keychain item `Claude Code-credentials`) and asks Anthropic's usage
-//! endpoint for the same windows as `/usage`. Read-only: the token is never
-//! refreshed or rewritten. Background polls never show a Keychain sheet; Retry
+//! endpoint for the same windows as `/usage`. The Keychain is read-only. Where
+//! the login lives only in the credentials file (Windows, Linux), an expired
+//! token is renewed the way Claude Code does it and written back, because
+//! otherwise only a running Claude Code ever renews it (`claude auth status`
+//! only reports). Background polls never show a Keychain sheet; Retry
 //! may prompt once if the file is stale and Always Allow has not been granted.
 //!
 //! Claude Code writes its Keychain item with `/usr/bin/security`, and rewrites
@@ -91,13 +94,17 @@ pub struct ClaudeManager {
     /// 429 so a faster cadence never turns into hammering a rate limit.
     rate_limited_until: Arc<AtomicU64>,
     activity: Arc<std::sync::Mutex<ActivityScan>>,
-    /// Cooldown timestamp (unix secs) for headless `claude auth status` refresh.
-    last_cli_refresh: Arc<Mutex<Option<u64>>>,
+    /// Cooldown timestamp (unix secs) for automatic OAuth login refresh.
+    last_login_refresh: Arc<Mutex<Option<u64>>>,
+    /// Refreshed `.credentials.json` payload awaiting a retry after a transient
+    /// write/rename failure so a rotated refresh token is never discarded.
+    #[cfg(not(target_os = "macos"))]
+    pending_credentials: Arc<Mutex<Option<PendingCredentials>>>,
 }
 
-/// Minimum interval between headless `claude auth status` attempts so a
-/// genuinely signed-out user never triggers repeated background spawns.
-const CLI_REFRESH_COOLDOWN_SECS: u64 = 300;
+/// Minimum interval between automatic OAuth refresh attempts so a signed-out
+/// user never hammers the token endpoint.
+const LOGIN_REFRESH_COOLDOWN_SECS: u64 = 300;
 
 impl ClaudeManager {
     pub fn new(app: AppHandle) -> Self {
@@ -111,7 +118,9 @@ impl ClaudeManager {
             last_request: Arc::new(AtomicU64::new(0)),
             rate_limited_until: Arc::new(AtomicU64::new(0)),
             activity: Arc::new(std::sync::Mutex::new(ActivityScan::default())),
-            last_cli_refresh: Arc::new(Mutex::new(None)),
+            last_login_refresh: Arc::new(Mutex::new(None)),
+            #[cfg(not(target_os = "macos"))]
+            pending_credentials: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -240,9 +249,24 @@ impl ClaudeManager {
         if now_unix_seconds() < self.rate_limited_until.load(Ordering::Relaxed) {
             return Ok(self.snapshot().await);
         }
+        #[cfg(not(target_os = "macos"))]
+        if source.source.uses_default_cli() {
+            flush_pending_credentials(&self.pending_credentials).await;
+        }
         let credentials = match load_credentials(&source.source, allow_keychain_prompt).await {
             CredentialRead::Found(credentials) => {
                 self.absent_reads.store(0, Ordering::Relaxed);
+                // A renewed login that could not be saved yet is the only valid
+                // one while the file still holds the token it replaced.
+                #[cfg(not(target_os = "macos"))]
+                let credentials = self
+                    .pending_credentials
+                    .lock()
+                    .await
+                    .as_ref()
+                    .filter(|pending| pending.stale_token == credentials.access_token)
+                    .and_then(|pending| parse_credentials(&pending.text))
+                    .unwrap_or(credentials);
                 credentials
             }
             CredentialRead::Absent => {
@@ -282,7 +306,11 @@ impl ClaudeManager {
         let mut credentials = credentials;
         if credentials.is_expired(now_unix_millis()) {
             if let Some(refreshed) = self
-                .try_cli_refresh(&source.source, allow_keychain_prompt)
+                .try_refresh_login(
+                    &source.source,
+                    allow_keychain_prompt,
+                    &credentials.access_token,
+                )
                 .await
             {
                 if !refreshed.is_expired(now_unix_millis()) {
@@ -313,7 +341,11 @@ impl ClaudeManager {
         let mut status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             if let Some(refreshed) = self
-                .try_cli_refresh(&source.source, allow_keychain_prompt)
+                .try_refresh_login(
+                    &source.source,
+                    allow_keychain_prompt,
+                    &credentials.access_token,
+                )
                 .await
             {
                 if refreshed.access_token != credentials.access_token
@@ -442,13 +474,14 @@ impl ClaudeManager {
             .map_err(|error| format!("Claude usage request failed: {error}"))
     }
 
-    /// Runs `claude auth status` silently so Claude Code can refresh an expired
-    /// OAuth session without the user opening a terminal. Rate-limited by a
-    /// cooldown to avoid repeated spawns when signed out.
-    async fn try_cli_refresh(
+    /// Renews an expired or rejected Claude Code login without the user opening
+    /// Claude Code. Background polls obey a cooldown so a signed-out user never
+    /// triggers repeated requests; an explicit user Retry bypasses it.
+    async fn try_refresh_login(
         &self,
         source: &Source,
-        allow_keychain_prompt: bool,
+        user_initiated: bool,
+        stale_token: &str,
     ) -> Option<Credentials> {
         // A pinned selection never refreshes a different external login.
         if !source.uses_default_cli() {
@@ -456,34 +489,24 @@ impl ClaudeManager {
         }
         let now = now_unix_millis() / 1_000;
         {
-            let mut last = self.last_cli_refresh.lock().await;
-            if let Some(prev) = *last {
-                if now.saturating_sub(prev) < CLI_REFRESH_COOLDOWN_SECS {
-                    return None;
+            let mut last = self.last_login_refresh.lock().await;
+            if !user_initiated {
+                if let Some(prev) = *last {
+                    if now.saturating_sub(prev) < LOGIN_REFRESH_COOLDOWN_SECS {
+                        return None;
+                    }
                 }
             }
             *last = Some(now);
         }
-        let claude = which::which("claude").ok()?;
-        let mut command = tokio::process::Command::new(claude);
-        command
-            .args(["auth", "status"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-        #[cfg(target_os = "windows")]
-        command.creation_flags(0x08000000);
-        let status = tokio::time::timeout(std::time::Duration::from_secs(10), command.status())
-            .await
-            .ok()?
-            .ok()?;
-        if !status.success() {
-            return None;
+        #[cfg(not(target_os = "macos"))]
+        {
+            refresh_file_login(&self.client, stale_token, &self.pending_credentials).await
         }
-        match load_credentials(source, allow_keychain_prompt).await {
-            CredentialRead::Found(creds) => Some(creds),
-            _ => None,
+        #[cfg(target_os = "macos")]
+        {
+            let _ = stale_token;
+            None
         }
     }
 }
@@ -966,6 +989,233 @@ fn parse_credentials(raw: &str) -> Option<Credentials> {
     })
 }
 
+/// Claude Code's own OAuth token endpoint and public client id (from the CLI).
+#[cfg(not(target_os = "macos"))]
+const OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+#[cfg(any(not(target_os = "macos"), test))]
+const OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+
+#[cfg(any(not(target_os = "macos"), test))]
+struct PendingCredentials {
+    path: std::path::PathBuf,
+    stale_token: String,
+    text: String,
+}
+
+/// Retries saving a previously refreshed login whose atomic write failed.
+/// Clears `slot` once the save succeeds or once Claude Code writes a newer
+/// login to disk.
+#[cfg(any(not(target_os = "macos"), test))]
+async fn flush_pending_credentials(slot: &Mutex<Option<PendingCredentials>>) {
+    let Some(pending) = slot.lock().await.take() else {
+        return;
+    };
+    if read_fresher_file_credentials(&pending.path, &pending.stale_token)
+        .await
+        .is_some()
+    {
+        return;
+    }
+    if write_credentials_atomically(&pending.path, &pending.text)
+        .await
+        .is_err()
+    {
+        *slot.lock().await = Some(pending);
+    }
+}
+
+/// Renews the login in `.credentials.json` with its refresh token, the same
+/// request Claude Code sends, and writes the new tokens back so Claude Code
+/// picks them up too. If the file no longer holds `stale_token`, someone else
+/// (usually Claude Code) already renewed it, so that login is used instead of
+/// spending the refresh token a second time. A failed request never writes.
+#[cfg(not(target_os = "macos"))]
+async fn refresh_file_login(
+    client: &reqwest::Client,
+    stale_token: &str,
+    pending: &Mutex<Option<PendingCredentials>>,
+) -> Option<Credentials> {
+    let path = default_credentials_file()?;
+    refresh_file_login_at(client, &path, OAUTH_TOKEN_URL, stale_token, pending).await
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+async fn refresh_file_login_at(
+    client: &reqwest::Client,
+    path: &std::path::Path,
+    token_url: &str,
+    stale_token: &str,
+    pending: &Mutex<Option<PendingCredentials>>,
+) -> Option<Credentials> {
+    let raw = tokio::fs::read_to_string(path).await.ok()?;
+    let file: Value = serde_json::from_str(raw.trim()).ok()?;
+    let oauth = file.get("claudeAiOauth")?;
+    if oauth.get("accessToken").and_then(Value::as_str) != Some(stale_token) {
+        return parse_credentials(&raw);
+    }
+    let refresh_token = oauth
+        .get("refreshToken")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())?;
+    let scopes = oauth
+        .get("scopes")
+        .and_then(Value::as_array)
+        .map(|scopes| {
+            scopes
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|scopes| !scopes.is_empty());
+
+    let mut body = Map::new();
+    body.insert("grant_type".into(), json!("refresh_token"));
+    body.insert("refresh_token".into(), json!(refresh_token));
+    body.insert("client_id".into(), json!(OAUTH_CLIENT_ID));
+    if let Some(scopes) = scopes {
+        body.insert("scope".into(), json!(scopes));
+    }
+
+    let response = client
+        .post(token_url)
+        .json(&Value::Object(body))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        // Claude Code may have rotated the single-use refresh token first; pick
+        // up its fresh login from disk instead of reporting an expired session.
+        return read_fresher_file_credentials(path, stale_token).await;
+    }
+    let grant: Value = response.json().await.ok()?;
+
+    // Claude Code may have renewed while the request was in flight; its write
+    // carries the newest refresh token, so it wins over ours.
+    let latest_raw = tokio::fs::read_to_string(path).await.ok()?;
+    let latest: Value = serde_json::from_str(latest_raw.trim()).ok()?;
+    if latest
+        .pointer("/claudeAiOauth/accessToken")
+        .and_then(Value::as_str)
+        != Some(stale_token)
+    {
+        return parse_credentials(&latest_raw);
+    }
+    let updated = apply_refresh_grant(latest, &grant, now_unix_millis())?;
+    let text = serde_json::to_string(&updated).ok()?;
+    // If a transient lock blocks the write, retain the new file text so the
+    // next refresh retries saving it instead of losing the rotated refresh token.
+    if write_credentials_atomically(path, &text).await.is_err() {
+        *pending.lock().await = Some(PendingCredentials {
+            path: path.to_path_buf(),
+            stale_token: stale_token.to_owned(),
+            text: text.clone(),
+        });
+    }
+    parse_credentials(&text)
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+async fn read_fresher_file_credentials(
+    path: &std::path::Path,
+    stale_token: &str,
+) -> Option<Credentials> {
+    let raw = tokio::fs::read_to_string(path).await.ok()?;
+    let creds = parse_credentials(&raw)?;
+    (creds.access_token != stale_token).then_some(creds)
+}
+
+/// Writes beside the credentials file (owner-only on Unix) and renames over it,
+/// retrying briefly so a transient Windows lock from Claude Code or antivirus
+/// does not discard a newly rotated refresh token.
+#[cfg(any(not(target_os = "macos"), test))]
+async fn write_credentials_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let temp = path.with_extension("json.usagebar-tmp");
+    let write_result = write_private_file(&temp, text).await;
+    if let Err(error) = write_result {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error);
+    }
+    let mut last_err = None;
+    for attempt in 0..5 {
+        match tokio::fs::rename(&temp, path).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_err = Some(error);
+                if attempt < 4 {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+        }
+    }
+    let _ = tokio::fs::remove_file(&temp).await;
+    Err(last_err.expect("loop runs at least once"))
+}
+
+#[cfg(all(unix, any(not(target_os = "macos"), test)))]
+async fn write_private_file(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .await?;
+    file.write_all(text.as_bytes()).await?;
+    file.flush().await
+}
+
+#[cfg(not(unix))]
+async fn write_private_file(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    tokio::fs::write(path, text).await
+}
+
+/// Folds a token-endpoint grant into the stored credentials, touching only the
+/// token fields so every other key Claude Code keeps survives unchanged.
+#[cfg(any(not(target_os = "macos"), test))]
+fn apply_refresh_grant(mut file: Value, grant: &Value, now_ms: u64) -> Option<Value> {
+    let access_token = grant
+        .get("access_token")?
+        .as_str()
+        .filter(|t| !t.is_empty())?;
+    let expires_in = grant
+        .get("expires_in")?
+        .as_f64()
+        .filter(|secs| secs.is_finite() && *secs > 0.0)?;
+    let oauth = file.get_mut("claudeAiOauth")?.as_object_mut()?;
+    oauth.insert("accessToken".into(), json!(access_token));
+    if let Some(refresh) = grant
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+    {
+        oauth.insert("refreshToken".into(), json!(refresh));
+    }
+    oauth.insert(
+        "expiresAt".into(),
+        json!(now_ms.saturating_add((expires_in * 1_000.0) as u64)),
+    );
+    if let Some(secs) = grant
+        .get("refresh_token_expires_in")
+        .and_then(Value::as_f64)
+        .filter(|secs| secs.is_finite() && *secs > 0.0)
+    {
+        oauth.insert(
+            "refreshTokenExpiresAt".into(),
+            json!(now_ms.saturating_add((secs * 1_000.0) as u64)),
+        );
+    }
+    if let Some(scope) = grant.get("scope").and_then(Value::as_str) {
+        let scopes: Vec<&str> = scope.split_whitespace().collect();
+        if !scopes.is_empty() {
+            oauth.insert("scopes".into(), json!(scopes));
+        }
+    }
+    Some(file)
+}
+
 /// Reshapes the usage payload into the same `rateLimitsByLimitId` structure the
 /// Codex App Server emits, so the tray and the renderer reuse one pipeline.
 fn normalize_usage(raw: &Value) -> Value {
@@ -1112,6 +1362,183 @@ fn now_unix_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_refresh_grant_replaces_only_the_token_fields() {
+        let file = serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": "old", "refreshToken": "r-old", "expiresAt": 1,
+                "scopes": ["user:inference"], "subscriptionType": "pro"
+            },
+            "organizationUuid": "org"
+        });
+        let grant = serde_json::json!({
+            "access_token": "new", "refresh_token": "r-new", "expires_in": 3600,
+            "refresh_token_expires_in": 10, "scope": "user:inference user:profile"
+        });
+        let out = super::apply_refresh_grant(file, &grant, 1_000).unwrap();
+        let oauth = &out["claudeAiOauth"];
+        assert_eq!(oauth["accessToken"], "new");
+        assert_eq!(oauth["refreshToken"], "r-new");
+        assert_eq!(oauth["expiresAt"], 3_601_000);
+        assert_eq!(oauth["refreshTokenExpiresAt"], 11_000);
+        assert_eq!(
+            oauth["scopes"],
+            serde_json::json!(["user:inference", "user:profile"])
+        );
+        assert_eq!(oauth["subscriptionType"], "pro");
+        assert_eq!(out["organizationUuid"], "org");
+
+        // An absent or empty refresh token keeps the old one; a broken grant writes nothing.
+        let kept = super::apply_refresh_grant(
+            out.clone(),
+            &serde_json::json!({"access_token": "n2", "refresh_token": "", "expires_in": 60}),
+            0,
+        )
+        .unwrap();
+        assert_eq!(kept["claudeAiOauth"]["refreshToken"], "r-new");
+        assert!(
+            super::apply_refresh_grant(out.clone(), &serde_json::json!({"expires_in": 60}), 0)
+                .is_none()
+        );
+        assert!(super::apply_refresh_grant(
+            out.clone(),
+            &serde_json::json!({"access_token": "n2", "expires_in": 0}),
+            0
+        )
+        .is_none());
+        assert!(super::apply_refresh_grant(
+            out,
+            &serde_json::json!({"access_token": "n2", "expires_in": -5}),
+            0
+        )
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn atomic_write_replaces_existing_file_and_detects_fresher_login() {
+        let dir =
+            std::env::temp_dir().join(format!("usagebar-claude-creds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(".credentials.json");
+        let initial = r#"{"claudeAiOauth":{"accessToken":"stale","refreshToken":"r1"}}"#;
+        let updated = r#"{"claudeAiOauth":{"accessToken":"fresh","refreshToken":"r2"}}"#;
+
+        super::write_credentials_atomically(&path, initial)
+            .await
+            .expect("initial write");
+        assert!(super::read_fresher_file_credentials(&path, "stale")
+            .await
+            .is_none());
+
+        super::write_credentials_atomically(&path, updated)
+            .await
+            .expect("overwrite");
+        let fresher = super::read_fresher_file_credentials(&path, "stale")
+            .await
+            .expect("fresher login");
+        assert_eq!(fresher.access_token, "fresh");
+        assert!(!path.with_extension("json.usagebar-tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn refresh_backs_off_when_another_writer_renews_and_flushes_pending_saves() {
+        use std::io::{Read, Write};
+
+        let dir =
+            std::env::temp_dir().join(format!("usagebar-claude-refresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(".credentials.json");
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let pending = Mutex::new(None);
+
+        // 1. File already changed before the HTTP call: server is never hit.
+        let by_claude = r#"{"claudeAiOauth":{"accessToken":"by-claude","refreshToken":"r2"}}"#;
+        std::fs::write(&path, by_claude).unwrap();
+        let got = super::refresh_file_login_at(
+            &client,
+            &path,
+            "http://127.0.0.1:1/unused",
+            "stale",
+            &pending,
+        )
+        .await
+        .expect("uses existing fresh file");
+        assert_eq!(got.access_token, "by-claude");
+
+        // 2. File changes while the token request is in flight: server response
+        //    is discarded and `.credentials.json` is left untouched.
+        let stale_json = r#"{"claudeAiOauth":{"accessToken":"stale","refreshToken":"r1","scopes":["user:inference"]}}"#;
+        std::fs::write(&path, stale_json).unwrap();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let race_path = path.clone();
+        let server = std::thread::spawn(move || {
+            for (status, body) in [
+                (
+                    "200 OK",
+                    r#"{"access_token":"by-usagebar","refresh_token":"r-ub","expires_in":3600}"#,
+                ),
+                ("400 Bad Request", r#"{"error":"invalid_grant"}"#),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                // Simulate Claude Code renewing while UsageBar's POST is in flight.
+                std::fs::write(&race_path, by_claude).unwrap();
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+
+        let url = format!("http://{addr}/v1/oauth/token");
+        let got = super::refresh_file_login_at(&client, &path, &url, "stale", &pending)
+            .await
+            .expect("uses in-flight winner");
+        assert_eq!(got.access_token, "by-claude");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), by_claude);
+
+        // 3. Server rejects with 400 after Claude Code already rotated the token:
+        //    re-reads `.credentials.json` and returns Claude Code's fresh login.
+        std::fs::write(&path, stale_json).unwrap();
+        let got = super::refresh_file_login_at(&client, &path, &url, "stale", &pending)
+            .await
+            .expect("recovers fresher token after 400");
+        assert_eq!(got.access_token, "by-claude");
+        server.join().unwrap();
+
+        // 4. Pending save retries when file still holds stale_token, and drops
+        //    without overwriting if Claude Code already updated the file.
+        std::fs::write(&path, stale_json).unwrap();
+        let pending_saved =
+            r#"{"claudeAiOauth":{"accessToken":"from-pending","refreshToken":"r3"}}"#;
+        *pending.lock().await = Some(super::PendingCredentials {
+            path: path.clone(),
+            stale_token: "stale".into(),
+            text: pending_saved.into(),
+        });
+        super::flush_pending_credentials(&pending).await;
+        assert!(pending.lock().await.is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), pending_saved);
+
+        std::fs::write(&path, by_claude).unwrap();
+        *pending.lock().await = Some(super::PendingCredentials {
+            path: path.clone(),
+            stale_token: "stale".into(),
+            text: pending_saved.into(),
+        });
+        super::flush_pending_credentials(&pending).await;
+        assert!(pending.lock().await.is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), by_claude);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     #[test]

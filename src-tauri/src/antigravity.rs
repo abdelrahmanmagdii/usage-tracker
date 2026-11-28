@@ -57,7 +57,7 @@ pub struct AntigravityManager {
 
 struct ManagedHub {
     child: tokio::process::Child,
-    hub_file: std::path::PathBuf,
+    endpoint: LocalEndpoint,
 }
 
 #[derive(Clone)]
@@ -160,6 +160,16 @@ impl AntigravityManager {
             let logged = logged_endpoints().await;
             *self.last_local_endpoint.lock().await = logged.first().cloned();
             if let Some(local) = fetch_local_usage(&logged).await {
+                // An editor/IDE hub is serving quota now; stop the hidden one.
+                let other_hub = self
+                    .managed_hub
+                    .lock()
+                    .await
+                    .as_ref()
+                    .is_some_and(|hub| hub.endpoint.base != local.base);
+                if other_hub {
+                    self.shutdown().await;
+                }
                 self.publish_local(local, &source).await?;
                 return Ok(self.snapshot().await);
             }
@@ -379,23 +389,21 @@ impl AntigravityManager {
             let mut slot = self.managed_hub.lock().await;
             if let Some(hub) = slot.as_mut() {
                 if hub.child.try_wait().ok().flatten().is_none() {
-                    if let Ok(text) = std::fs::read_to_string(&hub.hub_file) {
-                        if let Some(endpoint) = parse_daemon_hub(&text) {
-                            return Some(endpoint);
-                        }
-                    }
-                    return None;
+                    return Some(hub.endpoint.clone());
                 }
                 *slot = None;
             }
         }
 
         let agy = find_agy_cli()?;
-        let home = crate::platform::home_dir()?;
         let port = pick_free_loopback_port()?;
-        let hub_file = home
-            .join(".gemini/antigravity/daemon")
-            .join(format!("hub_{port}.json"));
+        // A hub started without a CSRF token never writes its daemon discovery
+        // file and answers 401, so pick one ourselves like the editor extension.
+        let csrf = uuid::Uuid::new_v4().to_string();
+        let endpoint = LocalEndpoint {
+            base: format!("http://127.0.0.1:{port}"),
+            csrf: Some(csrf.clone()),
+        };
 
         let mut command = tokio::process::Command::new(agy);
         command
@@ -404,6 +412,7 @@ impl AntigravityManager {
                 &format!("--hub-port={port}"),
                 "--app_data_dir=antigravity",
             ])
+            .env("ANTIGRAVITY_SERVER_CSRF_TOKEN", &csrf)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -412,29 +421,65 @@ impl AntigravityManager {
         command.creation_flags(0x08000000);
 
         let mut child = command.spawn().ok()?;
+        #[cfg(target_os = "windows")]
+        if let Some(handle) = child.raw_handle() {
+            let _ = kill_with_usagebar(handle);
+        }
+        let client = local_http_client();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut ready = None;
         while tokio::time::Instant::now() < deadline {
-            if let Ok(text) = std::fs::read_to_string(&hub_file) {
-                if let Some(endpoint) = parse_daemon_hub(&text) {
-                    ready = Some(endpoint);
-                    break;
-                }
+            if probe_endpoints(&client, std::slice::from_ref(&endpoint))
+                .await
+                .is_some()
+            {
+                *self.managed_hub.lock().await = Some(ManagedHub {
+                    child,
+                    endpoint: endpoint.clone(),
+                });
+                return Some(endpoint);
             }
             if child.try_wait().ok().flatten().is_some() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
-
-        if ready.is_some() {
-            *self.managed_hub.lock().await = Some(ManagedHub { child, hub_file });
-            ready
-        } else {
-            let _ = child.kill().await;
-            None
-        }
+        let _ = child.kill().await;
+        None
     }
+}
+
+/// Puts the hidden hub in a job object that Windows kills when UsageBar's last
+/// handle to it closes, so a crash, a force-kill (the install script) or an
+/// updater exit never leaves an `agy` hub running that nobody can use.
+#[cfg(target_os = "windows")]
+fn kill_with_usagebar(process: std::os::windows::io::RawHandle) -> bool {
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    // One job for the whole process lifetime; its handle is never closed on
+    // purpose, so it closes (and kills the hub) only when UsageBar exits.
+    static JOB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let job = *JOB.get_or_init(|| unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return 0;
+        }
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &limits as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if ok == 0 {
+            return 0;
+        }
+        job as usize
+    });
+    job != 0 && unsafe { AssignProcessToJobObject(job as _, process as _) } != 0
 }
 
 fn find_agy_cli() -> Option<std::path::PathBuf> {
@@ -459,6 +504,8 @@ fn pick_free_loopback_port() -> Option<u16> {
 }
 
 struct LocalUsage {
+    /// Which listener answered, so the hidden hub can tell itself apart.
+    base: String,
     plan: String,
     payload: Value,
     /// Stable id and masked email from the same status answer. Never tier,
@@ -522,6 +569,7 @@ async fn probe_endpoints(
         }
         let status = status.unwrap_or(Value::Null);
         return Some(LocalUsage {
+            base: endpoint.base.clone(),
             plan: plan_from_status(&status),
             identity: local_identity(&status),
             payload: quota,
@@ -1625,6 +1673,20 @@ fn limit_entry(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_spawned_hub_joins_the_kill_on_exit_job() {
+        use std::os::windows::io::AsRawHandle;
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        let joined = super::kill_with_usagebar(child.as_raw_handle());
+        let _ = child.kill();
+        assert!(joined, "hub was not placed in the kill-on-exit job");
+    }
+
     use super::*;
 
     #[test]
