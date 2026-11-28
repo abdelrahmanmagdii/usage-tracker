@@ -306,7 +306,11 @@ impl ClaudeManager {
         let mut credentials = credentials;
         if credentials.is_expired(now_unix_millis()) {
             if let Some(refreshed) = self
-                .try_refresh_login(&source.source, allow_keychain_prompt, &credentials.access_token)
+                .try_refresh_login(
+                    &source.source,
+                    allow_keychain_prompt,
+                    &credentials.access_token,
+                )
                 .await
             {
                 if !refreshed.is_expired(now_unix_millis()) {
@@ -337,7 +341,11 @@ impl ClaudeManager {
         let mut status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             if let Some(refreshed) = self
-                .try_refresh_login(&source.source, allow_keychain_prompt, &credentials.access_token)
+                .try_refresh_login(
+                    &source.source,
+                    allow_keychain_prompt,
+                    &credentials.access_token,
+                )
                 .await
             {
                 if refreshed.access_token != credentials.access_token
